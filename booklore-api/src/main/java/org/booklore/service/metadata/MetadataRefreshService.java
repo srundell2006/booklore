@@ -28,6 +28,8 @@ import org.booklore.service.NotificationService;
 import org.booklore.service.appsettings.AppSettingService;
 import org.booklore.service.metadata.parser.BookParser;
 import org.booklore.task.TaskCancellationManager;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
@@ -131,9 +133,14 @@ public class MetadataRefreshService {
                     ? requestRefreshOptions.getParallelism() : 3;
             Semaphore semaphore = new Semaphore(parallelism);
 
+            // Capture the SecurityContext from the request thread so virtual threads
+            // (which start with an empty ThreadLocal) can route WebSocket notifications.
+            SecurityContext inheritedSecurityContext = SecurityContextHolder.getContext();
             try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
                 List<CompletableFuture<Void>> futures = actualBookIds.stream().map(bookId ->
                     CompletableFuture.runAsync(() -> {
+                        SecurityContextHolder.setContext(inheritedSecurityContext);
+                        try {
                         if (cancelled.get()) return;
                         try {
                             semaphore.acquire();
@@ -231,6 +238,9 @@ public class MetadataRefreshService {
                             log.error("Unexpected error processing bookId {}: {}", bookId, e.getMessage(), e);
                         } finally {
                             semaphore.release();
+                        }
+                        } finally {
+                            SecurityContextHolder.clearContext();
                         }
                     }, executor)
                 ).toList();
