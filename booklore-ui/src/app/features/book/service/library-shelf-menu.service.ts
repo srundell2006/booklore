@@ -63,6 +63,33 @@ export class LibraryShelfMenuService {
             }
           },
           {
+            label: (entity as Library)?.watch
+              ? this.t.translate('book.shelfMenuService.library.disableWatcher')
+              : this.t.translate('book.shelfMenuService.library.enableWatcher'),
+            icon: (entity as Library)?.watch ? 'pi pi-eye-slash' : 'pi pi-eye',
+            command: () => {
+              const currentWatch = (entity as Library)?.watch ?? false;
+              this.libraryService.setWatchStatus(entity?.id as number, !currentWatch).subscribe({
+                next: () => {
+                  this.messageService.add({
+                    severity: 'success',
+                    summary: this.t.translate('common.success'),
+                    detail: !currentWatch
+                      ? this.t.translate('book.shelfMenuService.toast.watcherEnabledDetail')
+                      : this.t.translate('book.shelfMenuService.toast.watcherDisabledDetail')
+                  });
+                },
+                error: () => {
+                  this.messageService.add({
+                    severity: 'error',
+                    summary: this.t.translate('book.shelfMenuService.toast.failedSummary'),
+                    detail: this.t.translate('book.shelfMenuService.toast.watcherToggleFailedDetail'),
+                  });
+                }
+              });
+            }
+          },
+          {
             label: this.t.translate('book.shelfMenuService.library.rescanLibrary'),
             icon: 'pi pi-refresh',
             command: () => {

@@ -366,5 +366,20 @@ public class LibraryService {
         }
         return false;
     }
-}
 
+    public Library setWatchStatus(long libraryId, boolean watch) {
+        LibraryEntity library = libraryRepository.findById(libraryId)
+                .orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(libraryId));
+        library.setWatch(watch);
+        LibraryEntity saved = libraryRepository.save(library);
+        if (watch) {
+            libraryWatchService.registerLibraries(List.of(libraryMapper.toLibrary(saved)));
+        } else {
+            libraryWatchService.unregisterLibrary(libraryId);
+        }
+        auditService.log(AuditAction.LIBRARY_UPDATED, "Library", libraryId,
+                (watch ? "Enabled" : "Disabled") + " file watcher for library: " + library.getName());
+        return libraryMapper.toLibrary(saved);
+    }
+
+}

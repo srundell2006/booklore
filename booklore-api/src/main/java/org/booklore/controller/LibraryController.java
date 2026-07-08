@@ -144,4 +144,17 @@ public class LibraryController {
             @Parameter(description = "ID of the library") @PathVariable long libraryId) {
         return ResponseEntity.ok(libraryService.getBookCountsByFormat(libraryId));
     }
+
+    @Operation(summary = "Toggle file watcher", description = "Enable or disable the file system watcher for a library. Requires admin or manipulation permission.")
+    @ApiResponse(responseCode = "200", description = "Watch status updated successfully")
+    @PatchMapping("/{libraryId}/watch")
+    @CheckLibraryAccess(libraryIdParam = "libraryId")
+    @PreAuthorize("@securityUtil.canManageLibrary() or @securityUtil.isAdmin()")
+    public ResponseEntity<Library> setWatchStatus(
+            @Parameter(description = "ID of the library") @PathVariable Long libraryId,
+            @Parameter(description = "Watch status body") @RequestBody Map<String, Boolean> body) {
+        boolean watch = Boolean.TRUE.equals(body.get("watch"));
+        return ResponseEntity.ok(libraryService.setWatchStatus(libraryId, watch));
+    }
+
 }

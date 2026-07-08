@@ -268,7 +268,9 @@
       "customFetchMetadata": "Custom Fetch Metadata",
       "autoFetchMetadata": "Auto Fetch Metadata",
       "findDuplicates": "Find Duplicates",
-      "deleteLibrary": "Delete Library"
+      "deleteLibrary": "Delete Library",
+      "enableWatcher": "Enable File Watcher",
+      "disableWatcher": "Disable File Watcher"
     },
     "shelf": {
       "publicShelfPrefix": "Public Shelf - ",
@@ -301,7 +303,10 @@
       "magicShelfDeletedDetail": "Magic shelf was deleted",
       "magicShelfDeleteFailedDetail": "Failed to delete shelf",
       "magicShelfJsonCopiedDetail": "Magic shelf JSON copied to clipboard",
-      "failedSummary": "Failed"
+      "failedSummary": "Failed",
+      "watcherEnabledDetail": "File watcher enabled for this library",
+      "watcherDisabledDetail": "File watcher disabled for this library",
+      "watcherToggleFailedDetail": "Failed to toggle file watcher"
     },
     "loading": {
       "deletingLibrary": "Deleting library '{{ name }}'..."

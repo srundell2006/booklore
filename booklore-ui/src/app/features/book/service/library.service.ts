@@ -178,4 +178,16 @@ export class LibraryService {
   private sortLibraries(libraries: Library[]): Library[] {
     return [...libraries].sort((a, b) => a.name.localeCompare(b.name));
   }
+
+  setWatchStatus(libraryId: number, watch: boolean): Observable<Library> {
+    return this.http.patch<Library>(`${this.url}/${libraryId}/watch`, {watch}).pipe(
+      map(updated => {
+        const curr = this.libraryStateSubject.value;
+        const list = curr.libraries?.map(l => (l.id === updated.id ? updated : l)) || [updated];
+        this.libraryStateSubject.next({...curr, libraries: this.sortLibraries(list)});
+        return updated;
+      })
+    );
+  }
+
 }
