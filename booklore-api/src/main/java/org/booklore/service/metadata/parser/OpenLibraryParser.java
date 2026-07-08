@@ -14,12 +14,15 @@ import org.springframework.stereotype.Service;
 import org.springframework.web.util.UriComponentsBuilder;
 import tools.jackson.databind.ObjectMapper;
 
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.JsonNode;
 import java.io.IOException;
 import java.net.URI;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.time.LocalDate;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.HashMap;
 import java.util.LinkedHashSet;
@@ -28,7 +31,9 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.regex.Pattern;
+import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -41,9 +46,13 @@ public class OpenLibraryParser implements BookParser {
     private static final int SUBJECT_LIMIT = 10;
     private static final Pattern WORK_PREFIX = Pattern.compile("^/works/");
     private static final Pattern WHITESPACE_PATTERN = Pattern.compile("\\s+");
+    private static final String BOOKS_API_URL = BASE_URL + "/api/books";
+    private static final int BULK_BATCH_SIZE = 20;
 
     private final ObjectMapper objectMapper;
     private final HttpClient httpClient;
+    /** Cache populated by preFetchByIsbn(); keyed by cleaned ISBN (10 or 13 digit). */
+    private final ConcurrentHashMap<String, BookMetadata> bulkCache = new ConcurrentHashMap<>();
 
     @Autowired
     public OpenLibraryParser(ObjectMapper objectMapper) {
@@ -95,6 +104,20 @@ public class OpenLibraryParser implements BookParser {
 
     @Override
     public BookMetadata fetchTopMetadata(Book book, FetchMetadataRequest fetchMetadataRequest) {
+        // Check bulk cache first (populated by preFetchByIsbn)
+        String isbn = ParserUtils.cleanIsbn(fetchMetadataRequest.getIsbn());
+        if (isbn != null && !isbn.isBlank()) {
+            BookMetadata cached = bulkCache.remove(isbn);
+            if (cached != null) {
+                log.debug("OpenLibrary bulk cache hit for ISBN {}", isbn);
+                String workId = extractWorkId(cached.getExternalUrl());
+                if (workId == null) return cached;
+                BookMetadata workMetadata = fetchWorkMetadata(workId);
+                return workMetadata == null ? cached : merge(cached, workMetadata);
+            }
+        }
+
+        // Cache miss — fall back to per-book search
         List<BookMetadata> results = fetchMetadata(book, fetchMetadataRequest);
         if (results.isEmpty()) {
             return null;
@@ -108,6 +131,156 @@ public class OpenLibraryParser implements BookParser {
 
         BookMetadata workMetadata = fetchWorkMetadata(workId);
         return workMetadata == null ? top : merge(top, workMetadata);
+    }
+
+    /**
+     * Bulk pre-fetch OpenLibrary metadata for the supplied ISBNs using the
+     * {@code /api/books} endpoint (up to {@value BULK_BATCH_SIZE} per HTTP request).
+     * Results are stored in an internal cache; subsequent {@link #fetchTopMetadata}
+     * calls consume cache entries and skip the individual search request.
+     */
+    @Override
+    public void preFetchByIsbn(Collection<String> rawIsbns) {
+        List<String> cleanIsbns = rawIsbns.stream()
+                .map(ParserUtils::cleanIsbn)
+                .filter(Objects::nonNull)
+                .filter(isbn -> !isbn.isBlank())
+                .distinct()
+                .collect(Collectors.toList());
+
+        if (cleanIsbns.isEmpty()) return;
+
+        log.info("OpenLibrary bulk pre-fetch: {} ISBNs in batches of {}", cleanIsbns.size(), BULK_BATCH_SIZE);
+        for (int i = 0; i < cleanIsbns.size(); i += BULK_BATCH_SIZE) {
+            List<String> batch = cleanIsbns.subList(i, Math.min(i + BULK_BATCH_SIZE, cleanIsbns.size()));
+            try {
+                fetchBulkBatch(batch);
+            } catch (Exception e) {
+                log.warn("OpenLibrary bulk batch {}-{} failed: {}", i, i + batch.size(), e.getMessage());
+            }
+        }
+        log.info("OpenLibrary bulk pre-fetch complete: {} entries cached", bulkCache.size());
+    }
+
+    private void fetchBulkBatch(List<String> isbns) throws IOException, InterruptedException {
+        String bibkeys = isbns.stream()
+                .map(isbn -> "ISBN:" + isbn)
+                .collect(Collectors.joining(","));
+
+        URI uri = UriComponentsBuilder.fromUriString(BOOKS_API_URL)
+                .queryParam("bibkeys", bibkeys)
+                .queryParam("format", "json")
+                .queryParam("jscmd", "data")
+                .build().toUri();
+
+        log.info("OpenLibrary bulk API URL ({}): {}", isbns.size(), uri);
+        HttpResponse<String> response = httpClient.send(
+                HttpRequest.newBuilder().uri(uri).GET().build(),
+                HttpResponse.BodyHandlers.ofString()
+        );
+
+        if (response.statusCode() != 200) {
+            log.warn("OpenLibrary bulk API returned status {}: {}", response.statusCode(), response.body());
+            return;
+        }
+
+        Map<String, JsonNode> result = objectMapper.readValue(
+                response.body(), new TypeReference<Map<String, JsonNode>>() {});
+
+        for (Map.Entry<String, JsonNode> entry : result.entrySet()) {
+            String bibkey = entry.getKey();           // e.g. "ISBN:9780451524935"
+            if (!bibkey.startsWith("ISBN:")) continue;
+            String isbn = bibkey.substring(5);        // strip "ISBN:"
+            BookMetadata metadata = mapBulkEntry(entry.getValue(), isbn);
+            if (metadata != null) {
+                bulkCache.put(isbn, metadata);
+            }
+        }
+    }
+
+    /**
+     * Maps a single entry from the /api/books?jscmd=data response into a BookMetadata.
+     * The structure differs from /search.json: authors are [{name, url}],
+     * publishers are [{name}], cover has {small, medium, large} URLs, etc.
+     */
+    private BookMetadata mapBulkEntry(JsonNode node, String isbn) {
+        if (node == null || node.isNull()) return null;
+
+        String title = cleanString(node.path("title").asText(null));
+        if (title == null || title.isBlank()) return null;
+
+        // Authors: array of {name, url}
+        List<String> authors = new ArrayList<>();
+        for (JsonNode a : node.path("authors")) {
+            String name = cleanString(a.path("name").asText(null));
+            if (name != null && !name.isBlank()) authors.add(name);
+        }
+
+        // Publisher: first element of [{name}]
+        String publisher = null;
+        JsonNode publishers = node.path("publishers");
+        if (publishers.isArray() && !publishers.isEmpty()) {
+            publisher = cleanString(publishers.get(0).path("name").asText(null));
+        }
+
+        // Published date (free-form string like "September 1, 1990" or "1990")
+        LocalDate publishedDate = parseDate(node.path("publish_date").asText(null));
+
+        // Page count
+        int pageCount = node.path("number_of_pages").asInt(0);
+
+        // ISBNs from identifiers block (prefer explicit; fall back to the bibkey ISBN)
+        JsonNode identifiers = node.path("identifiers");
+        String isbn10 = null;
+        String isbn13 = isbn;
+        JsonNode isbn10List = identifiers.path("isbn_10");
+        JsonNode isbn13List = identifiers.path("isbn_13");
+        if (isbn10List.isArray() && !isbn10List.isEmpty()) isbn10 = isbn10List.get(0).asText(null);
+        if (isbn13List.isArray() && !isbn13List.isEmpty()) isbn13 = isbn13List.get(0).asText(null);
+
+        // Cover: prefer large, fall back to medium
+        String coverUrl = null;
+        JsonNode cover = node.path("cover");
+        if (!cover.isMissingNode() && !cover.isNull()) {
+            String large = cover.path("large").asText(null);
+            coverUrl = (large != null && !large.isBlank()) ? large : cover.path("medium").asText(null);
+            if (coverUrl != null && coverUrl.isBlank()) coverUrl = null;
+        }
+
+        // Subjects: array of {name, url}
+        Set<String> subjects = new LinkedHashSet<>();
+        for (JsonNode s : node.path("subjects")) {
+            String name = cleanString(s.path("name").asText(null));
+            if (name != null && !name.isBlank()) {
+                subjects.add(name);
+                if (subjects.size() >= SUBJECT_LIMIT) break;
+            }
+        }
+
+        // Work key → external URL  (used later to fetch description via /works/<id>.json)
+        String externalUrl = null;
+        JsonNode works = node.path("works");
+        if (works.isArray() && !works.isEmpty()) {
+            String workKey = works.get(0).path("key").asText(null);
+            if (workKey != null && !workKey.isBlank()) {
+                String workId = stripWorkPrefix(workKey);
+                if (workId != null) externalUrl = BASE_URL + "/works/" + workId;
+            }
+        }
+
+        return BookMetadata.builder()
+                .provider(MetadataProvider.OpenLibrary)
+                .title(title)
+                .authors(authors.isEmpty() ? null : authors)
+                .publisher(publisher)
+                .publishedDate(publishedDate)
+                .pageCount(pageCount == 0 ? null : pageCount)
+                .isbn10(isbn10)
+                .isbn13(isbn13)
+                .thumbnailUrl(coverUrl)
+                .categories(subjects.isEmpty() ? null : subjects)
+                .externalUrl(externalUrl)
+                .build();
     }
 
     private URI buildSearchUri(Book book, FetchMetadataRequest request) {

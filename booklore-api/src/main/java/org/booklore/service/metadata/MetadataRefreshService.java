@@ -106,6 +106,24 @@ public class MetadataRefreshService {
                     .build();
             metadataFetchJobRepository.save(task);
 
+            // Bulk pre-fetch OpenLibrary data when it is a fixed provider.
+            // One HTTP request per 20 books instead of one per book.
+            if (fixedProviders != null && fixedProviders.contains(OpenLibrary)) {
+                List<String> isbns = bookRepository.findAllWithMetadataByIds(actualBookIds).stream()
+                        .map(b -> {
+                            if (b.getMetadata() == null) return null;
+                            String isbn = b.getMetadata().getIsbn13();
+                            if (isbn == null || isbn.isBlank()) isbn = b.getMetadata().getIsbn10();
+                            return isbn;
+                        })
+                        .filter(Objects::nonNull)
+                        .filter(isbn -> !isbn.isBlank())
+                        .toList();
+                if (!isbns.isEmpty()) {
+                    parserMap.get(OpenLibrary).preFetchByIsbn(isbns);
+                }
+            }
+
             TransactionTemplate txTemplate = new TransactionTemplate(transactionManager);
             AtomicInteger completedCount = new AtomicInteger(0);
             AtomicBoolean cancelled = new AtomicBoolean(false);
