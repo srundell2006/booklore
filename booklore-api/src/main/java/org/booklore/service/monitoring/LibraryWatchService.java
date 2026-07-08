@@ -125,20 +125,45 @@ public class LibraryWatchService {
         if (!library.isWatch()) return;
 
         int[] count = {0};
-        library.getPaths().forEach(libraryPath -> {
-            Path rootPath = Paths.get(libraryPath.getPath());
-            if (Files.isDirectory(rootPath)) {
-                try (Stream<Path> pathStream = Files.walk(rootPath)) {
-                    pathStream.filter(Files::isDirectory).forEach(path -> {
-                        if (registerPath(path, library.getId())) {
-                            count[0]++;
-                        }
-                    });
-                } catch (IOException e) {
-                    log.error("Failed to register paths for library '{}': {}", library.getName(), e.getMessage(), e);
+        try {
+            library.getPaths().forEach(libraryPath -> {
+                Path rootPath = Paths.get(libraryPath.getPath());
+                if (Files.isDirectory(rootPath)) {
+                    try (Stream<Path> pathStream = Files.walk(rootPath)) {
+                        pathStream.filter(Files::isDirectory).forEach(path -> {
+                            if (registerPath(path, library.getId())) {
+                                count[0]++;
+                            }
+                        });
+                    } catch (IOException e) {
+                        log.error("Failed to register paths for library '{}': {}", library.getName(), e.getMessage(), e);
+                    }
                 }
-            }
-        });
+            });
+        } catch (InotifyLimitReachedException e) {
+            log.error("""
+
+                ╔══════════════════════════════════════════════════════════════╗
+                ║           INOTIFY WATCH LIMIT REACHED                       ║
+                ║  Library : '{}'
+                ║  Watched : {}/{} folders before hitting the OS limit         ║
+                ║                                                              ║
+                ║  File watching has been disabled for this library.           ║
+                ║  You can re-enable it after raising the OS limit.            ║
+                ║                                                              ║
+                ║  Fix (run on Docker host):                                   ║
+                ║    sudo sysctl -w fs.inotify.max_user_watches=524288         ║
+                ║    sudo sysctl -p                                            ║
+                ║                                                              ║
+                ║  Or add to your docker-compose service:                      ║
+                ║    sysctls:                                                  ║
+                ║      - fs.inotify.max_user_watches=524288                    ║
+                ╚══════════════════════════════════════════════════════════════╝
+                """,
+                library.getName(), count[0], watches.size());
+            libraryWatchStatus.put(library.getId(), false);
+            return;
+        }
 
         log.info("Registered {} folders for library '{}'", count[0], library.getName());
     }
@@ -175,6 +200,9 @@ public class LibraryWatchService {
                 return true;
             }
         } catch (IOException e) {
+            if (e.getMessage() != null && e.getMessage().contains("inotify watches reached")) {
+                throw new InotifyLimitReachedException(libraryId, path);
+            }
             log.error("Error registering path: {}", path, e);
         }
         return false;
@@ -192,6 +220,9 @@ public class LibraryWatchService {
         try (Stream<Path> stream = Files.walk(root)) {
             stream.filter(Files::isDirectory)
                     .forEach(p -> registerPath(p, libraryId));
+        } catch (InotifyLimitReachedException e) {
+            log.warn("Inotify limit reached while registering new directory '{}' for library {}. " +
+                     "Increase fs.inotify.max_user_watches on the host to restore full watching.", root, libraryId);
         } catch (IOException e) {
             log.warn("Failed to register paths under: {}", root, e);
         }
@@ -219,6 +250,10 @@ public class LibraryWatchService {
                         .filter(path -> !path.equals(libraryRoot))
                         .forEach(path -> registerPath(path, libraryId));
             }
+        } catch (InotifyLimitReachedException e) {
+            log.error("Inotify limit reached for libraryId {} at '{}'. " +
+                      "File watching disabled. Increase fs.inotify.max_user_watches on the host.", libraryId, libraryRoot);
+            libraryWatchStatus.put(libraryId, false);
         } catch (Exception e) {
             log.error("Failed to register library paths for libraryId {} at {}", libraryId, libraryRoot, e);
         }
@@ -285,4 +320,11 @@ public class LibraryWatchService {
             log.error("Failed to close WatchService", e);
         }
     }
+
+    private static class InotifyLimitReachedException extends RuntimeException {
+        InotifyLimitReachedException(long libraryId, Path path) {
+            super("inotify watch limit reached for libraryId=" + libraryId + " at path=" + path);
+        }
+    }
+
 }
