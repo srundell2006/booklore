@@ -32,6 +32,21 @@ public class MetadataRefreshOptions {
     @Builder.Default
     private EnabledFields enabledFields = new EnabledFields();
 
+    /**
+     * When true, books that already have non-empty values for every enabled field
+     * are skipped without querying any metadata providers.
+     * Default: false (process all books).
+     */
+    @Builder.Default
+    private boolean skipComplete = false;
+
+    /**
+     * Number of books to process concurrently during a batch refresh.
+     * Default: 3. Set to 1 to restore sequential behaviour.
+     */
+    @Builder.Default
+    private int parallelism = 3;
+
     @Getter
     @Setter
     @NoArgsConstructor
