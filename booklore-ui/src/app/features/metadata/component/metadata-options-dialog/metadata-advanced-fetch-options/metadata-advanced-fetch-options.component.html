@@ -141,6 +141,18 @@
         <p [pTooltip]="t('manualReviewTooltip')" tooltipPosition="top">{{ t('manualReviewLabel') }}</p>
         <p-checkbox [(ngModel)]="reviewBeforeApply" [binary]="true"></p-checkbox>
       </div>
+      <div class="option-item">
+        <p [pTooltip]="t('skipCompleteTooltip')" tooltipPosition="top">{{ t('skipCompleteLabel') }}</p>
+        <p-checkbox [(ngModel)]="skipComplete" [binary]="true"></p-checkbox>
+      </div>
+      <div class="option-item">
+        <p [pTooltip]="t('parallelismTooltip')" tooltipPosition="top">{{ t('parallelismLabel') }}</p>
+        <p-inputnumber [(ngModel)]="parallelism" [min]="1" [max]="10" [showButtons]="true"
+                       buttonLayout="horizontal" spinnerMode="horizontal"
+                       decrementButtonIcon="pi pi-minus" incrementButtonIcon="pi pi-plus"
+                       size="small" inputStyleClass="parallelism-input">
+        </p-inputnumber>
+      </div>
     </div>
 
     <div class="action-buttons">

@@ -587,6 +587,10 @@
     "mergeGenresTooltip": "Combine new genres with existing ones",
     "manualReviewLabel": "Manual review:",
     "manualReviewTooltip": "Review and approve metadata changes before saving",
+    "skipCompleteLabel": "Skip complete:",
+    "skipCompleteTooltip": "Skip books that already have values for every enabled field",
+    "parallelismLabel": "Parallel books:",
+    "parallelismTooltip": "Number of books to process simultaneously (1–10). Higher values are faster but use more memory and CPU.",
     "resetForm": "Reset Form",
     "toast": {
       "providerRequiredSummary": "Error",

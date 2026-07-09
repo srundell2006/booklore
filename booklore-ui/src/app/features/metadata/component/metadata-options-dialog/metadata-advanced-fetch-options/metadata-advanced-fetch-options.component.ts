@@ -1,4 +1,5 @@
 import {Component, EventEmitter, inject, Input, OnChanges, Output, SimpleChanges} from '@angular/core';
+import {InputNumber} from 'primeng/inputnumber';
 import {Select} from 'primeng/select';
 import {FormsModule} from '@angular/forms';
 
@@ -16,7 +17,7 @@ import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 @Component({
   selector: 'app-metadata-advanced-fetch-options',
   templateUrl: './metadata-advanced-fetch-options.component.html',
-  imports: [Select, FormsModule, Checkbox, Button, Tooltip, TranslocoDirective],
+  imports: [Select, FormsModule, Checkbox, Button, Tooltip, TranslocoDirective, InputNumber],
   styleUrl: './metadata-advanced-fetch-options.component.scss',
   standalone: true
 })
@@ -64,6 +65,8 @@ export class MetadataAdvancedFetchOptionsComponent implements OnChanges {
   mergeCategories: boolean = false;
   reviewBeforeApply: boolean = false;
   replaceMode: MetadataReplaceMode = 'REPLACE_MISSING';
+  skipComplete: boolean = false;
+  parallelism: number = 3;
 
   get replaceModeOptions(): { label: string; value: MetadataReplaceMode }[] {
     return [
@@ -135,6 +138,8 @@ export class MetadataAdvancedFetchOptionsComponent implements OnChanges {
       this.mergeCategories = this.currentMetadataOptions.mergeCategories || false;
       this.reviewBeforeApply = this.currentMetadataOptions.reviewBeforeApply || false;
       this.replaceMode = this.currentMetadataOptions.replaceMode || 'REPLACE_MISSING';
+      this.skipComplete = this.currentMetadataOptions.skipComplete ?? false;
+      this.parallelism = this.currentMetadataOptions.parallelism ?? 3;
 
       const backendFieldOptions = this.deepCloneFieldOptions(this.currentMetadataOptions.fieldOptions as FieldOptions || {});
       for (const field of this.fields) {
@@ -184,7 +189,9 @@ export class MetadataAdvancedFetchOptionsComponent implements OnChanges {
         reviewBeforeApply: this.reviewBeforeApply,
         replaceMode: this.replaceMode,
         fieldOptions: this.fieldOptions,
-        enabledFields: this.enabledFields
+        enabledFields: this.enabledFields,
+        skipComplete: this.skipComplete,
+        parallelism: this.parallelism
       };
 
       this.metadataOptionsSubmitted.emit(metadataRefreshOptions);
@@ -241,6 +248,8 @@ export class MetadataAdvancedFetchOptionsComponent implements OnChanges {
     }
     this.enabledFields = this.initializeEnabledFields();
     this.replaceMode = 'REPLACE_MISSING';
+    this.skipComplete = false;
+    this.parallelism = 3;
 
     // Reset bulk selectors
     this.bulkP1 = null;

@@ -13,6 +13,10 @@ export interface MetadataRefreshOptions {
   replaceMode?: MetadataReplaceMode;
   fieldOptions?: FieldOptions;
   enabledFields?: Record<keyof FieldOptions, boolean>;
+  /** Skip books whose enabled fields already have values. Default: false. */
+  skipComplete?: boolean;
+  /** Number of books to process in parallel. Default: 3. */
+  parallelism?: number;
 }
 
 export interface FieldProvider {
