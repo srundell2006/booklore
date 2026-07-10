@@ -16,7 +16,6 @@ import {BookDialogHelperService} from '../components/book-browser/book-dialog-he
 import {TranslocoService} from '@jsverse/transloco';
 import {BookSelectionService} from '../components/book-browser/book-selection.service';
 import {BookMetadataService} from './book-metadata.service';
-import {finalize} from 'rxjs';
 
 @Injectable({
   providedIn: 'root',
