@@ -1,7 +1,7 @@
 package org.booklore.service.metadata.parser;
 
-import com.fasterxml.jackson.core.type.TypeReference;
-import com.fasterxml.jackson.databind.ObjectMapper;
+import tools.jackson.core.type.TypeReference;
+import tools.jackson.databind.ObjectMapper;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.booklore.model.dto.Book;
@@ -20,7 +20,7 @@ import java.util.List;
  * Metadata provider that queries the locally-imported Open Library database tables
  * (ol_editions + ol_authors) instead of making external API calls.
  *
- * The tables are populated by import_open_library.py using bulk data dumps from
+ * Tables are populated by import_open_library.py using bulk data dumps from
  * https://openlibrary.org/data/openlibrary-dump-latest.txt.gz
  *
  * Search order: ISBN-13 → ISBN-10 → title.
@@ -60,25 +60,38 @@ public class OpenLibraryLocalParser implements BookParser {
     // -----------------------------------------------------------------------
 
     private List<OlEditionRow> findRows(FetchMetadataRequest request, Book book) {
-        // 1. ISBN-13 from request or book metadata
-        String isbn13 = request.getIsbn13();
-        if (isbn13 == null && book.getMetadata() != null) isbn13 = book.getMetadata().getIsbn13();
-        if (isbn13 != null && !isbn13.isBlank()) {
-            List<OlEditionRow> rows = repository.findByIsbn13(isbn13.replaceAll("[^0-9]", ""));
-            if (!rows.isEmpty()) return rows;
+        BookMetadata existingMeta = book.getMetadata();
+
+        // isbn from request may be ISBN-13 or ISBN-10 — try both columns
+        String reqIsbn = request.getIsbn();
+        if (reqIsbn != null && !reqIsbn.isBlank()) {
+            String cleaned = reqIsbn.replaceAll("[^0-9Xx]", "");
+            if (cleaned.length() == 13) {
+                List<OlEditionRow> rows = repository.findByIsbn13(cleaned);
+                if (!rows.isEmpty()) return rows;
+            } else if (cleaned.length() == 10) {
+                List<OlEditionRow> rows = repository.findByIsbn10(cleaned);
+                if (!rows.isEmpty()) return rows;
+            }
         }
 
-        // 2. ISBN-10
-        String isbn10 = request.getIsbn10();
-        if (isbn10 == null && book.getMetadata() != null) isbn10 = book.getMetadata().getIsbn10();
-        if (isbn10 != null && !isbn10.isBlank()) {
-            List<OlEditionRow> rows = repository.findByIsbn10(isbn10.replaceAll("[^0-9Xx]", ""));
-            if (!rows.isEmpty()) return rows;
+        // Fall back to ISBN values already on the book
+        if (existingMeta != null) {
+            String isbn13 = existingMeta.getIsbn13();
+            if (isbn13 != null && !isbn13.isBlank()) {
+                List<OlEditionRow> rows = repository.findByIsbn13(isbn13.replaceAll("[^0-9]", ""));
+                if (!rows.isEmpty()) return rows;
+            }
+            String isbn10 = existingMeta.getIsbn10();
+            if (isbn10 != null && !isbn10.isBlank()) {
+                List<OlEditionRow> rows = repository.findByIsbn10(isbn10.replaceAll("[^0-9Xx]", ""));
+                if (!rows.isEmpty()) return rows;
+            }
         }
 
-        // 3. Title
+        // Title search (request title, then book title)
         String title = request.getTitle();
-        if (title == null && book.getMetadata() != null) title = book.getMetadata().getTitle();
+        if (title == null && existingMeta != null) title = existingMeta.getTitle();
         if (title != null && !title.isBlank()) {
             return repository.findByTitle(title);
         }
