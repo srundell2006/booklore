@@ -11,6 +11,7 @@ import {User} from '../../settings/user-management/user.service';
 import {APIException} from '../../../shared/models/api-exception.model';
 import {HttpErrorResponse} from '@angular/common/http';
 import {TranslocoService} from '@jsverse/transloco';
+import {BookMetadataService} from './book-metadata.service';
 
 @Injectable({
   providedIn: 'root'
@@ -23,6 +24,7 @@ export class BookMenuService {
   bookMetadataManageService = inject(BookMetadataManageService);
   loadingService = inject(LoadingService);
   private readonly t = inject(TranslocoService);
+  private bookMetadataService = inject(BookMetadataService);
 
   getMetadataMenuItems(
     autoFetchMetadata: () => void,
@@ -428,6 +430,47 @@ export class BookMenuService {
                       severity: 'error',
                       summary: this.t.translate('book.menuService.toast.failedSummary'),
                       detail: apiError?.message || this.t.translate('book.menuService.toast.progressResetFailedDetail'),
+                      life: 3000
+                    });
+                  }
+                });
+            }
+          });
+        }
+      });
+    }
+
+    if (selectedBooks.size > 0) {
+      items.push({
+        label: this.t.translate('book.menuService.menu.clearTitleChangedFlag'),
+        icon: 'pi pi-flag',
+        command: () => {
+          const bookIds = Array.from(selectedBooks);
+          const count = bookIds.length;
+          this.confirmationService.confirm({
+            message: this.t.translate('book.menuService.confirm.clearTitleChangedFlagMessage', {count}),
+            header: this.t.translate('book.menuService.confirm.clearTitleChangedFlagHeader'),
+            icon: 'pi pi-exclamation-triangle',
+            acceptLabel: this.t.translate('common.yes'),
+            rejectLabel: this.t.translate('common.no'),
+            accept: () => {
+              const loader = this.loadingService.show(this.t.translate('book.menuService.loading.clearingTitleChangedFlag'));
+              this.bookMetadataService.clearTitleChangedFlag(bookIds)
+                .pipe(finalize(() => this.loadingService.hide(loader)))
+                .subscribe({
+                  next: () => {
+                    this.messageService.add({
+                      severity: 'success',
+                      summary: this.t.translate('common.success'),
+                      detail: this.t.translate('book.menuService.toast.titleChangedFlagClearedDetail', {count}),
+                      life: 2000
+                    });
+                  },
+                  error: () => {
+                    this.messageService.add({
+                      severity: 'error',
+                      summary: this.t.translate('book.menuService.toast.failedSummary'),
+                      detail: this.t.translate('book.menuService.toast.clearTitleChangedFlagFailedDetail'),
                       life: 3000
                     });
                   }

@@ -48,7 +48,9 @@ public class OpenLibraryRepository {
         return jdbc.query(
                 "SELECT ol_key, isbn13, isbn10, title, subtitle, publisher, publish_date, " +
                 "description, subjects, author_keys, language, page_count, cover_id " +
-                "FROM ol_editions WHERE isbn13 = ? LIMIT 5",
+                "FROM ol_editions WHERE isbn13 = ? " +
+                "ORDER BY CASE WHEN language = 'eng' THEN 0 WHEN language IS NULL THEN 1 ELSE 2 END " +
+                "LIMIT 5",
                 this::mapRow, isbn13
         );
     }
@@ -57,7 +59,9 @@ public class OpenLibraryRepository {
         return jdbc.query(
                 "SELECT ol_key, isbn13, isbn10, title, subtitle, publisher, publish_date, " +
                 "description, subjects, author_keys, language, page_count, cover_id " +
-                "FROM ol_editions WHERE isbn10 = ? LIMIT 5",
+                "FROM ol_editions WHERE isbn10 = ? " +
+                "ORDER BY CASE WHEN language = 'eng' THEN 0 WHEN language IS NULL THEN 1 ELSE 2 END " +
+                "LIMIT 5",
                 this::mapRow, isbn10
         );
     }
@@ -70,7 +74,9 @@ public class OpenLibraryRepository {
             List<OlEditionRow> rows = jdbc.query(
                     "SELECT ol_key, isbn13, isbn10, title, subtitle, publisher, publish_date, " +
                     "description, subjects, author_keys, language, page_count, cover_id " +
-                    "FROM ol_editions WHERE MATCH(title) AGAINST(? IN BOOLEAN MODE) LIMIT 10",
+                    "FROM ol_editions WHERE MATCH(title) AGAINST(? IN BOOLEAN MODE) " +
+                    "ORDER BY CASE WHEN language = 'eng' THEN 0 WHEN language IS NULL THEN 1 ELSE 2 END " +
+                    "LIMIT 10",
                     this::mapRow, title
             );
             if (!rows.isEmpty()) return rows;
@@ -80,7 +86,9 @@ public class OpenLibraryRepository {
         return jdbc.query(
                 "SELECT ol_key, isbn13, isbn10, title, subtitle, publisher, publish_date, " +
                 "description, subjects, author_keys, language, page_count, cover_id " +
-                "FROM ol_editions WHERE title LIKE ? LIMIT 10",
+                "FROM ol_editions WHERE title LIKE ? " +
+                "ORDER BY CASE WHEN language = 'eng' THEN 0 WHEN language IS NULL THEN 1 ELSE 2 END " +
+                "LIMIT 10",
                 this::mapRow, "%" + title + "%"
         );
     }

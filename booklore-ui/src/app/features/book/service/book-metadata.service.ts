@@ -59,4 +59,8 @@ export class BookMetadataService {
   lookupByIsbn(isbn: string): Observable<BookMetadata> {
     return this.http.post<BookMetadata>(`${this.url}/metadata/isbn-lookup`, {isbn});
   }
+
+  clearTitleChangedFlag(bookIds: number[]): Observable<void> {
+    return this.http.post<void>(`${this.url}/metadata/clear-title-changed-flag`, {bookIds});
+  }
 }

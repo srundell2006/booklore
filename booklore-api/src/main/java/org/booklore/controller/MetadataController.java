@@ -144,6 +144,16 @@ public class MetadataController {
         return ResponseEntity.noContent().build();
     }
 
+    @Operation(summary = "Clear title-changed-by-auto-fetch flag", description = "Clears the titleChangedByAutoFetch flag and previousTitle for the given book IDs.")
+    @ApiResponse(responseCode = "200", description = "Flag cleared successfully")
+    @PostMapping("/metadata/clear-title-changed-flag")
+    @PreAuthorize("@securityUtil.canEditMetadata() or @securityUtil.isAdmin()")
+    public ResponseEntity<Void> clearTitleChangedFlag(@RequestBody java.util.Map<String, List<Long>> request) {
+        List<Long> bookIds = request.get("bookIds");
+        bookMetadataService.clearTitleChangedFlag(bookIds);
+        return ResponseEntity.ok().build();
+    }
+
     @Operation(summary = "Lookup metadata by ISBN", description = "Fetch metadata for a book by ISBN. Requires library management permission or admin.")
     @ApiResponse(responseCode = "200", description = "Metadata found")
     @ApiResponse(responseCode = "404", description = "No metadata found for the given ISBN")

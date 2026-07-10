@@ -14,6 +14,9 @@ import {finalize} from 'rxjs';
 import {DialogLauncherService} from '../../../shared/services/dialog-launcher.service';
 import {BookDialogHelperService} from '../components/book-browser/book-dialog-helper.service';
 import {TranslocoService} from '@jsverse/transloco';
+import {BookSelectionService} from '../components/book-browser/book-selection.service';
+import {BookMetadataService} from './book-metadata.service';
+import {finalize} from 'rxjs';
 
 @Injectable({
   providedIn: 'root',
@@ -32,6 +35,8 @@ export class LibraryShelfMenuService {
   private loadingService = inject(LoadingService);
   private bookDialogHelperService = inject(BookDialogHelperService);
   private readonly t = inject(TranslocoService);
+  private bookSelectionService = inject(BookSelectionService);
+  private bookMetadataService = inject(BookMetadataService);
 
   initializeLibraryMenuItems(entity: Library | Shelf | MagicShelf | null): MenuItem[] {
     return [
@@ -287,6 +292,48 @@ export class LibraryShelfMenuService {
                   this.messageService.add({severity: 'success', summary: this.t.translate('common.success'), detail: this.t.translate('book.shelfMenuService.toast.magicShelfJsonCopiedDetail')});
                 });
               }
+            }
+          },
+          {
+            label: this.t.translate('book.shelfMenuService.magicShelf.clearTitleChangedFlag'),
+            icon: 'pi pi-flag',
+            command: () => {
+              const books = this.bookSelectionService.getCurrentBooks();
+              const bookIds = books.map(b => b.id);
+              if (bookIds.length === 0) {
+                this.messageService.add({severity: 'warn', summary: this.t.translate('common.warning'), detail: this.t.translate('book.shelfMenuService.toast.noBooksToClearFlag'), life: 2000});
+                return;
+              }
+              this.confirmationService.confirm({
+                message: this.t.translate('book.shelfMenuService.confirm.clearTitleChangedFlagMessage', {count: bookIds.length}),
+                header: this.t.translate('book.shelfMenuService.confirm.clearTitleChangedFlagHeader'),
+                icon: 'pi pi-exclamation-triangle',
+                acceptLabel: this.t.translate('common.yes'),
+                rejectLabel: this.t.translate('common.no'),
+                accept: () => {
+                  const loader = this.loadingService.show(this.t.translate('book.menuService.loading.clearingTitleChangedFlag'));
+                  this.bookMetadataService.clearTitleChangedFlag(bookIds)
+                    .pipe(finalize(() => this.loadingService.hide(loader)))
+                    .subscribe({
+                      next: () => {
+                        this.messageService.add({
+                          severity: 'success',
+                          summary: this.t.translate('common.success'),
+                          detail: this.t.translate('book.menuService.toast.titleChangedFlagClearedDetail', {count: bookIds.length}),
+                          life: 2000
+                        });
+                      },
+                      error: () => {
+                        this.messageService.add({
+                          severity: 'error',
+                          summary: this.t.translate('book.menuService.toast.failedSummary'),
+                          detail: this.t.translate('book.menuService.toast.clearTitleChangedFlagFailedDetail'),
+                          life: 3000
+                        });
+                      }
+                    });
+                }
+              });
             }
           },
           {

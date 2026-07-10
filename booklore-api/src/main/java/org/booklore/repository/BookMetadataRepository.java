@@ -38,4 +38,9 @@ public interface BookMetadataRepository extends JpaRepository<BookMetadataEntity
     List<BookMetadataEntity> findAllByPublisherIgnoreCase(String publisher);
 
     List<BookMetadataEntity> findAllByLanguageIgnoreCase(String language);
+
+    @Modifying
+    @Transactional
+    @Query("UPDATE BookMetadataEntity m SET m.titleChangedByAutoFetch = false, m.previousTitle = null WHERE m.bookId IN :bookIds")
+    void clearTitleChangedFlag(@Param("bookIds") List<Long> bookIds);
 }

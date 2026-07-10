@@ -151,6 +151,12 @@ public class BookMetadataService {
         return parser;
     }
 
+    public void clearTitleChangedFlag(List<Long> bookIds) {
+        if (bookIds != null && !bookIds.isEmpty()) {
+            bookMetadataRepository.clearTitleChangedFlag(bookIds);
+        }
+    }
+
     public void toggleFieldLocks(List<Long> bookIds, Map<String, String> fieldActions) {
         Map<String, String> fieldMapping = Map.of(
                 "thumbnailLocked", "coverLocked"
