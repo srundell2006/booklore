@@ -113,6 +113,7 @@ public class OpenLibraryLocalParser implements BookParser {
 
     private BookMetadata toMetadata(OlEditionRow row) {
         BookMetadata meta = new BookMetadata();
+        meta.setProvider(MetadataProvider.OpenLibraryLocal);
         meta.setTitle(row.title());
         meta.setSubtitle(row.subtitle());
         meta.setPublisher(row.publisher());

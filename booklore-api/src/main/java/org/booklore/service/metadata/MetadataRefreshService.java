@@ -204,6 +204,12 @@ public class MetadataRefreshService {
                                         }
                                     }
 
+                                    if (metadataMap.isEmpty()) {
+                                        log.info("No providers returned data for \'{}\'. Skipping update to prevent data loss.", book.getMetadata().getTitle());
+                                        sendBatchProgressNotification(jobId, currentCount, totalBooks, "No data found: " + book.getMetadata().getTitle(), MetadataFetchTaskStatus.IN_PROGRESS, isReviewMode);
+                                        return null;
+                                    }
+
                                     BookMetadata fetched = null;
                                     boolean bookReviewMode = false;
                                     if (refreshOptions != null) {
@@ -473,6 +479,7 @@ public class MetadataRefreshService {
             case Ranobedb -> settings.getRanobedb() != null && settings.getRanobedb().isEnabled();
             case Douban -> settings.getDouban() != null && settings.getDouban().isEnabled();
             case Lubimyczytac -> settings.getLubimyczytac() != null && settings.getLubimyczytac().isEnabled();
+            case OpenLibraryLocal -> settings.getOpenLibraryLocal() != null && settings.getOpenLibraryLocal().isEnabled();
             default -> true;
         };
     }
