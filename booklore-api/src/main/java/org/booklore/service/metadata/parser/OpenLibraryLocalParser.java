@@ -12,9 +12,12 @@ import org.booklore.repository.OpenLibraryRepository;
 import org.booklore.repository.OpenLibraryRepository.OlEditionRow;
 import org.springframework.stereotype.Service;
 
+import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.Collections;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 /**
  * Metadata provider that queries the locally-imported Open Library database tables
@@ -113,7 +116,7 @@ public class OpenLibraryLocalParser implements BookParser {
         meta.setTitle(row.title());
         meta.setSubtitle(row.subtitle());
         meta.setPublisher(row.publisher());
-        meta.setPublishedDate(row.publishDate());
+        meta.setPublishedDate(parseDate(row.publishDate()));
         meta.setDescription(row.description());
         meta.setLanguage(row.language());
         meta.setPageCount(row.pageCount());
@@ -125,18 +128,29 @@ public class OpenLibraryLocalParser implements BookParser {
             meta.setAuthors(names.isEmpty() ? null : names);
         }
 
-        // Categories (subjects)
+        // Categories (subjects) — field type is Set<String>
         List<String> subjects = parseJsonArray(row.subjects());
         if (!subjects.isEmpty()) {
-            meta.setCategories(subjects.subList(0, Math.min(subjects.size(), SUBJECT_LIMIT)));
+            List<String> limited = subjects.subList(0, Math.min(subjects.size(), SUBJECT_LIMIT));
+            meta.setCategories(new LinkedHashSet<>(limited));
         }
 
-        // Cover
+        // Cover — field is thumbnailUrl
         if (row.coverId() != null && row.coverId() > 0) {
-            meta.setCover(COVERS_BASE_URL + row.coverId() + "-L.jpg");
+            meta.setThumbnailUrl(COVERS_BASE_URL + row.coverId() + "-L.jpg");
         }
 
         return meta;
+    }
+
+    /** Parse the first 4 characters as a year, returning Jan 1 of that year. */
+    private LocalDate parseDate(String date) {
+        if (date == null || date.isBlank() || date.length() < 4) return null;
+        try {
+            return LocalDate.of(Integer.parseInt(date.substring(0, 4)), 1, 1);
+        } catch (NumberFormatException e) {
+            return null;
+        }
     }
 
     private List<String> parseJsonArray(String json) {
