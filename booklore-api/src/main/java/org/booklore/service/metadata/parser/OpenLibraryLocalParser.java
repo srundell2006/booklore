@@ -36,14 +36,13 @@ public class OpenLibraryLocalParser implements BookParser {
     private final OpenLibraryRepository repository;
     private final ObjectMapper objectMapper;
 
-    @Override
     public MetadataProvider getProvider() {
         return MetadataProvider.OpenLibraryLocal;
     }
 
     @Override
-    public List<BookMetadata> fetchMetadata(FetchMetadataRequest request, Book book) {
-        List<OlEditionRow> rows = findRows(request, book);
+    public List<BookMetadata> fetchMetadata(Book book, FetchMetadataRequest request) {
+        List<OlEditionRow> rows = findRows(book, request);
         if (rows.isEmpty()) {
             log.debug("OpenLibraryLocal: no results for book id={}", book.getId());
             return Collections.emptyList();
@@ -55,11 +54,17 @@ public class OpenLibraryLocalParser implements BookParser {
         return results;
     }
 
+    @Override
+    public BookMetadata fetchTopMetadata(Book book, FetchMetadataRequest request) {
+        List<BookMetadata> results = fetchMetadata(book, request);
+        return results.isEmpty() ? null : results.get(0);
+    }
+
     // -----------------------------------------------------------------------
     // Search strategy
     // -----------------------------------------------------------------------
 
-    private List<OlEditionRow> findRows(FetchMetadataRequest request, Book book) {
+    private List<OlEditionRow> findRows(Book book, FetchMetadataRequest request) {
         BookMetadata existingMeta = book.getMetadata();
 
         // isbn from request may be ISBN-13 or ISBN-10 — try both columns
