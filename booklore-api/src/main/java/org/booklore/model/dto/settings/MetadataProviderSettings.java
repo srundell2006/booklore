@@ -10,6 +10,7 @@ public class MetadataProviderSettings {
     private Goodreads goodReads;
     private Hardcover hardcover;
     private OpenLibrary openLibrary;
+    private OpenLibraryLocal openLibraryLocal;
     private Comicvine comicvine;
     private Ranobedb ranobedb;
     private Douban douban;
@@ -44,6 +45,11 @@ public class MetadataProviderSettings {
 
     @Data
     public static class OpenLibrary {
+        private boolean enabled;
+    }
+
+    @Data
+    public static class OpenLibraryLocal {
         private boolean enabled;
     }
 

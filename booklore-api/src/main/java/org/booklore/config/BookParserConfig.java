@@ -11,19 +11,32 @@ import java.util.Map;
 public class BookParserConfig {
 
     @Bean
-    public Map<MetadataProvider, BookParser> parserMap(GoogleParser googleParser, AmazonBookParser amazonBookParser,
-                                                       GoodReadsParser goodReadsParser, HardcoverParser hardcoverParser, OpenLibraryParser openLibraryParser, ComicvineBookParser comicvineBookParser, DoubanBookParser doubanBookParser, RanobeDbParser ranobedbParser, LubimyCzytacParser lubimyczytacParser, AudibleParser audibleParser) {
-        return Map.of(
-                MetadataProvider.Amazon, amazonBookParser,
-                MetadataProvider.GoodReads, goodReadsParser,
-                MetadataProvider.Google, googleParser,
-                MetadataProvider.Hardcover, hardcoverParser,
-                MetadataProvider.OpenLibrary, openLibraryParser,
-                MetadataProvider.Comicvine, comicvineBookParser,
-                MetadataProvider.Douban, doubanBookParser,
-                MetadataProvider.Lubimyczytac, lubimyczytacParser,
-                MetadataProvider.Ranobedb, ranobedbParser,
-                MetadataProvider.Audible, audibleParser
+    public Map<MetadataProvider, BookParser> parserMap(
+            GoogleParser googleParser,
+            AmazonBookParser amazonBookParser,
+            GoodReadsParser goodReadsParser,
+            HardcoverParser hardcoverParser,
+            OpenLibraryParser openLibraryParser,
+            OpenLibraryLocalParser openLibraryLocalParser,
+            ComicvineBookParser comicvineBookParser,
+            DoubanBookParser doubanBookParser,
+            RanobeDbParser ranobedbParser,
+            LubimyCzytacParser lubimyczytacParser,
+            AudibleParser audibleParser) {
+
+        // Map.of() supports at most 10 entries — use Map.ofEntries for 11+
+        return Map.ofEntries(
+                Map.entry(MetadataProvider.Amazon,           amazonBookParser),
+                Map.entry(MetadataProvider.GoodReads,        goodReadsParser),
+                Map.entry(MetadataProvider.Google,           googleParser),
+                Map.entry(MetadataProvider.Hardcover,        hardcoverParser),
+                Map.entry(MetadataProvider.OpenLibrary,      openLibraryParser),
+                Map.entry(MetadataProvider.OpenLibraryLocal, openLibraryLocalParser),
+                Map.entry(MetadataProvider.Comicvine,        comicvineBookParser),
+                Map.entry(MetadataProvider.Douban,           doubanBookParser),
+                Map.entry(MetadataProvider.Lubimyczytac,     lubimyczytacParser),
+                Map.entry(MetadataProvider.Ranobedb,         ranobedbParser),
+                Map.entry(MetadataProvider.Audible,          audibleParser)
         );
     }
 }

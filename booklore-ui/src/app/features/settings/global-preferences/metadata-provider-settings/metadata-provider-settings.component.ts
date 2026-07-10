@@ -93,6 +93,7 @@ export class MetadataProviderSettingsComponent implements OnInit {
   goodreadsEnabled: boolean = false;
   googleEnabled: boolean = false;
   openLibraryEnabled: boolean = false;
+  openLibraryLocalEnabled: boolean = false;
   comicvineEnabled: boolean = false;
   comicvineToken: string = '';
   doubanEnabled: boolean = false;
@@ -125,6 +126,7 @@ export class MetadataProviderSettingsComponent implements OnInit {
         this.hardcoverToken = metadataProviderSettings?.hardcover?.apiKey ?? '';
         this.hardcoverEnabled = metadataProviderSettings?.hardcover?.enabled ?? false;
         this.openLibraryEnabled = metadataProviderSettings?.openLibrary?.enabled ?? false;
+        this.openLibraryLocalEnabled = metadataProviderSettings?.openLibraryLocal?.enabled ?? false;
         this.comicvineEnabled = metadataProviderSettings?.comicvine?.enabled ?? false;
         this.comicvineToken = metadataProviderSettings?.comicvine?.apiKey ?? '';
         this.doubanEnabled = metadataProviderSettings?.douban?.enabled ?? false;
@@ -171,6 +173,7 @@ export class MetadataProviderSettingsComponent implements OnInit {
             apiKey: this.hardcoverToken.trim()
           },
           openLibrary: {enabled: this.openLibraryEnabled},
+          openLibraryLocal: {enabled: this.openLibraryLocalEnabled},
           douban: {enabled: this.doubanEnabled},
           lubimyczytac: {enabled: this.lubimyCzytacEnabled},
           ranobedb: {enabled: this.ranobedbEnabled},

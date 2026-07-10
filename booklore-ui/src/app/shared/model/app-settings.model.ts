@@ -58,6 +58,7 @@ export interface MetadataProviderSettings {
   ranobedb: Ranobedb;
   hardcover: Hardcover;
   openLibrary: OpenLibrary;
+  openLibraryLocal: OpenLibraryLocal;
   comicvine: Comicvine;
   douban: Douban;
   lubimyczytac: Lubimyczytac;
@@ -90,6 +91,10 @@ export interface Hardcover {
 }
 
 export interface OpenLibrary {
+  enabled: boolean;
+}
+
+export interface OpenLibraryLocal {
   enabled: boolean;
 }
 
