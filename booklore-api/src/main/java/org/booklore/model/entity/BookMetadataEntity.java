@@ -500,4 +500,10 @@ public class BookMetadataEntity {
                 && (this.comicMetadata == null || this.comicMetadata.areAllFieldsLocked())
                 ;
     }
+
+    @Column(name = "title_changed_by_auto_fetch")
+    private boolean titleChangedByAutoFetch;
+
+    @Column(name = "previous_title", length = 1000)
+    private String previousTitle;
 }

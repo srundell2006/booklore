@@ -120,4 +120,7 @@ public class BookMetadata {
     private String contentRating;
     private Boolean ageRatingLocked;
     private Boolean contentRatingLocked;
+
+    private Boolean titleChangedByAutoFetch;
+    private String previousTitle;
 }

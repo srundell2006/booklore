@@ -105,7 +105,16 @@ public class BookMetadataUpdater {
 
         boolean hasValueChangesForFileWrite = MetadataChangeDetector.hasValueChangesForFileWrite(newMetadata, metadata, clearFlags);
 
+        String titleBeforeUpdate = metadata.getTitle();
         updateBasicFields(newMetadata, metadata, clearFlags, replaceMode);
+        if (context.isAutoFetch()) {
+            String titleAfterUpdate = metadata.getTitle();
+            boolean titleChanged = titleBeforeUpdate != null && !titleBeforeUpdate.equals(titleAfterUpdate);
+            if (titleChanged) {
+                metadata.setTitleChangedByAutoFetch(true);
+                metadata.setPreviousTitle(titleBeforeUpdate);
+            }
+        }
         updateAuthorsIfNeeded(newMetadata, metadata, clearFlags, mergeCategories, replaceMode);
         updateCategoriesIfNeeded(newMetadata, metadata, clearFlags, mergeCategories, replaceMode);
         updateMoodsIfNeeded(newMetadata, metadata, clearFlags, mergeMoods, replaceMode);

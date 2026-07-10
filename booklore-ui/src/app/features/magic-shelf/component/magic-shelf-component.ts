@@ -97,7 +97,8 @@ export type RuleField =
   | 'seriesGaps'
   | 'seriesPosition'
   | 'readingProgress'
-  | 'metadataPresence';
+  | 'metadataPresence'
+  | 'titleChangedByAutoFetch';
 
 
 interface FullFieldConfig {
@@ -192,7 +193,8 @@ const FIELD_CONFIGS: Record<RuleField, FullFieldConfig> = {
   seriesGaps: {label: 'seriesGaps'},
   seriesPosition: {label: 'seriesPosition'},
   readingProgress: {label: 'readingProgress', type: 'decimal', max: 100},
-  metadataPresence: {label: 'metadataPresence'}
+  metadataPresence: {label: 'metadataPresence'},
+  titleChangedByAutoFetch: {label: 'titleChangedByAutoFetch', type: 'boolean'}
 };
 
 interface FieldGroup {
@@ -206,7 +208,7 @@ const FIELD_GROUPS: FieldGroup[] = [
   { translationKey: 'series', fields: ['seriesName', 'seriesNumber', 'seriesTotal', 'seriesStatus', 'seriesGaps', 'seriesPosition'] },
   { translationKey: 'dates', fields: ['publishedDate', 'dateFinished', 'lastReadTime', 'addedOn'] },
   { translationKey: 'ratingsReviews', fields: ['personalRating', 'amazonRating', 'amazonReviewCount', 'goodreadsRating', 'goodreadsReviewCount', 'hardcoverRating', 'hardcoverReviewCount', 'ranobedbRating', 'lubimyczytacRating', 'audibleRating', 'audibleReviewCount'] },
-  { translationKey: 'qualityMetadata', fields: ['metadataScore', 'metadataPresence'] },
+  { translationKey: 'qualityMetadata', fields: ['metadataScore', 'metadataPresence', 'titleChangedByAutoFetch'] },
   { translationKey: 'tagsMoods', fields: ['moods', 'tags'] },
   { translationKey: 'audiobook', fields: ['narrator', 'abridged', 'audiobookDuration', 'audiobookCodec', 'audiobookChapterCount', 'audiobookBitrate'] },
   { translationKey: 'fileIdentifiers', fields: ['fileType', 'fileSize', 'isbn13', 'isbn10', 'isPhysical'] }

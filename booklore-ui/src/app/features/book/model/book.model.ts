@@ -250,6 +250,9 @@ export interface BookMetadata {
   contentRatingLocked?: boolean;
   allMetadataLocked?: boolean;
 
+  titleChangedByAutoFetch?: boolean | null;
+  previousTitle?: string | null;
+
   [key: string]: unknown;
 }
 

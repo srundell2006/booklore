@@ -223,7 +223,7 @@ public class MetadataRefreshService {
                                         MetadataReplaceMode replaceMode = refreshOptions.getReplaceMode() != null
                                                 ? refreshOptions.getReplaceMode()
                                                 : MetadataReplaceMode.REPLACE_MISSING;
-                                        updateBookMetadata(book, fetched, refreshOptions.isRefreshCovers(), refreshOptions.isMergeCategories(), replaceMode);
+                                        updateBookMetadata(book, fetched, refreshOptions.isRefreshCovers(), refreshOptions.isMergeCategories(), replaceMode, true);
                                     }
 
                                     sendBatchProgressNotification(jobId, currentCount + 1, totalBooks, "Processed: " + book.getMetadata().getTitle(), MetadataFetchTaskStatus.IN_PROGRESS, bookReviewMode);
@@ -375,6 +375,10 @@ public class MetadataRefreshService {
     }
 
     public void updateBookMetadata(BookEntity bookEntity, BookMetadata metadata, boolean replaceCover, boolean mergeCategories, MetadataReplaceMode replaceMode) {
+        updateBookMetadata(bookEntity, metadata, replaceCover, mergeCategories, replaceMode, false);
+    }
+
+    public void updateBookMetadata(BookEntity bookEntity, BookMetadata metadata, boolean replaceCover, boolean mergeCategories, MetadataReplaceMode replaceMode, boolean autoFetch) {
         MetadataUpdateContext context = MetadataUpdateContext.builder()
                 .bookEntity(bookEntity)
                 .metadataUpdateWrapper(MetadataUpdateWrapper.builder()
@@ -385,6 +389,7 @@ public class MetadataRefreshService {
                 .replaceMode(replaceMode)
                 .mergeMoods(true)
                 .mergeTags(true)
+                .autoFetch(autoFetch)
                 .build();
 
         updateBookMetadata(context);

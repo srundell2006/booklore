@@ -358,6 +358,8 @@ export class BookRuleEvaluatorService {
         return book.isPhysical;
       case 'lubimyczytacRating':
         return book.metadata?.lubimyczytacRating;
+      case 'titleChangedByAutoFetch':
+        return book.metadata?.titleChangedByAutoFetch ?? false;
       case 'readingProgress': {
         const prg = [
           book.koreaderProgress?.percentage ?? 0,
