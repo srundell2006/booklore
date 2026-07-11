@@ -138,7 +138,8 @@ public class GoogleParser implements BookParser {
             if (!isbnResults.isEmpty()) {
                 return isbnResults;
             }
-            log.info("Google Books: ISBN search returned no results, falling back to Title+Author search.");
+            log.info("Google Books: ISBN search returned no results; skipping title/author fallback because ISBN was provided.");
+            return Collections.emptyList();
         }
 
         String title = fetchMetadataRequest.getTitle();

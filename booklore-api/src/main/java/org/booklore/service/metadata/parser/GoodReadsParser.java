@@ -31,6 +31,7 @@ import java.util.concurrent.ThreadLocalRandom;
 import java.util.function.Function;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
+import java.util.Collections;
 
 @Slf4j
 @Service
@@ -126,10 +127,11 @@ public class GoodReadsParser implements BookParser, DetailedMetadataProvider {
                     }
                 }
             } catch (WafChallengeException e) {
-                log.warn("GoodReads: WAF challenge on ISBN lookup, falling back to search");
+                log.warn("GoodReads: WAF challenge on ISBN lookup; skipping title/author fallback because ISBN was provided.");
             } catch (Exception e) {
-                log.warn("GoodReads: ISBN lookup failed: {}", e.getMessage());
+                log.warn("GoodReads: ISBN lookup failed: {}; skipping title/author fallback because ISBN was provided.", e.getMessage());
             }
+            return Collections.emptyList();
         }
 
         List<SearchTarget> targets = searchTargets(book, fetchMetadataRequest).stream()

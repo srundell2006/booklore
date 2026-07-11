@@ -81,6 +81,9 @@ public class OpenLibraryLocalParser implements BookParser {
                 List<OlEditionRow> rows = repository.findByIsbn10(cleaned);
                 if (!rows.isEmpty()) return rows;
             }
+            // ISBN was provided but not found locally — skip title fallback
+            log.info("OpenLibraryLocal: ISBN {} not found in local DB; skipping title/author fallback because ISBN was provided.", reqIsbn);
+            return Collections.emptyList();
         }
 
         // Fall back to ISBN values already on the book
