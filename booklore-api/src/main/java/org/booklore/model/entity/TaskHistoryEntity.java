@@ -52,6 +52,6 @@ public class TaskHistoryEntity {
     private String errorDetails;
 
     @Convert(converter = JpaJsonConverter.class)
-    @Column(name = "task_options", columnDefinition = "TEXT")
+    @Column(name = "task_options", columnDefinition = "MEDIUMTEXT")
     private Map<String, Object> taskOptions;
 }

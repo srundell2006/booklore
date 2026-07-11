@@ -87,8 +87,42 @@ public class GoodReadsParser implements BookParser, DetailedMetadataProvider {
                 log.warn("GoodReads: Error fetching existing ID {}: {}, falling back to search", existingGoodreadsId, e.getMessage());
             }
         } else {
-            log.info("GoodReads: No existing Goodreads ID on book '{}' — will search by title/author",
+            log.info("GoodReads: No existing Goodreads ID on book '{}' — will try ISBN then search by title/author",
                     fetchMetadataRequest.getTitle());
+        }
+
+        // If an ISBN is available, try the ISBN endpoint before falling back to the
+        // WAF-challenged search page.  A successful ISBN hit also gives us the GoodReads
+        // ID so future auto-fetches can use the faster direct-ID path.
+        String isbn = ParserUtils.cleanIsbn(fetchMetadataRequest.getIsbn());
+        if (isbn != null && !isbn.isBlank()) {
+            log.info("GoodReads: fetchTopMetadata trying ISBN lookup for '{}' (isbn={})",
+                    fetchMetadataRequest.getTitle(), isbn);
+            try {
+                Document isbnDoc = fetchDoc(BASE_ISBN_URL + isbn);
+                String ogUrl = Optional.ofNullable(isbnDoc.selectFirst("meta[property=og:url]"))
+                        .map(e -> e.attr("content"))
+                        .orElse(null);
+                if (ogUrl != null && !ogUrl.isBlank()) {
+                    String resolvedId = ogUrl.substring(ogUrl.lastIndexOf('/') + 1);
+                    if (!resolvedId.isBlank()) {
+                        BookMetadata metadata = parseBookDetails(isbnDoc, resolvedId);
+                        if (metadata != null) {
+                            log.info("GoodReads: fetchTopMetadata result via ISBN — title='{}' rating={} reviewCount={} goodreadsId='{}'",
+                                    metadata.getTitle(), metadata.getGoodreadsRating(),
+                                    metadata.getGoodreadsReviewCount(), metadata.getGoodreadsId());
+                            return metadata;
+                        }
+                    }
+                }
+                log.info("GoodReads: ISBN lookup returned no parseable result for isbn={}; falling through to search", isbn);
+            } catch (WafChallengeException e) {
+                log.warn("GoodReads: WAF challenge on ISBN lookup for '{}'; falling through to search",
+                        fetchMetadataRequest.getTitle());
+            } catch (Exception e) {
+                log.warn("GoodReads: ISBN lookup failed for '{}': {}; falling through to search",
+                        fetchMetadataRequest.getTitle(), e.getMessage());
+            }
         }
 
         List<SearchTarget> targets = searchTargets(book, fetchMetadataRequest);
