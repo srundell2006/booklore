@@ -3,16 +3,8 @@ import {MessageService} from 'primeng/api';
 import {MetadataRefreshRequest} from '../../metadata/model/request/metadata-refresh-request.model';
 import {catchError, map} from 'rxjs/operators';
 import {of} from 'rxjs';
-import {TaskCreateRequest, TaskService, TaskType} from './task.service';
+import {IsbnScanRequest, TaskCreateRequest, TaskService, TaskType} from './task.service';
 import {TranslocoService} from '@jsverse/transloco';
-
-export interface IsbnScanRequest {
-  refreshType: 'LIBRARY' | 'MAGIC_SHELF' | 'BOOKS';
-  libraryId?: number;
-  magicShelfId?: number;
-  bookIds?: number[];
-  overwriteExisting?: boolean;
-}
 
 @Injectable({
   providedIn: 'root'

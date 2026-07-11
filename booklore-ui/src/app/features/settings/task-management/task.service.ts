@@ -37,10 +37,18 @@ export interface LibraryRescanOptions {
   metadataReplaceMode?: MetadataReplaceMode;
 }
 
+export interface IsbnScanRequest {
+  refreshType: 'LIBRARY' | 'MAGIC_SHELF' | 'BOOKS';
+  libraryId?: number;
+  magicShelfId?: number;
+  bookIds?: number[];
+  overwriteExisting?: boolean;
+}
+
 export interface TaskCreateRequest {
   taskType: TaskType;
   triggeredByCron?: boolean;
-  options?: LibraryRescanOptions | MetadataRefreshRequest | null;
+  options?: LibraryRescanOptions | MetadataRefreshRequest | IsbnScanRequest | null;
 }
 
 export interface TaskCreateResponse {
