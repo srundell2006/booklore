@@ -24,6 +24,7 @@ import java.time.LocalDate;
 import java.time.format.DateTimeFormatter;
 import java.time.format.DateTimeParseException;
 import java.util.*;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.regex.Matcher;
 import java.util.regex.Pattern;
@@ -48,6 +49,11 @@ public class GoogleParser implements BookParser {
     private static final String GOOGLE_BOOKS_API_URL = "https://www.googleapis.com/books/v1/volumes";
     private final AtomicLong lastRequestTime = new AtomicLong(0);
 
+    /** Cache populated by preFetchByIsbn(); keyed by cleaned ISBN (10 or 13 digit). */
+    private final ConcurrentHashMap<String, BookMetadata> bulkCache = new ConcurrentHashMap<>();
+    /** Number of ISBNs combined in a single batch pre-fetch request. */
+    private static final int GOOGLE_BATCH_SIZE = 5;
+
     @Autowired
     public GoogleParser(ObjectMapper objectMapper, AppSettingService appSettingService) {
         this(objectMapper, appSettingService, HttpClient.newHttpClient());
@@ -59,6 +65,53 @@ public class GoogleParser implements BookParser {
         this.httpClient = httpClient;
     }
 
+    /**
+     * Bulk pre-fetch: groups ISBNs into batches of {@value GOOGLE_BATCH_SIZE} and
+     * issues one OR-query per batch instead of one request per book.  Results are
+     * stored in {@link #bulkCache}; subsequent {@link #fetchTopMetadata} calls
+     * consume cache entries and skip the individual HTTP request entirely.
+     */
+    @Override
+    public void preFetchByIsbn(Collection<String> rawIsbns) {
+        List<String> cleanIsbns = rawIsbns.stream()
+                .map(ParserUtils::cleanIsbn)
+                .filter(Objects::nonNull)
+                .filter(isbn -> !isbn.isBlank())
+                .distinct()
+                .collect(Collectors.toList());
+
+        if (cleanIsbns.isEmpty()) return;
+
+        log.info("Google Books bulk pre-fetch: {} ISBNs in batches of {}", cleanIsbns.size(), GOOGLE_BATCH_SIZE);
+        for (int i = 0; i < cleanIsbns.size(); i += GOOGLE_BATCH_SIZE) {
+            List<String> batch = cleanIsbns.subList(i, Math.min(i + GOOGLE_BATCH_SIZE, cleanIsbns.size()));
+            try {
+                fetchBulkBatch(batch);
+            } catch (Exception e) {
+                log.warn("Google Books bulk batch {}-{} failed: {}", i, i + batch.size(), e.getMessage());
+            }
+        }
+        log.info("Google Books bulk pre-fetch complete: {} entries cached", bulkCache.size());
+    }
+
+    private void fetchBulkBatch(List<String> isbns) {
+        // Build an OR-query: isbn:X+OR+isbn:Y+OR+isbn:Z
+        String query = isbns.stream()
+                .map(isbn -> "isbn:" + isbn)
+                .collect(Collectors.joining("+OR+"));
+        List<BookMetadata> results = fetchFromApi(query, true);
+        for (BookMetadata result : results) {
+            if (result.getIsbn13() != null && !result.getIsbn13().isBlank()) {
+                String clean = ParserUtils.cleanIsbn(result.getIsbn13());
+                if (clean != null) bulkCache.putIfAbsent(clean, result);
+            }
+            if (result.getIsbn10() != null && !result.getIsbn10().isBlank()) {
+                String clean = ParserUtils.cleanIsbn(result.getIsbn10());
+                if (clean != null) bulkCache.putIfAbsent(clean, result);
+            }
+        }
+    }
+
     @Override
     public BookMetadata fetchTopMetadata(Book book, FetchMetadataRequest fetchMetadataRequest) {
         List<BookMetadata> fetchedBookMetadata = fetchMetadata(book, fetchMetadataRequest);
@@ -67,6 +120,18 @@ public class GoogleParser implements BookParser {
 
     @Override
     public List<BookMetadata> fetchMetadata(Book book, FetchMetadataRequest fetchMetadataRequest) {
+        // 0. Check bulk pre-fetch cache (populated by preFetchByIsbn)
+        if (fetchMetadataRequest.getIsbn() != null && !fetchMetadataRequest.getIsbn().isBlank()) {
+            String cleanIsbn = ParserUtils.cleanIsbn(fetchMetadataRequest.getIsbn());
+            if (cleanIsbn != null && !cleanIsbn.isBlank()) {
+                BookMetadata cached = bulkCache.remove(cleanIsbn);
+                if (cached != null) {
+                    log.debug("Google Books bulk cache hit for ISBN {}", cleanIsbn);
+                    return List.of(cached);
+                }
+            }
+        }
+
         // 1. Try ISBN Search
         if (fetchMetadataRequest.getIsbn() != null && !fetchMetadataRequest.getIsbn().isBlank()) {
             List<BookMetadata> isbnResults = getMetadataListByIsbn(ParserUtils.cleanIsbn(fetchMetadataRequest.getIsbn()));

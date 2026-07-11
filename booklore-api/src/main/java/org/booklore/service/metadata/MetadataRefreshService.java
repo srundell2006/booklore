@@ -39,12 +39,14 @@ import tools.jackson.databind.ObjectMapper;
 import java.time.Instant;
 import java.util.*;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
 import java.util.concurrent.Semaphore;
 import java.util.concurrent.ThreadLocalRandom;
 import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
@@ -108,30 +110,57 @@ public class MetadataRefreshService {
                     .build();
             metadataFetchJobRepository.save(task);
 
-            // Bulk pre-fetch OpenLibrary data when it is a fixed provider.
-            // One HTTP request per 20 books instead of one per book.
-            if (fixedProviders != null && fixedProviders.contains(OpenLibrary)) {
-                List<String> isbns = bookRepository.findAllWithMetadataByIds(actualBookIds).stream()
-                        .map(b -> {
-                            if (b.getMetadata() == null) return null;
-                            String isbn = b.getMetadata().getIsbn13();
-                            if (isbn == null || isbn.isBlank()) isbn = b.getMetadata().getIsbn10();
-                            return isbn;
-                        })
-                        .filter(Objects::nonNull)
-                        .filter(isbn -> !isbn.isBlank())
-                        .toList();
-                if (!isbns.isEmpty()) {
-                    parserMap.get(OpenLibrary).preFetchByIsbn(isbns);
-                }
+            // ── Speed improvement #1 ──────────────────────────────────────────────
+            // Pre-load ALL books in one query instead of one query per book.
+            // The map is used for: (a) ISBN collection for batch pre-fetch, and
+            // (b) lock-check outside the per-book transaction.
+            Map<Long, BookEntity> preloadedBooks = bookRepository.findAllWithMetadataByIds(actualBookIds)
+                    .stream()
+                    .collect(Collectors.toMap(BookEntity::getId, Function.identity()));
+
+            List<String> allIsbns = preloadedBooks.values().stream()
+                    .filter(b -> b.getMetadata() != null)
+                    .map(b -> {
+                        String isbn = b.getMetadata().getIsbn13();
+                        if (isbn == null || isbn.isBlank()) isbn = b.getMetadata().getIsbn10();
+                        return isbn;
+                    })
+                    .filter(Objects::nonNull)
+                    .filter(isbn -> !isbn.isBlank())
+                    .toList();
+
+            // Bulk pre-fetch: one HTTP request per 20 books instead of one per book.
+            if (fixedProviders != null && fixedProviders.contains(OpenLibrary) && !allIsbns.isEmpty()) {
+                parserMap.get(OpenLibrary).preFetchByIsbn(allIsbns);
+            }
+            // ── Speed improvement #6 ──────────────────────────────────────────────
+            // Google Books batch pre-fetch (5 ISBNs per request via OR query).
+            if (fixedProviders != null && fixedProviders.contains(Google) && !allIsbns.isEmpty()) {
+                parserMap.get(Google).preFetchByIsbn(allIsbns);
             }
 
             TransactionTemplate txTemplate = new TransactionTemplate(transactionManager);
             AtomicInteger completedCount = new AtomicInteger(0);
             AtomicBoolean cancelled = new AtomicBoolean(false);
+
+            // ── Speed improvement #2 ──────────────────────────────────────────────
+            // Raise default parallelism from 3 → 10. Virtual threads are cheap; the
+            // old default was overly conservative for I/O-bound HTTP providers.
             int parallelism = (requestRefreshOptions != null && requestRefreshOptions.getParallelism() > 0)
-                    ? requestRefreshOptions.getParallelism() : 3;
+                    ? requestRefreshOptions.getParallelism() : 10;
             Semaphore semaphore = new Semaphore(parallelism);
+
+            // ── Speed improvement #3 ──────────────────────────────────────────────
+            // Cache per-library refresh options so resolveMetadataRefreshOptions()
+            // is called at most once per library, not once per book.
+            Map<Long, MetadataRefreshOptions> libraryOptionsCache = new ConcurrentHashMap<>();
+            Map<Long, List<MetadataProvider>> libraryProvidersCache = new ConcurrentHashMap<>();
+
+            // ── Speed improvement #4 ──────────────────────────────────────────────
+            // Debounce progress DB saves + WebSocket pushes: at most one per 500 ms
+            // instead of one per book (which serialised all virtual threads through
+            // the synchronized reportProgressIfNeeded method).
+            AtomicLong lastProgressMs = new AtomicLong(0);
 
             // Capture the SecurityContext from the request thread so virtual threads
             // (which start with an empty ThreadLocal) can route WebSocket notifications.
@@ -154,30 +183,57 @@ public class MetadataRefreshService {
                                 return;
                             }
                             int currentCount = completedCount.get();
+
+                            // ── Speed improvement #1 (continued) ─────────────────
+                            // Use pre-loaded entity for the lock check — no transaction
+                            // or DB query needed. areAllFieldsLocked() only reads scalar
+                            // boolean columns which are always eagerly loaded.
+                            BookEntity preloadedBook = preloadedBooks.get(bookId);
+                            if (preloadedBook == null) {
+                                log.warn("Book {} missing from pre-loaded cache, skipping", bookId);
+                                sendBatchProgressNotification(jobId, currentCount, totalBooks, "Book not found: " + bookId, MetadataFetchTaskStatus.IN_PROGRESS, isReviewMode);
+                                completedCount.incrementAndGet();
+                                return;
+                            }
+                            if (preloadedBook.getMetadata() != null && preloadedBook.getMetadata().areAllFieldsLocked()) {
+                                log.info("Skipping locked book: {}", getBookIdentifier(preloadedBook));
+                                sendBatchProgressNotification(jobId, currentCount, totalBooks, "Skipped locked book: " + preloadedBook.getMetadata().getTitle(), MetadataFetchTaskStatus.IN_PROGRESS, isReviewMode);
+                                completedCount.incrementAndGet();
+                                return;
+                            }
+
+                            // ── Speed improvement #3 (continued) ─────────────────
+                            // Resolve options outside the transaction. For LIBRARY and
+                            // REQUEST types options are fixed. For BOOKS type, compute
+                            // once per library and cache.
+                            final MetadataRefreshOptions outerRefreshOptions;
+                            final List<MetadataProvider> outerProviders;
+                            if (useRequestOptions) {
+                                outerRefreshOptions = requestRefreshOptions;
+                                outerProviders = fixedProviders;
+                            } else if (isLibraryRefresh) {
+                                outerRefreshOptions = libraryRefreshOptions;
+                                outerProviders = fixedProviders;
+                            } else {
+                                // preloadedBook.getLibrary() is a Hibernate proxy; .getId()
+                                // returns the FK value without hitting the DB.
+                                Long libId = preloadedBook.getLibrary().getId();
+                                outerRefreshOptions = libraryOptionsCache.computeIfAbsent(
+                                        libId, id -> resolveMetadataRefreshOptions(id, appSettings));
+                                outerProviders = libraryProvidersCache.computeIfAbsent(
+                                        libId, id -> prepareProviders(outerRefreshOptions));
+                            }
+
                             txTemplate.execute(status -> {
                                 BookEntity book = bookRepository.findAllWithMetadataByIds(Collections.singleton(bookId))
                                         .stream().findFirst()
                                         .orElseThrow(() -> ApiError.BOOK_NOT_FOUND.createException(bookId));
                                 try {
-                                    if (book.getMetadata().areAllFieldsLocked()) {
-                                        log.info("Skipping locked book: {}", getBookIdentifier(book));
-                                        sendBatchProgressNotification(jobId, currentCount, totalBooks, "Skipped locked book: " + book.getMetadata().getTitle(), MetadataFetchTaskStatus.IN_PROGRESS, isReviewMode);
-                                        return null;
-                                    }
+                                    // areAllFieldsLocked already checked above; skip here.
 
-                                    MetadataRefreshOptions refreshOptions;
-                                    List<MetadataProvider> providers;
-
-                                    if (useRequestOptions) {
-                                        refreshOptions = requestRefreshOptions;
-                                        providers = fixedProviders;
-                                    } else if (isLibraryRefresh) {
-                                        refreshOptions = libraryRefreshOptions;
-                                        providers = fixedProviders;
-                                    } else {
-                                        refreshOptions = resolveMetadataRefreshOptions(book.getLibrary().getId(), appSettings);
-                                        providers = prepareProviders(refreshOptions);
-                                    }
+                                    // Use the options resolved outside the transaction.
+                                    MetadataRefreshOptions refreshOptions = outerRefreshOptions;
+                                    List<MetadataProvider> providers = outerProviders;
 
                                     if (refreshOptions != null && refreshOptions.isSkipComplete()
                                             && isMetadataComplete(book, refreshOptions)) {
@@ -186,12 +242,12 @@ public class MetadataRefreshService {
                                         return null;
                                     }
 
-                                    reportProgressIfNeeded(task, jobId, currentCount, totalBooks, book, isReviewMode);
+                                    reportProgressIfNeeded(task, jobId, currentCount, totalBooks, book, isReviewMode, lastProgressMs);
                                     Map<MetadataProvider, BookMetadata> metadataMap = fetchMetadataForBook(providers, book);
 
-                                    // Change 3: only sleep when GoodReads actually returned results,
-                                    // and serialise through a shared lock so parallel threads don't
-                                    // all hammer the rate-limit simultaneously.
+                                    // Only sleep when GoodReads actually returned results,
+                                    // and serialise through a shared lock so parallel threads
+                                    // don't all hammer the rate-limit simultaneously.
                                     if (metadataMap.containsKey(GoodReads)) {
                                         synchronized (GOODREADS_LOCK) {
                                             try {
@@ -205,7 +261,7 @@ public class MetadataRefreshService {
                                     }
 
                                     if (metadataMap.isEmpty()) {
-                                        log.info("No providers returned data for \'{}\'. Skipping update to prevent data loss.", book.getMetadata().getTitle());
+                                        log.info("No providers returned data for '{}'. Skipping update to prevent data loss.", book.getMetadata().getTitle());
                                         sendBatchProgressNotification(jobId, currentCount, totalBooks, "No data found: " + book.getMetadata().getTitle(), MetadataFetchTaskStatus.IN_PROGRESS, isReviewMode);
                                         return null;
                                     }
@@ -236,7 +292,11 @@ public class MetadataRefreshService {
                                     log.error("Metadata update failed for book: {}", getBookIdentifier(book), e);
                                     sendBatchProgressNotification(jobId, currentCount, totalBooks, String.format("Failed to process: %s - %s", book.getMetadata().getTitle(), e.getMessage()), MetadataFetchTaskStatus.ERROR, isReviewMode);
                                 }
-                                bookRepository.saveAndFlush(book);
+                                // ── Speed improvement #5 ─────────────────────────
+                                // Replace saveAndFlush with save: the transaction
+                                // template commits on exit, which triggers an automatic
+                                // flush. The explicit flush round-trip is unnecessary.
+                                bookRepository.save(book);
                                 return null;
                             });
                             completedCount.incrementAndGet();
@@ -299,7 +359,7 @@ public class MetadataRefreshService {
     }
 
     public Map<MetadataProvider, BookMetadata> fetchMetadataForBook(List<MetadataProvider> providers, Book book) {
-        // Change 1: query all providers in parallel using virtual threads
+        // Query all providers in parallel using virtual threads
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
             List<Future<BookMetadata>> futures = providers.stream()
                     .map(provider -> executor.submit(() -> fetchTopMetadataFromAProvider(provider, book)))
@@ -321,10 +381,25 @@ public class MetadataRefreshService {
         return fetchMetadataForBook(providers, bookMapper.toBook(bookEntity));
     }
 
-    private synchronized void reportProgressIfNeeded(MetadataFetchJobEntity task, String taskId, int completedCount, int total, BookEntity book, boolean isReviewMode) {
+    /**
+     * Reports fetch progress to the DB and WebSocket, throttled to at most one
+     * update per 500 ms. The old synchronized method serialised all virtual threads
+     * for every book; the CAS + time-gate here allows threads to bail out cheaply
+     * when a recent update has already been sent.
+     */
+    private void reportProgressIfNeeded(MetadataFetchJobEntity task, String taskId, int completedCount, int total,
+                                        BookEntity book, boolean isReviewMode, AtomicLong lastProgressMs) {
         if (task == null) return;
-        task.setCompletedBooks(completedCount);
-        metadataFetchJobRepository.save(task);
+        long now = System.currentTimeMillis();
+        long last = lastProgressMs.get();
+        // Always fire on the final book; otherwise throttle to 500 ms.
+        if (completedCount < total && now - last < 500) return;
+        // Only one thread wins the CAS and performs the update.
+        if (!lastProgressMs.compareAndSet(last, now)) return;
+        synchronized (task) {
+            task.setCompletedBooks(completedCount);
+            metadataFetchJobRepository.save(task);
+        }
         String message = String.format("Processing '%s'", book.getMetadata().getTitle());
         sendBatchProgressNotification(taskId, completedCount, total, message, MetadataFetchTaskStatus.IN_PROGRESS, isReviewMode);
     }
