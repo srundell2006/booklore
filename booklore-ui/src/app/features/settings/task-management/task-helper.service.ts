@@ -6,6 +6,14 @@ import {of} from 'rxjs';
 import {TaskCreateRequest, TaskService, TaskType} from './task.service';
 import {TranslocoService} from '@jsverse/transloco';
 
+export interface IsbnScanRequest {
+  refreshType: 'LIBRARY' | 'MAGIC_SHELF' | 'BOOKS';
+  libraryId?: number;
+  magicShelfId?: number;
+  bookIds?: number[];
+  overwriteExisting?: boolean;
+}
+
 @Injectable({
   providedIn: 'root'
 })
@@ -43,6 +51,42 @@ export class TaskHelperService {
             summary: this.t.translate('settingsTasks.toast.metadataFailed'),
             life: 5000,
             detail: this.t.translate('settingsTasks.toast.metadataFailedDetail')
+          });
+        }
+        return of({success: false});
+      })
+    );
+  }
+
+  scanEpubIsbnTask(options: IsbnScanRequest) {
+    const request: TaskCreateRequest = {
+      taskType: TaskType.EPUB_ISBN_SCAN,
+      triggeredByCron: false,
+      options
+    };
+    return this.taskService.startTask(request).pipe(
+      map(() => {
+        this.messageService.add({
+          severity: 'success',
+          summary: this.t.translate('common.success'),
+          detail: this.t.translate('settingsTasks.toast.isbnScanScheduled', {default: 'ISBN scan started. Progress will appear in Task Management.'})
+        });
+        return {success: true};
+      }),
+      catchError((e) => {
+        if (e.status === 409) {
+          this.messageService.add({
+            severity: 'error',
+            summary: this.t.translate('settingsTasks.toast.alreadyRunning'),
+            life: 5000,
+            detail: this.t.translate('settingsTasks.toast.isbnScanAlreadyRunning', {default: 'An ISBN scan is already running.'})
+          });
+        } else {
+          this.messageService.add({
+            severity: 'error',
+            summary: this.t.translate('settingsTasks.toast.metadataFailed'),
+            life: 5000,
+            detail: this.t.translate('settingsTasks.toast.isbnScanFailed', {default: 'Failed to start ISBN scan.'})
           });
         }
         return of({success: false});

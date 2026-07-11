@@ -58,6 +58,14 @@ public enum TaskType {
             true,
             "Refresh Metadata",
             "Updates metadata information for your selected books."
+    ),
+    EPUB_ISBN_SCAN(
+            false,
+            true,
+            false,
+            false,
+            "Scan EPUBs for ISBN",
+            "Scans the content pages of EPUB files (title page, copyright page, etc.) to find and populate missing ISBN numbers."
     );
 
     @Getter

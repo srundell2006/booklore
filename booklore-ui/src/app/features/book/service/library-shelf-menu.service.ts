@@ -7,7 +7,7 @@ import {Library} from '../model/library.model';
 import {Shelf} from '../model/shelf.model';
 import {MetadataRefreshType} from '../../metadata/model/request/metadata-refresh-type.enum';
 import {MagicShelf, MagicShelfService} from '../../magic-shelf/service/magic-shelf.service';
-import {TaskHelperService} from '../../settings/task-management/task-helper.service';
+import {IsbnScanRequest, TaskHelperService} from '../../settings/task-management/task-helper.service';
 import {UserService} from "../../settings/user-management/user.service";
 import {LoadingService} from '../../../core/services/loading.service';
 import {finalize} from 'rxjs';
@@ -147,6 +147,16 @@ export class LibraryShelfMenuService {
                 refreshType: MetadataRefreshType.LIBRARY,
                 libraryId: entity?.id ?? undefined
               }).subscribe();
+            }
+          },
+          {
+            label: this.t.translate('book.shelfMenuService.library.scanEpubsForIsbn', {default: 'Scan EPUBs for ISBN'}),
+            icon: 'pi pi-barcode',
+            command: () => {
+              this.taskHelperService.scanEpubIsbnTask({
+                refreshType: 'LIBRARY',
+                libraryId: entity?.id ?? undefined
+              } as IsbnScanRequest).subscribe();
             }
           },
           {
@@ -291,6 +301,16 @@ export class LibraryShelfMenuService {
                   this.messageService.add({severity: 'success', summary: this.t.translate('common.success'), detail: this.t.translate('book.shelfMenuService.toast.magicShelfJsonCopiedDetail')});
                 });
               }
+            }
+          },
+          {
+            label: this.t.translate('book.shelfMenuService.magicShelf.scanEpubsForIsbn', {default: 'Scan EPUBs for ISBN'}),
+            icon: 'pi pi-barcode',
+            command: () => {
+              this.taskHelperService.scanEpubIsbnTask({
+                refreshType: 'MAGIC_SHELF',
+                magicShelfId: entity?.id ?? undefined
+              } as IsbnScanRequest).subscribe();
             }
           },
           {
