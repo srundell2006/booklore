@@ -1029,3 +1029,15 @@
     gap: 0.5rem;
   }
 }
+
+.previous-title-value {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.375rem;
+}
+
+.previous-title-icon {
+  color: var(--p-yellow-500);
+  font-size: 0.8rem;
+  flex-shrink: 0;
+}

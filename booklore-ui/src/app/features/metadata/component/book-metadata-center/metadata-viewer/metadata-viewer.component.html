@@ -449,6 +449,16 @@
               }
             </div>
 
+            @if (book?.metadata?.previousTitle) {
+              <div class="metadata-item">
+                <span class="metadata-key">{{ t('previousTitleLabel') }}</span>
+                <span class="metadata-value previous-title-value">
+                  <i class="pi pi-history previous-title-icon" [pTooltip]="t('previousTitleTooltip')" tooltipPosition="top"></i>
+                  {{ book.metadata!.previousTitle }}
+                </span>
+              </div>
+            }
+
             <div class="metadata-item">
               <span class="metadata-key">{{ t('readStatusLabel') }}</span>
               <span class="metadata-value-group">

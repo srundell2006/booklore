@@ -250,6 +250,8 @@
     "bookloreProgressLabel": "BookLore Progress:",
     "metadataMatchLabel": "Metadata Match:",
     "isbnLabel": "ISBN:",
+    "previousTitleLabel": "Previous Title:",
+    "previousTitleTooltip": "Title was changed by an automatic metadata fetch",
     "readStatusLabel": "Read Status:",
     "koreaderProgressLabel": "KOReader Progress:",
     "koboProgressLabel": "Kobo Progress:",
