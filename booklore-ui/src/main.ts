@@ -29,7 +29,9 @@ bootstrapApplication(AppComponent, {
     provideCharts(withDefaultRegisterables(), ChartDataLabels),
     provideAppInitializer(() => {
       const authService = inject(AuthService);
-      return websocketInitializer(authService)();
+      // Fire-and-forget: WebSocket connects asynchronously, no need to block bootstrap
+      websocketInitializer(authService)();
+      return Promise.resolve();
     }),
     provideAppInitializer(() => {
       const startup = inject(StartupService);

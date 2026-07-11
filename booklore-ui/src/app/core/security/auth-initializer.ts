@@ -3,7 +3,7 @@ import {AuthService, websocketInitializer} from '../../shared/service/auth.servi
 import {AppSettingsService} from '../../shared/service/app-settings.service';
 import {AuthInitializationService} from './auth-initialization-service';
 
-const SETTINGS_TIMEOUT_MS = 10000;
+const SETTINGS_TIMEOUT_MS = 2500;
 
 export function initializeAuthFactory() {
   return () => {
