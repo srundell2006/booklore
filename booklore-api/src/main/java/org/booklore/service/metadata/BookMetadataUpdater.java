@@ -87,16 +87,22 @@ public class BookMetadataUpdater {
         boolean thumbnailRequiresUpdate = StringUtils.hasText(newMetadata.getThumbnailUrl());
         boolean hasMetadataChanges = MetadataChangeDetector.isDifferent(newMetadata, metadata, clearFlags);
         boolean hasValueChanges = MetadataChangeDetector.hasValueChanges(newMetadata, metadata, clearFlags);
+        log.debug("[MetaUpdate] Book {} '{}': thumbnailRequiresUpdate={} hasMetadataChanges={} hasValueChanges={}",
+                bookId, metadata.getTitle(), thumbnailRequiresUpdate, hasMetadataChanges, hasValueChanges);
         if (!thumbnailRequiresUpdate && !hasMetadataChanges) {
-            log.info("No changes in metadata for book ID {}. Skipping update.", bookId);
+            log.info("[MetaUpdate] No changes detected for book {} '{}' — skipping update.", bookId, metadata.getTitle());
             return;
         }
 
         boolean hasLockChanges = MetadataChangeDetector.hasLockChanges(newMetadata, metadata);
         if (metadata.areAllFieldsLocked() && hasValueChanges && !hasLockChanges) {
-            log.warn("All fields are locked for book ID {}. Skipping update.", bookId);
+            log.warn("[MetaUpdate] All fields locked for book {} '{}' — skipping update.", bookId, metadata.getTitle());
             return;
         }
+
+        MetadataReplaceMode effectiveReplaceMode = context.getReplaceMode();
+        log.debug("[MetaUpdate] Book {} '{}': replaceMode={} autoFetch={}",
+                bookId, metadata.getTitle(), effectiveReplaceMode, context.isAutoFetch());
 
         MetadataPersistenceSettings settings = appSettingService.getAppSettings().getMetadataPersistenceSettings();
         MetadataPersistenceSettings.SaveToOriginalFile writeToFile = settings.getSaveToOriginalFile();
@@ -208,6 +214,11 @@ public class BookMetadataUpdater {
         // Provider-specific ratings and review counts are live data that changes over time.
         // Always apply them when a fresh value is provided, regardless of the general replaceMode.
         // This ensures a re-fetch always refreshes ratings even in REPLACE_MISSING mode.
+        log.debug("[MetaUpdate] Book {} GoodReads fields: incomingId='{}' existingId='{}' incomingRating={} existingRating={} incomingReviewCount={} existingReviewCount={} idLocked={} ratingLocked={} reviewCountLocked={}",
+                e.getBookId(), m.getGoodreadsId(), e.getGoodreadsId(),
+                m.getGoodreadsRating(), e.getGoodreadsRating(),
+                m.getGoodreadsReviewCount(), e.getGoodreadsReviewCount(),
+                e.getGoodreadsIdLocked(), e.getGoodreadsRatingLocked(), e.getGoodreadsReviewCountLocked());
         handleFieldUpdate(e.getAmazonRatingLocked(), clear.isAmazonRating(), m.getAmazonRating(), e::setAmazonRating, e::getAmazonRating, MetadataReplaceMode.REPLACE_WHEN_PROVIDED);
         handleFieldUpdate(e.getAmazonReviewCountLocked(), clear.isAmazonReviewCount(), m.getAmazonReviewCount(), e::setAmazonReviewCount, e::getAmazonReviewCount, MetadataReplaceMode.REPLACE_WHEN_PROVIDED);
         handleFieldUpdate(e.getGoodreadsRatingLocked(), clear.isGoodreadsRating(), m.getGoodreadsRating(), e::setGoodreadsRating, e::getGoodreadsRating, MetadataReplaceMode.REPLACE_WHEN_PROVIDED);
@@ -235,13 +246,27 @@ public class BookMetadataUpdater {
             if (newValue != null) setter.accept(newValue);
             return;
         }
+        T oldValue = getter.get();
         switch (mode) {
-            case REPLACE_ALL -> setter.accept(newValue);
+            case REPLACE_ALL -> {
+                log.trace("[FieldUpdate] REPLACE_ALL: old='{}' new='{}' → applying", oldValue, newValue);
+                setter.accept(newValue);
+            }
             case REPLACE_MISSING -> {
-                if (isValueMissing(getter.get())) setter.accept(newValue);
+                if (isValueMissing(oldValue)) {
+                    log.trace("[FieldUpdate] REPLACE_MISSING: old is missing, new='{}' → applying", newValue);
+                    setter.accept(newValue);
+                } else {
+                    log.trace("[FieldUpdate] REPLACE_MISSING: old='{}' not missing, new='{}' → skipped", oldValue, newValue);
+                }
             }
             case REPLACE_WHEN_PROVIDED -> {
-                if (!isValueMissing(newValue)) setter.accept(newValue);
+                if (!isValueMissing(newValue)) {
+                    log.trace("[FieldUpdate] REPLACE_WHEN_PROVIDED: new='{}' provided, old='{}' → applying", newValue, oldValue);
+                    setter.accept(newValue);
+                } else {
+                    log.trace("[FieldUpdate] REPLACE_WHEN_PROVIDED: new value is missing, old='{}' → skipped", oldValue);
+                }
             }
         }
     }

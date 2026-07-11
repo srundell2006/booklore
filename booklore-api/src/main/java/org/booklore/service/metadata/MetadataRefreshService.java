@@ -245,6 +245,15 @@ public class MetadataRefreshService {
                                     reportProgressIfNeeded(task, jobId, currentCount, totalBooks, book, isReviewMode, lastProgressMs);
                                     Map<MetadataProvider, BookMetadata> metadataMap = fetchMetadataForBook(providers, book);
 
+                                    log.info("[MetaFetch] '{}' (id={}) — providers queried: {}, returned data: {}",
+                                            book.getMetadata().getTitle(), book.getId(),
+                                            providers,
+                                            metadataMap.keySet());
+                                    metadataMap.forEach((prov, md) ->
+                                            log.debug("[MetaFetch]   {} → title='{}' goodreadsId='{}' goodreadsRating={} goodreadsReviewCount={}",
+                                                    prov, md.getTitle(), md.getGoodreadsId(),
+                                                    md.getGoodreadsRating(), md.getGoodreadsReviewCount()));
+
                                     // Only sleep when GoodReads actually returned results,
                                     // and serialise through a shared lock so parallel threads
                                     // don't all hammer the rate-limit simultaneously.
@@ -273,12 +282,22 @@ public class MetadataRefreshService {
                                         bookReviewMode = Boolean.TRUE.equals(refreshOptions.getReviewBeforeApply());
                                     }
 
+                                    if (fetched != null) {
+                                        log.debug("[MetaFetch] Assembled metadata for '{}': title='{}' goodreadsId='{}' goodreadsRating={} goodreadsReviewCount={}",
+                                                book.getMetadata().getTitle(), fetched.getTitle(),
+                                                fetched.getGoodreadsId(), fetched.getGoodreadsRating(), fetched.getGoodreadsReviewCount());
+                                    } else {
+                                        log.warn("[MetaFetch] refreshOptions was null for '{}' — skipping update", book.getMetadata().getTitle());
+                                    }
+
                                     if (bookReviewMode) {
+                                        log.info("[MetaFetch] Review mode enabled — saving proposal for '{}', NOT applying directly", book.getMetadata().getTitle());
                                         saveProposal(task, book.getId(), fetched);
                                     } else {
                                         MetadataReplaceMode replaceMode = refreshOptions.getReplaceMode() != null
                                                 ? refreshOptions.getReplaceMode()
                                                 : MetadataReplaceMode.REPLACE_MISSING;
+                                        log.debug("[MetaFetch] Applying to '{}' with replaceMode={}", book.getMetadata().getTitle(), replaceMode);
                                         updateBookMetadata(book, fetched, refreshOptions.isRefreshCovers(), refreshOptions.isMergeCategories(), replaceMode, true);
                                     }
 

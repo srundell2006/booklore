@@ -66,6 +66,8 @@ public class GoodReadsParser implements BookParser, DetailedMetadataProvider {
 
     @Override
     public BookMetadata fetchTopMetadata(Book book, FetchMetadataRequest fetchMetadataRequest) {
+        log.info("GoodReads: fetchTopMetadata for book '{}' (isbn={})",
+                fetchMetadataRequest.getTitle(), fetchMetadataRequest.getIsbn());
         String existingGoodreadsId = getExistingGoodreadsId(book);
         if (existingGoodreadsId != null) {
             log.info("GoodReads: Using existing Goodreads ID: {}", existingGoodreadsId);
@@ -73,6 +75,9 @@ public class GoodReadsParser implements BookParser, DetailedMetadataProvider {
                 Document document = fetchDoc(BASE_BOOK_URL + existingGoodreadsId);
                 BookMetadata metadata = parseBookDetails(document, existingGoodreadsId);
                 if (metadata != null) {
+                    log.info("GoodReads: fetchTopMetadata result via ID — title='{}' rating={} reviewCount={} goodreadsId='{}'",
+                            metadata.getTitle(), metadata.getGoodreadsRating(),
+                            metadata.getGoodreadsReviewCount(), metadata.getGoodreadsId());
                     return metadata;
                 }
                 log.warn("GoodReads: Failed to parse details for existing ID: {}, falling back to search", existingGoodreadsId);
@@ -81,11 +86,23 @@ public class GoodReadsParser implements BookParser, DetailedMetadataProvider {
             } catch (Exception e) {
                 log.warn("GoodReads: Error fetching existing ID {}: {}, falling back to search", existingGoodreadsId, e.getMessage());
             }
+        } else {
+            log.info("GoodReads: No existing Goodreads ID on book '{}' — will search by title/author",
+                    fetchMetadataRequest.getTitle());
         }
 
         List<SearchTarget> targets = searchTargets(book, fetchMetadataRequest);
+        log.debug("GoodReads: {} search targets found for '{}'", targets.size(), fetchMetadataRequest.getTitle());
         List<BookMetadata> fetchedMetadata = fetchMetadataFromTargets(targets.stream().limit(1).toList());
-        return fetchedMetadata.isEmpty() ? null : fetchedMetadata.getFirst();
+        if (fetchedMetadata.isEmpty()) {
+            log.warn("GoodReads: fetchTopMetadata returned no results for '{}'", fetchMetadataRequest.getTitle());
+            return null;
+        }
+        BookMetadata result = fetchedMetadata.getFirst();
+        log.info("GoodReads: fetchTopMetadata result via search — title='{}' rating={} reviewCount={} goodreadsId='{}'",
+                result.getTitle(), result.getGoodreadsRating(),
+                result.getGoodreadsReviewCount(), result.getGoodreadsId());
+        return result;
     }
 
     private String getExistingGoodreadsId(Book book) {
