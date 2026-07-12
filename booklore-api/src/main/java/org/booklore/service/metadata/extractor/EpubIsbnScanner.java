@@ -59,11 +59,18 @@ public class EpubIsbnScanner {
      * and parse the OPF file once.
      */
     private record OpfData(
-            List<String> dcIdentifiers,   // raw content of every <dc:identifier>
-            List<String> spineHrefs,      // resolved absolute ZIP paths, in spine order
-            String copyrightPageHref,     // resolved ZIP path from guide (may be null)
-            String navDocPath             // resolved ZIP path of the EPUB 3 nav doc (may be null)
+            List<String> dcIdentifiers,      // raw content of every <dc:identifier>
+            List<String> spineHrefs,         // resolved absolute ZIP paths, in spine order
+            String copyrightPageHref,        // resolved ZIP path from guide (may be null)
+            String navDocPath,               // resolved ZIP path of the EPUB 3 nav doc (may be null)
+            List<String> extraManifestHrefs  // HTML files in manifest but NOT in spine, priority-sorted
     ) {}
+
+    // Keywords that suggest a file is the copyright/title page — checked against the ZIP path
+    private static final List<String> COPYRIGHT_PRIORITY_KEYWORDS = List.of(
+            "copyright", "colophon", "imprint", "legal", "rights", "titlepage", "title-page",
+            "frontmatter", "front-matter", "front_matter"
+    );
 
     // ── Public API ────────────────────────────────────────────────────────────
 
@@ -135,6 +142,18 @@ public class EpubIsbnScanner {
                     if (foundIsbn13 != null && foundIsbn10 != null) break;
                 }
                 if (foundIsbn13 != null && foundIsbn10 != null) break;
+            }
+
+            if (foundIsbn13 == null && foundIsbn10 == null) {
+                // ── Strategy 4: remaining manifest HTML (copyright-named first) ──
+                for (String href : opf.extraManifestHrefs()) {
+                    IsbnResult fromExtra = scanSingleDoc(zip, href);
+                    if (fromExtra != null) {
+                        if (fromExtra.isbn13() != null && foundIsbn13 == null) foundIsbn13 = fromExtra.isbn13();
+                        if (fromExtra.isbn10() != null && foundIsbn10 == null) foundIsbn10 = fromExtra.isbn10();
+                        if (foundIsbn13 != null && foundIsbn10 != null) break;
+                    }
+                }
             }
 
             if (foundIsbn13 == null && foundIsbn10 == null) {
@@ -273,12 +292,13 @@ public class EpubIsbnScanner {
     private OpfData parseOpf(ZipFile zip, DocumentBuilder xmlBuilder, String opfPath) {
         List<String> identifiers = new ArrayList<>();
         List<String> spineHrefs = new ArrayList<>();
+        List<String> allManifestHrefs = new ArrayList<>();
         String copyrightPageHref = null;
         String navDocPath = null;
 
         try {
             FileHeader opfHdr = zip.getFileHeader(opfPath);
-            if (opfHdr == null) return new OpfData(identifiers, spineHrefs, null, null);
+            if (opfHdr == null) return new OpfData(identifiers, spineHrefs, null, null, Collections.emptyList());
 
             try (InputStream is = zip.getInputStream(opfHdr)) {
                 org.w3c.dom.Document doc = xmlBuilder.parse(is);
@@ -320,6 +340,8 @@ public class EpubIsbnScanner {
                     if (!id.isBlank() && !href.isBlank()) {
                         if (mediaType.contains("html") || mediaType.contains("xml")) {
                             manifestMap.put(id, href);
+                            // Track every HTML/XHTML item for the extra-manifest scan
+                            allManifestHrefs.add(normalizePath(opfDir, href));
                         }
                         // EPUB 3 nav document
                         if (properties.contains("nav")) {
@@ -359,7 +381,14 @@ public class EpubIsbnScanner {
             log.debug("EpubIsbnScanner: error parsing OPF {}: {}", opfPath, e.getMessage());
         }
 
-        return new OpfData(identifiers, spineHrefs, copyrightPageHref, navDocPath);
+        // Build extra manifest list: all HTML not in spine, copyright-named items first
+        Set<String> spineSet = new java.util.HashSet<>(spineHrefs);
+        List<String> extraManifestHrefs = allManifestHrefs.stream()
+                .filter(p -> !spineSet.contains(p) && !p.equals(navDocPath))
+                .sorted(java.util.Comparator.comparingInt(this::manifestPriority))
+                .collect(java.util.stream.Collectors.toList());
+
+        return new OpfData(identifiers, spineHrefs, copyrightPageHref, navDocPath, extraManifestHrefs);
     }
 
     // ── ZIP/text helpers ──────────────────────────────────────────────────────
@@ -390,6 +419,20 @@ public class EpubIsbnScanner {
 
     private String normalizeDigits(String raw) {
         return NON_DIGIT_PATTERN.matcher(raw).replaceAll("").toUpperCase();
+    }
+
+    // ── Manifest priority helper ─────────────────────────────────────────────
+
+    /**
+     * Returns a sort key for an EPUB manifest entry path: lower = higher priority.
+     * Files whose name contains a copyright/title-page keyword sort first.
+     */
+    private int manifestPriority(String path) {
+        String lower = path.toLowerCase();
+        for (int i = 0; i < COPYRIGHT_PRIORITY_KEYWORDS.size(); i++) {
+            if (lower.contains(COPYRIGHT_PRIORITY_KEYWORDS.get(i))) return i;
+        }
+        return COPYRIGHT_PRIORITY_KEYWORDS.size();
     }
 
     // ── Checksum validation ───────────────────────────────────────────────────

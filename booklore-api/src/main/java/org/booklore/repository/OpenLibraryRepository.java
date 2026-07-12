@@ -94,6 +94,45 @@ public class OpenLibraryRepository {
     }
 
     /**
+     * Lightweight result used for ISBN-by-title lookups.
+     */
+    public record OlIsbnResult(String isbn13, String isbn10, String title, String language, String authorKeys) {}
+
+    /**
+     * FULLTEXT search by title returning only editions that carry at least one ISBN.
+     * Falls back to an exact-title match if the FULLTEXT index is unavailable or the
+     * title is too short to tokenise.
+     *
+     * @param title the book title to search for (un-normalised; FULLTEXT handles stemming)
+     * @return up to 15 candidate editions ordered by English-language preference
+     */
+    public List<OlIsbnResult> findIsbnByTitle(String title) {
+        String sql =
+                "SELECT isbn13, isbn10, title, language, author_keys " +
+                "FROM ol_editions " +
+                "WHERE MATCH(title) AGAINST(? IN BOOLEAN MODE) " +
+                "AND (isbn13 IS NOT NULL OR isbn10 IS NOT NULL) " +
+                "ORDER BY CASE WHEN language = 'eng' THEN 0 WHEN language IS NULL THEN 1 ELSE 2 END " +
+                "LIMIT 15";
+        try {
+            List<OlIsbnResult> rows = jdbc.query(sql, this::mapIsbnRow, title);
+            if (!rows.isEmpty()) return rows;
+        } catch (Exception e) {
+            log.debug("OL FULLTEXT search failed for '{}', falling back to exact match: {}", title, e.getMessage());
+        }
+        // Fallback: exact title match (slower but works on short/special titles)
+        return jdbc.query(
+                "SELECT isbn13, isbn10, title, language, author_keys " +
+                "FROM ol_editions " +
+                "WHERE LOWER(title) = LOWER(?) " +
+                "AND (isbn13 IS NOT NULL OR isbn10 IS NOT NULL) " +
+                "ORDER BY CASE WHEN language = 'eng' THEN 0 WHEN language IS NULL THEN 1 ELSE 2 END " +
+                "LIMIT 15",
+                this::mapIsbnRow, title
+        );
+    }
+
+    /**
      * Resolve a list of OL author keys (e.g. ["/authors/OL1234A"]) to display names.
      */
     public List<String> resolveAuthorNames(List<String> authorKeys) {
@@ -109,6 +148,16 @@ public class OpenLibraryRepository {
     // -----------------------------------------------------------------------
     // Private
     // -----------------------------------------------------------------------
+
+    private OlIsbnResult mapIsbnRow(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
+        return new OlIsbnResult(
+                rs.getString("isbn13"),
+                rs.getString("isbn10"),
+                rs.getString("title"),
+                rs.getString("language"),
+                rs.getString("author_keys")
+        );
+    }
 
     private OlEditionRow mapRow(java.sql.ResultSet rs, int rowNum) throws java.sql.SQLException {
         return new OlEditionRow(
