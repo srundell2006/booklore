@@ -138,6 +138,13 @@ public class MetadataRefreshService {
             if (fixedProviders != null && fixedProviders.contains(Google) && !allIsbns.isEmpty()) {
                 parserMap.get(Google).preFetchByIsbn(allIsbns);
             }
+            // ── Speed improvement: Ollama batch pre-fetch ─────────────────────────
+            // Instead of one LLM request per book, batch all books 30 at a time into
+            // a single Ollama call. Results cached; fetchTopMetadata() reads cache.
+            if (fixedProviders != null && fixedProviders.contains(Ollama)) {
+                List<Book> allBooks = new java.util.ArrayList<>(preloadedBooks.values());
+                parserMap.get(Ollama).preFetchBooks(allBooks);
+            }
 
             TransactionTemplate txTemplate = new TransactionTemplate(transactionManager);
             AtomicInteger completedCount = new AtomicInteger(0);

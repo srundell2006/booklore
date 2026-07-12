@@ -21,6 +21,16 @@ public interface BookParser {
         // no-op
     }
 
+    /**
+     * Optional bulk pre-fetch hook for title/author-based providers (e.g. Ollama).
+     * Called once before the parallel per-book loop with the full book list.
+     * Implementations should populate an internal cache; fetchTopMetadata() reads from it.
+     * The default implementation is a no-op.
+     */
+    default void preFetchBooks(List<Book> books) {
+        // no-op
+    }
+
     List<BookMetadata> fetchMetadata(Book book, FetchMetadataRequest fetchMetadataRequest);
 
     BookMetadata fetchTopMetadata(Book book, FetchMetadataRequest fetchMetadataRequest);
