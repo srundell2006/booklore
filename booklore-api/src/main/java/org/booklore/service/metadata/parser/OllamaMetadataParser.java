@@ -43,7 +43,10 @@ public class OllamaMetadataParser implements BookParser {
 
     private static final String DEFAULT_BASE_URL = "http://ollama:11434";
     private static final String DEFAULT_MODEL    = "llama3.1:8b";
-    private static final int    BATCH_SIZE       = 30;
+    private static final int    BATCH_SIZE       = 10;
+
+    /** Sentinel: book was in the batch but the model returned no usable data. Skip individual retry. */
+    private static final BookMetadata BATCH_MISS = new BookMetadata();
 
     private final RestClient  restClient;
     private final ObjectMapper objectMapper;
@@ -160,6 +163,11 @@ public class OllamaMetadataParser implements BookParser {
         } catch (Exception e) {
             log.warn("Ollama: failed to parse batch response: {}", e.getMessage());
         }
+        // Mark every book that was in the batch but not cached as BATCH_MISS so
+        // fetchTopMetadata skips the expensive individual fallback call.
+        for (BookEntity b : batch) {
+            prefetchCache.putIfAbsent(b.getId(), BATCH_MISS);
+        }
     }
 
     // -----------------------------------------------------------------------
@@ -177,6 +185,10 @@ public class OllamaMetadataParser implements BookParser {
         // Fast path: return cached result from preFetchBooks
         if (prefetchCache.containsKey(book.getId())) {
             BookMetadata cached = prefetchCache.get(book.getId());
+            if (cached == BATCH_MISS) {
+                log.debug("Ollama: batch already attempted book id={} with no result — skipping retry", book.getId());
+                return null;
+            }
             log.debug("Ollama: cache hit for book id={}", book.getId());
             return cached;
         }
