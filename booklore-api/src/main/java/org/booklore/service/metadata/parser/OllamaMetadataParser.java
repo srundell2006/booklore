@@ -134,10 +134,8 @@ public class OllamaMetadataParser implements BookParser {
         message.put("content", prompt);
         requestBody.set("messages", objectMapper.createArrayNode().add(message));
 
-        // Ask for JSON output
-        ObjectNode format = objectMapper.createObjectNode();
-        format.put("type", "json_object");
-        requestBody.set("format", format);
+        // Ask for JSON output — Ollama uses "json" string, not OpenAI's {"type":"json_object"}
+        requestBody.put("format", "json");
 
         String endpoint = baseUrl.replaceAll("/$", "") + "/api/chat";
 
