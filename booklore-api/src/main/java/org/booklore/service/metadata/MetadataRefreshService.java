@@ -138,12 +138,18 @@ public class MetadataRefreshService {
             if (fixedProviders != null && fixedProviders.contains(Google) && !allIsbns.isEmpty()) {
                 parserMap.get(Google).preFetchByIsbn(allIsbns);
             }
-            // ── Speed improvement: Ollama batch pre-fetch ─────────────────────────
-            // Instead of one LLM request per book, batch all books 30 at a time into
-            // a single Ollama call. Results cached; fetchTopMetadata() reads cache.
-            if (fixedProviders != null && fixedProviders.contains(Ollama)) {
-                parserMap.get(Ollama).preFetchBookEntities(preloadedBooks.values());
-            }
+            // ── Ollama: wave-based processing ────────────────────────────────────
+            // For large libraries (20 000+ books), a single blocking pre-fetch holds
+            // up ALL processing until every book has been sent to the LLM.  Instead,
+            // split into waves: pre-fetch wave → process wave → next wave.
+            // Each wave: 500 books → 50 batches × 5 concurrent ≈ 2 minutes, then the
+            // per-book parallel loop drains the cache and saves results immediately.
+            // Non-Ollama providers (OpenLibrary, Google) still pre-fetch once above.
+            boolean hasOllama = fixedProviders != null && fixedProviders.contains(Ollama);
+            final int OLLAMA_WAVE_SIZE = 500;
+            List<Long> orderedBookIds = new ArrayList<>(actualBookIds);
+            int totalWaves = hasOllama
+                    ? (int) Math.ceil((double) orderedBookIds.size() / OLLAMA_WAVE_SIZE) : 1;
 
             TransactionTemplate txTemplate = new TransactionTemplate(transactionManager);
             AtomicInteger completedCount = new AtomicInteger(0);
@@ -171,8 +177,32 @@ public class MetadataRefreshService {
             // Capture the SecurityContext from the request thread so virtual threads
             // (which start with an empty ThreadLocal) can route WebSocket notifications.
             SecurityContext inheritedSecurityContext = SecurityContextHolder.getContext();
+
+            for (int wave = 0; wave < totalWaves; wave++) {
+                if (cancellationManager.isTaskCancelled(jobId) || cancelled.get()) break;
+
+                // Determine which books belong to this wave
+                int waveFrom = wave * OLLAMA_WAVE_SIZE;
+                int waveTo   = Math.min(waveFrom + OLLAMA_WAVE_SIZE, orderedBookIds.size());
+                List<Long> waveIds = hasOllama
+                        ? orderedBookIds.subList(waveFrom, waveTo)
+                        : orderedBookIds;
+
+                // Ollama pre-fetch for this wave only
+                if (hasOllama) {
+                    if (totalWaves > 1) {
+                        log.info("Ollama: wave {}/{} — pre-fetching books {}-{} of {}",
+                                wave + 1, totalWaves, waveFrom + 1, waveTo, orderedBookIds.size());
+                    }
+                    java.util.Collection<BookEntity> waveEntities = waveIds.stream()
+                            .map(preloadedBooks::get)
+                            .filter(java.util.Objects::nonNull)
+                            .toList();
+                    parserMap.get(Ollama).preFetchBookEntities(waveEntities);
+                }
+
             try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
-                List<CompletableFuture<Void>> futures = actualBookIds.stream().map(bookId ->
+                List<CompletableFuture<Void>> futures = waveIds.stream().map(bookId ->
                     CompletableFuture.runAsync(() -> {
                         SecurityContextHolder.setContext(inheritedSecurityContext);
                         try {
@@ -338,6 +368,7 @@ public class MetadataRefreshService {
 
                 CompletableFuture.allOf(futures.toArray(new CompletableFuture[0])).join();
             }
+            } // end wave loop
 
             if (cancellationManager.isTaskCancelled(jobId) || cancelled.get()) {
                 log.info("RefreshMetadataTask {} was cancelled, stopping execution", jobId);

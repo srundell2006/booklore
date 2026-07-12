@@ -22,6 +22,8 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 
 /**
  * Metadata provider that queries a locally-hosted Ollama LLM to infer book metadata.
@@ -43,7 +45,8 @@ public class OllamaMetadataParser implements BookParser {
 
     private static final String DEFAULT_BASE_URL = "http://ollama:11434";
     private static final String DEFAULT_MODEL    = "llama3.1:8b";
-    private static final int    BATCH_SIZE       = 10;
+    private static final int    BATCH_SIZE        = 10;
+    private static final int    BATCH_CONCURRENCY = 5;
 
     /** Sentinel: book was in the batch but the model returned no usable data. Skip individual retry. */
     private static final BookMetadata BATCH_MISS = new BookMetadata();
@@ -87,18 +90,39 @@ public class OllamaMetadataParser implements BookParser {
         String effectiveUrl   = runtimeBaseUrl != null ? runtimeBaseUrl : baseUrl;
         String effectiveModel = runtimeModel   != null ? runtimeModel   : model;
 
-        log.info("Ollama: batch pre-fetching metadata for {} books in groups of {}", bookList.size(), BATCH_SIZE);
-
+        // Partition into individual 10-book batches
+        List<List<BookEntity>> batches = new ArrayList<>();
         for (int i = 0; i < bookList.size(); i += BATCH_SIZE) {
-            List<BookEntity> batch = bookList.subList(i, Math.min(i + BATCH_SIZE, bookList.size()));
-            try {
-                fetchBatch(effectiveUrl, effectiveModel, batch);
-            } catch (Exception e) {
-                log.warn("Ollama: batch {}/{} failed: {}", (i / BATCH_SIZE) + 1,
-                        (bookList.size() + BATCH_SIZE - 1) / BATCH_SIZE, e.getMessage());
-            }
+            batches.add(Collections.unmodifiableList(
+                    bookList.subList(i, Math.min(i + BATCH_SIZE, bookList.size()))));
         }
-        log.info("Ollama: pre-fetch complete — {} books cached", prefetchCache.size());
+
+        log.info("Ollama: pre-fetching {} books — {} batches, {} concurrent",
+                bookList.size(), batches.size(), BATCH_CONCURRENCY);
+
+        // Fire up to BATCH_CONCURRENCY batch requests in parallel.
+        // prefetchCache is ConcurrentHashMap so concurrent writes are safe.
+        ExecutorService batchPool = Executors.newFixedThreadPool(BATCH_CONCURRENCY);
+        try {
+            List<java.util.concurrent.Future<?>> futures = new ArrayList<>();
+            for (List<BookEntity> batch : batches) {
+                futures.add(batchPool.submit(() -> {
+                    try {
+                        fetchBatch(effectiveUrl, effectiveModel, batch);
+                    } catch (Exception e) {
+                        log.warn("Ollama: batch failed: {}", e.getMessage());
+                    }
+                }));
+            }
+            for (java.util.concurrent.Future<?> f : futures) {
+                try { f.get(); } catch (Exception e) {
+                    log.warn("Ollama: batch join error: {}", e.getMessage());
+                }
+            }
+        } finally {
+            batchPool.shutdown();
+        }
+        log.info("Ollama: pre-fetch complete — {} cache entries", prefetchCache.size());
     }
 
     private void fetchBatch(String effectiveUrl, String effectiveModel, List<BookEntity> batch) {
