@@ -126,24 +126,33 @@ public class OllamaMetadataParser implements BookParser {
     }
 
     private void fetchBatch(String effectiveUrl, String effectiveModel, List<BookEntity> batch) {
-        // Build a compact list of {id, title, author} for the prompt
+        // Build a compact list of {id, title, author} for the prompt.
+        // cleanTitle() strips series-number artefacts that confuse the model.
         StringBuilder bookList = new StringBuilder();
         for (BookEntity b : batch) {
-            String title  = b.getMetadata() != null ? b.getMetadata().getTitle() : null;
-            String author = b.getMetadata() != null && b.getMetadata().getAuthors() != null
-                    ? b.getMetadata().getAuthors().stream().map(AuthorEntity::getName).filter(java.util.Objects::nonNull).collect(java.util.stream.Collectors.joining(", ")) : null;
+            String rawTitle = b.getMetadata() != null ? b.getMetadata().getTitle() : null;
+            String title    = cleanTitle(rawTitle);
+            String author   = b.getMetadata() != null && b.getMetadata().getAuthors() != null
+                    ? b.getMetadata().getAuthors().stream().map(AuthorEntity::getName)
+                        .filter(java.util.Objects::nonNull)
+                        .collect(java.util.stream.Collectors.joining(", ")) : null;
             bookList.append("  {\"id\":").append(b.getId())
                     .append(",\"title\":\"").append(escape(title)).append("\"");
             if (author != null) bookList.append(",\"author\":\"").append(escape(author)).append("\"");
             bookList.append("}\n");
         }
 
-        String prompt = "You are a book metadata assistant with extensive knowledge of published books.\n" +
-                "For EACH book in the list below, return a JSON array where each element contains:\n" +
-                "id (integer, copy from input), isbn13 (string or null), isbn10 (string or null), " +
-                "publisher (string or null), publishedYear (integer or null), " +
-                "description (string or null, max 300 chars), " +
-                "categories (array of strings or null), language (2-letter code or null).\n" +
+        String prompt = "You are a book metadata assistant. For EACH book below, return a JSON array.\n" +
+                "Each element must have:\n" +
+                "  id (integer, copy from input — required)\n" +
+                "  description (string, 1-3 sentences about the book, or null if truly unknown)\n" +
+                "  categories (array of genre strings, e.g. [\"Fiction\",\"Thriller\"], or null)\n" +
+                "  publisher (string or null)\n" +
+                "  publishedYear (integer or null)\n" +
+                "  language (2-letter ISO code e.g. \"en\", or null)\n" +
+                "  isbn13 (13-digit string — only include if you are certain; omit or null if unsure)\n" +
+                "  isbn10 (10-char string — only include if you are certain; omit or null if unsure)\n" +
+                "For books you don\'t recognise, include the id with null for all other fields.\n" +
                 "Return ONLY the JSON array — no prose, no markdown, no code fences.\n\n" +
                 "Books:\n[\n" + bookList + "]";
 
@@ -324,11 +333,14 @@ public class OllamaMetadataParser implements BookParser {
             if (!cats.isEmpty()) meta.setCategories(new LinkedHashSet<>(cats));
         }
 
-        // Return null if we got nothing useful
-        if (meta.getIsbn13() == null && meta.getIsbn10() == null
-                && meta.getDescription() == null && meta.getPublisher() == null) {
-            return null;
-        }
+        // Return null only if we got absolutely nothing useful.
+        // Accept if ANY of isbn, description, publisher, categories, or publishedDate is present —
+        // categories and publication year are valuable even without an ISBN.
+        boolean hasAnything = meta.getIsbn13() != null || meta.getIsbn10() != null
+                || meta.getDescription() != null || meta.getPublisher() != null
+                || meta.getPublishedDate() != null
+                || (meta.getCategories() != null && !meta.getCategories().isEmpty());
+        if (!hasAnything) return null;
         return meta;
     }
 
@@ -348,6 +360,28 @@ public class OllamaMetadataParser implements BookParser {
         if (isbn == null) return null;
         String cleaned = isbn.replaceAll("[^0-9Xx]", "");
         return cleaned.length() == 10 ? cleaned : null;
+    }
+
+    /**
+     * Strip common filename artefacts from book titles before sending to the LLM.
+     * Examples:
+     *   "[Bound and Bonded 03] • Total Submission"  → "Total Submission"
+     *   "3 - Broken Crown"                          → "Broken Crown"
+     *   "004 Batman - Got A Date"                   → "Batman - Got A Date"
+     *   "3 Shades of Blue"                          → unchanged (real title)
+     *
+     * Only strips when the prefix pattern is clearly a series/file artefact:
+     *   bracket-enclosed content followed by • separator, OR
+     *   pure digit(s) followed by a dash/dot separator.
+     * Does NOT strip bare "N word word" patterns to avoid destroying real titles.
+     */
+    private String cleanTitle(String title) {
+        if (title == null) return null;
+        // "[Series Name N] • Real Title" → "Real Title"
+        String t = title.replaceAll("^\\[.*?\\]\\s*[•·]\\s*", "").trim();
+        // "003 Title" or "03 - Title" → "Title" (digits-only prefix + separator or space-then-caps)
+        t = t.replaceAll("^\\d{2,}\\s*[-–]\\s*", "").trim();
+        return t.isBlank() ? title : t;
     }
 
     private String escape(String s) {
