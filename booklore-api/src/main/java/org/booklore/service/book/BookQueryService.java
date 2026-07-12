@@ -9,6 +9,7 @@ import org.booklore.repository.BookRepository;
 import org.booklore.service.restriction.ContentRestrictionService;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
 import java.util.Set;
@@ -22,11 +23,13 @@ public class BookQueryService {
     private final BookMapperV2 bookMapperV2;
     private final ContentRestrictionService contentRestrictionService;
 
+    @Transactional(readOnly = true)
     public List<Book> getAllBooks(boolean includeDescription) {
         List<BookEntity> books = bookRepository.findAllWithMetadata();
         return mapBooksToDto(books, includeDescription, null, !includeDescription);
     }
 
+    @Transactional(readOnly = true)
     public List<Book> getAllBooksByLibraryIds(Set<Long> libraryIds, boolean includeDescription, Long userId) {
         List<BookEntity> books = bookRepository.findAllWithMetadataByLibraryIds(libraryIds);
         books = contentRestrictionService.applyRestrictions(books, userId);

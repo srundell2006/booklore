@@ -27,13 +27,20 @@ export class BookRuleEvaluatorService {
 
     const rawValue = this.extractBookValue(book, rule.field);
 
+    // Date parsing is only valid for actual date-type fields.
+    // Applying it globally causes year-like strings (e.g. "1984", "2001") to be
+    // silently converted to Date objects, breaking contains/equals on title, authors, etc.
+    const isDateField = ['publishedDate', 'dateFinished', 'addedOn', 'lastReadTime'].includes(rule.field as string);
+
     const normalize = (val: unknown): unknown => {
       if (val === null || val === undefined) return val;
       if (val instanceof Date) return val;
       if (typeof val === 'boolean') return String(val);
       if (typeof val === 'string') {
-        const date = new Date(val);
-        if (!isNaN(date.getTime())) return date;
+        if (isDateField) {
+          const date = new Date(val);
+          if (!isNaN(date.getTime())) return date;
+        }
         return val.toLowerCase();
       }
       return val;
