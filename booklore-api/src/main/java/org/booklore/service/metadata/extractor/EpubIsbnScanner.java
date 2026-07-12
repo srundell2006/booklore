@@ -385,8 +385,9 @@ public class EpubIsbnScanner {
 
         // Build extra manifest list: all HTML not in spine, copyright-named items first
         Set<String> spineSet = new java.util.HashSet<>(spineHrefs);
+        final String finalNavDocPath = navDocPath; // must be effectively final for lambda capture
         List<String> extraManifestHrefs = allManifestHrefs.stream()
-                .filter(p -> !spineSet.contains(p) && !p.equals(navDocPath))
+                .filter(p -> !spineSet.contains(p) && !p.equals(finalNavDocPath))
                 .sorted(java.util.Comparator.comparingInt(this::manifestPriority))
                 .collect(java.util.stream.Collectors.toList());
 
