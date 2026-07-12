@@ -142,8 +142,7 @@ public class MetadataRefreshService {
             // Instead of one LLM request per book, batch all books 30 at a time into
             // a single Ollama call. Results cached; fetchTopMetadata() reads cache.
             if (fixedProviders != null && fixedProviders.contains(Ollama)) {
-                List<Book> allBooks = new java.util.ArrayList<>(preloadedBooks.values());
-                parserMap.get(Ollama).preFetchBooks(allBooks);
+                parserMap.get(Ollama).preFetchBookEntities(preloadedBooks.values());
             }
 
             TransactionTemplate txTemplate = new TransactionTemplate(transactionManager);

@@ -2,6 +2,8 @@ package org.booklore.service.metadata.parser;
 
 import lombok.extern.slf4j.Slf4j;
 import org.booklore.model.dto.Book;
+import org.booklore.model.entity.BookEntity;
+import org.booklore.model.entity.AuthorEntity;
 import org.booklore.model.dto.BookMetadata;
 import org.booklore.model.dto.request.FetchMetadataRequest;
 import org.booklore.model.enums.MetadataProvider;
@@ -74,34 +76,35 @@ public class OllamaMetadataParser implements BookParser {
     // -----------------------------------------------------------------------
 
     @Override
-    public void preFetchBooks(List<Book> books) {
+    public void preFetchBookEntities(java.util.Collection<BookEntity> books) {
         prefetchCache.clear();
         if (books == null || books.isEmpty()) return;
+        List<BookEntity> bookList = new java.util.ArrayList<>(books);
 
         String effectiveUrl   = runtimeBaseUrl != null ? runtimeBaseUrl : baseUrl;
         String effectiveModel = runtimeModel   != null ? runtimeModel   : model;
 
-        log.info("Ollama: batch pre-fetching metadata for {} books in groups of {}", books.size(), BATCH_SIZE);
+        log.info("Ollama: batch pre-fetching metadata for {} books in groups of {}", bookList.size(), BATCH_SIZE);
 
-        for (int i = 0; i < books.size(); i += BATCH_SIZE) {
-            List<Book> batch = books.subList(i, Math.min(i + BATCH_SIZE, books.size()));
+        for (int i = 0; i < bookList.size(); i += BATCH_SIZE) {
+            List<BookEntity> batch = bookList.subList(i, Math.min(i + BATCH_SIZE, bookList.size()));
             try {
                 fetchBatch(effectiveUrl, effectiveModel, batch);
             } catch (Exception e) {
                 log.warn("Ollama: batch {}/{} failed: {}", (i / BATCH_SIZE) + 1,
-                        (books.size() + BATCH_SIZE - 1) / BATCH_SIZE, e.getMessage());
+                        (bookList.size() + BATCH_SIZE - 1) / BATCH_SIZE, e.getMessage());
             }
         }
         log.info("Ollama: pre-fetch complete — {} books cached", prefetchCache.size());
     }
 
-    private void fetchBatch(String effectiveUrl, String effectiveModel, List<Book> batch) {
+    private void fetchBatch(String effectiveUrl, String effectiveModel, List<BookEntity> batch) {
         // Build a compact list of {id, title, author} for the prompt
         StringBuilder bookList = new StringBuilder();
-        for (Book b : batch) {
-            String title  = b.getMetadata() != null ? b.getMetadata().getTitle()  : b.getTitle();
+        for (BookEntity b : batch) {
+            String title  = b.getMetadata() != null ? b.getMetadata().getTitle() : null;
             String author = b.getMetadata() != null && b.getMetadata().getAuthors() != null
-                    ? String.join(", ", b.getMetadata().getAuthors()) : null;
+                    ? b.getMetadata().getAuthors().stream().map(AuthorEntity::getName).filter(java.util.Objects::nonNull).collect(java.util.stream.Collectors.joining(", ")) : null;
             bookList.append("  {\"id\":").append(b.getId())
                     .append(",\"title\":\"").append(escape(title)).append("\"");
             if (author != null) bookList.append(",\"author\":\"").append(escape(author)).append("\"");
@@ -123,10 +126,10 @@ public class OllamaMetadataParser implements BookParser {
         parseBatchResponse(raw, batch);
     }
 
-    private void parseBatchResponse(String raw, List<Book> batch) {
+    private void parseBatchResponse(String raw, List<BookEntity> batch) {
         // Build a fallback id-to-book map
-        Map<Long, Book> idMap = new java.util.HashMap<>();
-        for (Book b : batch) idMap.put(b.getId(), b);
+        Map<Long, BookEntity> idMap = new java.util.HashMap<>();
+        for (BookEntity b : batch) idMap.put(b.getId(), b);
 
         try {
             // Extract message content
@@ -141,7 +144,7 @@ public class OllamaMetadataParser implements BookParser {
                 log.warn("Ollama: batch response is not a JSON array — trying single-object fallback");
                 // Some models return a single object even when asked for array
                 if (array.isObject() && batch.size() == 1) {
-                    Book b = batch.get(0);
+                    BookEntity b = batch.get(0);
                     BookMetadata meta = nodeToMetadata(array);
                     if (meta != null) prefetchCache.put(b.getId(), meta);
                 }

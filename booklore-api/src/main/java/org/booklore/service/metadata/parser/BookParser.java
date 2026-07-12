@@ -1,6 +1,7 @@
 package org.booklore.service.metadata.parser;
 
 import org.booklore.model.dto.Book;
+import org.booklore.model.entity.BookEntity;
 import org.booklore.model.dto.BookMetadata;
 import org.booklore.model.dto.request.FetchMetadataRequest;
 
@@ -27,7 +28,7 @@ public interface BookParser {
      * Implementations should populate an internal cache; fetchTopMetadata() reads from it.
      * The default implementation is a no-op.
      */
-    default void preFetchBooks(List<Book> books) {
+    default void preFetchBookEntities(java.util.Collection<BookEntity> entities) {
         // no-op
     }
 
