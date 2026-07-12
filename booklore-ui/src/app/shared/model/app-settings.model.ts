@@ -63,6 +63,7 @@ export interface MetadataProviderSettings {
   douban: Douban;
   lubimyczytac: Lubimyczytac;
   audible: Audible;
+  ollama: Ollama;
 }
 
 export interface Amazon {
@@ -114,6 +115,12 @@ export interface Lubimyczytac {
 export interface Audible {
   enabled: boolean;
   domain: string;
+}
+
+export interface Ollama {
+  enabled: boolean;
+  baseUrl: string;
+  model: string;
 }
 
 export interface FormatWriteSettings {

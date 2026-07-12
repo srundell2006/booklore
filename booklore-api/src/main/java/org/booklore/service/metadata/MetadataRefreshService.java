@@ -579,6 +579,7 @@ public class MetadataRefreshService {
             case Douban -> settings.getDouban() != null && settings.getDouban().isEnabled();
             case Lubimyczytac -> settings.getLubimyczytac() != null && settings.getLubimyczytac().isEnabled();
             case OpenLibraryLocal -> settings.getOpenLibraryLocal() != null && settings.getOpenLibraryLocal().isEnabled();
+            case Ollama -> settings.getOllama() != null && settings.getOllama().isEnabled();
             default -> true;
         };
     }

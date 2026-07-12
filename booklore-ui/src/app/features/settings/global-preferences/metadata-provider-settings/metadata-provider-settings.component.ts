@@ -94,6 +94,9 @@ export class MetadataProviderSettingsComponent implements OnInit {
   googleEnabled: boolean = false;
   openLibraryEnabled: boolean = false;
   openLibraryLocalEnabled: boolean = false;
+  ollamaEnabled: boolean = false;
+  ollamaBaseUrl: string = 'http://ollama:11434';
+  ollamaModel: string = 'llama3.1:8b';
   comicvineEnabled: boolean = false;
   comicvineToken: string = '';
   doubanEnabled: boolean = false;
@@ -127,6 +130,9 @@ export class MetadataProviderSettingsComponent implements OnInit {
         this.hardcoverEnabled = metadataProviderSettings?.hardcover?.enabled ?? false;
         this.openLibraryEnabled = metadataProviderSettings?.openLibrary?.enabled ?? false;
         this.openLibraryLocalEnabled = metadataProviderSettings?.openLibraryLocal?.enabled ?? false;
+        this.ollamaEnabled = metadataProviderSettings?.ollama?.enabled ?? false;
+        this.ollamaBaseUrl = metadataProviderSettings?.ollama?.baseUrl ?? 'http://ollama:11434';
+        this.ollamaModel = metadataProviderSettings?.ollama?.model ?? 'llama3.1:8b';
         this.comicvineEnabled = metadataProviderSettings?.comicvine?.enabled ?? false;
         this.comicvineToken = metadataProviderSettings?.comicvine?.apiKey ?? '';
         this.doubanEnabled = metadataProviderSettings?.douban?.enabled ?? false;
@@ -174,6 +180,7 @@ export class MetadataProviderSettingsComponent implements OnInit {
           },
           openLibrary: {enabled: this.openLibraryEnabled},
           openLibraryLocal: {enabled: this.openLibraryLocalEnabled},
+          ollama: {enabled: this.ollamaEnabled, baseUrl: this.ollamaBaseUrl, model: this.ollamaModel},
           douban: {enabled: this.doubanEnabled},
           lubimyczytac: {enabled: this.lubimyCzytacEnabled},
           ranobedb: {enabled: this.ranobedbEnabled},

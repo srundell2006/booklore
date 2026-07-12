@@ -22,7 +22,8 @@ public class BookParserConfig {
             DoubanBookParser doubanBookParser,
             RanobeDbParser ranobedbParser,
             LubimyCzytacParser lubimyczytacParser,
-            AudibleParser audibleParser) {
+            AudibleParser audibleParser,
+            OllamaMetadataParser ollamaMetadataParser) {
 
         // Map.of() supports at most 10 entries — use Map.ofEntries for 11+
         return Map.ofEntries(
@@ -36,7 +37,8 @@ public class BookParserConfig {
                 Map.entry(MetadataProvider.Douban,           doubanBookParser),
                 Map.entry(MetadataProvider.Lubimyczytac,     lubimyczytacParser),
                 Map.entry(MetadataProvider.Ranobedb,         ranobedbParser),
-                Map.entry(MetadataProvider.Audible,          audibleParser)
+                Map.entry(MetadataProvider.Audible,          audibleParser),
+                Map.entry(MetadataProvider.Ollama,           ollamaMetadataParser)
         );
     }
 }

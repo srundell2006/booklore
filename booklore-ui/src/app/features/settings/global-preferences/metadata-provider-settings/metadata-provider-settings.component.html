@@ -193,6 +193,25 @@
                 <label class="setting-label">Ranobedb</label>
               </div>
             </div>
+
+            <div class="setting-item">
+              <div class="setting-header">
+                <p-toggleswitch [(ngModel)]="ollamaEnabled"></p-toggleswitch>
+                <label class="setting-label">Ollama (Local AI)</label>
+              </div>
+              @if (ollamaEnabled) {
+                <div class="setting-body">
+                  <div class="field-row">
+                    <label>Base URL</label>
+                    <input pInputText [(ngModel)]="ollamaBaseUrl" placeholder="http://ollama:11434" class="setting-input" />
+                  </div>
+                  <div class="field-row">
+                    <label>Model</label>
+                    <input pInputText [(ngModel)]="ollamaModel" placeholder="llama3.1:8b" class="setting-input" />
+                  </div>
+                </div>
+              }
+            </div>
           </div>
         </div>
 
