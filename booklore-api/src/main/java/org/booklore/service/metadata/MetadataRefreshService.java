@@ -260,72 +260,102 @@ public class MetadataRefreshService {
                                         libId, id -> prepareProviders(outerRefreshOptions));
                             }
 
+                            // ── Fix: prevent long-TX lock contention ─────────────────────
+                            // Root cause of "Lock wait timeout exceeded" on comic_metadata:
+                            // the original single txTemplate.execute() held DB row locks on
+                            // book_metadata (and via FK, comic_metadata) for the full duration
+                            // of external HTTP calls + GoodReads sleep — up to 50 s — causing
+                            // concurrent manual metadata saves to time out.
+                            //
+                            // Fix: split into (1) short read TX to get a Book DTO while a
+                            // Hibernate session is open so lazy associations map safely, then
+                            // (2) all slow I/O outside any transaction (no locks held), then
+                            // (3) short write TX that reloads the entity, applies, and saves.
+                            // Lock hold time drops from ~minutes to <100 ms.
+
+                            // Short read TX — convert entity to DTO (needed for safe lazy access).
+                            final Book bookDto = txTemplate.execute(status -> {
+                                BookEntity b = bookRepository.findAllWithMetadataByIds(Collections.singleton(bookId))
+                                        .stream().findFirst().orElse(null);
+                                if (b == null) return null;
+                                return bookMapper.toBook(b);
+                            });
+                            if (bookDto == null) {
+                                sendBatchProgressNotification(jobId, currentCount, totalBooks, "Book not found: " + bookId, MetadataFetchTaskStatus.IN_PROGRESS, isReviewMode);
+                                completedCount.incrementAndGet();
+                                return;
+                            }
+
+                            MetadataRefreshOptions refreshOptions = outerRefreshOptions;
+                            List<MetadataProvider> providers = outerProviders;
+
+                            // Skip-complete check — scalar fields only, no session needed.
+                            if (refreshOptions != null && refreshOptions.isSkipComplete()
+                                    && isMetadataComplete(preloadedBook, refreshOptions)) {
+                                log.debug("Skipping complete book: {}", bookDto.getMetadata().getTitle());
+                                sendBatchProgressNotification(jobId, currentCount, totalBooks, "Skipped (already complete): " + bookDto.getMetadata().getTitle(), MetadataFetchTaskStatus.IN_PROGRESS, isReviewMode);
+                                completedCount.incrementAndGet();
+                                return;
+                            }
+
+                            reportProgressIfNeeded(task, jobId, currentCount, totalBooks, preloadedBook, isReviewMode, lastProgressMs);
+
+                            // External API calls — NO TRANSACTION OPEN (no DB locks held).
+                            Map<MetadataProvider, BookMetadata> metadataMap = fetchMetadataForBook(providers, bookDto);
+
+                            log.info("[MetaFetch] '{}' (id={}) — providers queried: {}, returned data: {}",
+                                    bookDto.getMetadata().getTitle(), bookId,
+                                    providers,
+                                    metadataMap.keySet());
+                            metadataMap.forEach((prov, md) ->
+                                    log.debug("[MetaFetch]   {} → title='{}' goodreadsId='{}' goodreadsRating={} goodreadsReviewCount={}",
+                                            prov, md.getTitle(), md.getGoodreadsId(),
+                                            md.getGoodreadsRating(), md.getGoodreadsReviewCount()));
+
+                            // GoodReads rate-limit sleep — NO TRANSACTION OPEN.
+                            if (metadataMap.containsKey(GoodReads)) {
+                                synchronized (GOODREADS_LOCK) {
+                                    try {
+                                        Thread.sleep(ThreadLocalRandom.current().nextLong(500, 1500));
+                                    } catch (InterruptedException e) {
+                                        Thread.currentThread().interrupt();
+                                        return;
+                                    }
+                                }
+                            }
+
+                            if (metadataMap.isEmpty()) {
+                                log.info("No providers returned data for '{}'. Skipping update to prevent data loss.", bookDto.getMetadata().getTitle());
+                                sendBatchProgressNotification(jobId, currentCount, totalBooks, "No data found: " + bookDto.getMetadata().getTitle(), MetadataFetchTaskStatus.IN_PROGRESS, isReviewMode);
+                                completedCount.incrementAndGet();
+                                return;
+                            }
+
+                            // Build merged metadata outside any transaction — pure computation.
+                            final BookMetadata fetched;
+                            final boolean bookReviewMode;
+                            if (refreshOptions != null) {
+                                fetched = buildFetchMetadata(bookDto.getMetadata(), bookId, refreshOptions, metadataMap);
+                                bookReviewMode = Boolean.TRUE.equals(refreshOptions.getReviewBeforeApply());
+                            } else {
+                                log.warn("[MetaFetch] refreshOptions was null for '{}' — skipping update", bookDto.getMetadata().getTitle());
+                                completedCount.incrementAndGet();
+                                return;
+                            }
+
+                            if (fetched != null) {
+                                log.debug("[MetaFetch] Assembled metadata for '{}': title='{}' goodreadsId='{}' goodreadsRating={} goodreadsReviewCount={}",
+                                        bookDto.getMetadata().getTitle(), fetched.getTitle(),
+                                        fetched.getGoodreadsId(), fetched.getGoodreadsRating(), fetched.getGoodreadsReviewCount());
+                            }
+
+                            // Short write TX — reload entity, apply metadata, save.
+                            // Locks are held for milliseconds, not minutes.
                             txTemplate.execute(status -> {
                                 BookEntity book = bookRepository.findAllWithMetadataByIds(Collections.singleton(bookId))
                                         .stream().findFirst()
                                         .orElseThrow(() -> ApiError.BOOK_NOT_FOUND.createException(bookId));
                                 try {
-                                    // areAllFieldsLocked already checked above; skip here.
-
-                                    // Use the options resolved outside the transaction.
-                                    MetadataRefreshOptions refreshOptions = outerRefreshOptions;
-                                    List<MetadataProvider> providers = outerProviders;
-
-                                    if (refreshOptions != null && refreshOptions.isSkipComplete()
-                                            && isMetadataComplete(book, refreshOptions)) {
-                                        log.debug("Skipping complete book: {}", getBookIdentifier(book));
-                                        sendBatchProgressNotification(jobId, currentCount, totalBooks, "Skipped (already complete): " + book.getMetadata().getTitle(), MetadataFetchTaskStatus.IN_PROGRESS, isReviewMode);
-                                        return null;
-                                    }
-
-                                    reportProgressIfNeeded(task, jobId, currentCount, totalBooks, book, isReviewMode, lastProgressMs);
-                                    Map<MetadataProvider, BookMetadata> metadataMap = fetchMetadataForBook(providers, book);
-
-                                    log.info("[MetaFetch] '{}' (id={}) — providers queried: {}, returned data: {}",
-                                            book.getMetadata().getTitle(), book.getId(),
-                                            providers,
-                                            metadataMap.keySet());
-                                    metadataMap.forEach((prov, md) ->
-                                            log.debug("[MetaFetch]   {} → title='{}' goodreadsId='{}' goodreadsRating={} goodreadsReviewCount={}",
-                                                    prov, md.getTitle(), md.getGoodreadsId(),
-                                                    md.getGoodreadsRating(), md.getGoodreadsReviewCount()));
-
-                                    // Only sleep when GoodReads actually returned results,
-                                    // and serialise through a shared lock so parallel threads
-                                    // don't all hammer the rate-limit simultaneously.
-                                    if (metadataMap.containsKey(GoodReads)) {
-                                        synchronized (GOODREADS_LOCK) {
-                                            try {
-                                                Thread.sleep(ThreadLocalRandom.current().nextLong(500, 1500));
-                                            } catch (InterruptedException e) {
-                                                Thread.currentThread().interrupt();
-                                                status.setRollbackOnly();
-                                                return null;
-                                            }
-                                        }
-                                    }
-
-                                    if (metadataMap.isEmpty()) {
-                                        log.info("No providers returned data for '{}'. Skipping update to prevent data loss.", book.getMetadata().getTitle());
-                                        sendBatchProgressNotification(jobId, currentCount, totalBooks, "No data found: " + book.getMetadata().getTitle(), MetadataFetchTaskStatus.IN_PROGRESS, isReviewMode);
-                                        return null;
-                                    }
-
-                                    BookMetadata fetched = null;
-                                    boolean bookReviewMode = false;
-                                    if (refreshOptions != null) {
-                                        fetched = buildFetchMetadata(bookMapper.toBook(book).getMetadata(), book.getId(), refreshOptions, metadataMap);
-                                        bookReviewMode = Boolean.TRUE.equals(refreshOptions.getReviewBeforeApply());
-                                    }
-
-                                    if (fetched != null) {
-                                        log.debug("[MetaFetch] Assembled metadata for '{}': title='{}' goodreadsId='{}' goodreadsRating={} goodreadsReviewCount={}",
-                                                book.getMetadata().getTitle(), fetched.getTitle(),
-                                                fetched.getGoodreadsId(), fetched.getGoodreadsRating(), fetched.getGoodreadsReviewCount());
-                                    } else {
-                                        log.warn("[MetaFetch] refreshOptions was null for '{}' — skipping update", book.getMetadata().getTitle());
-                                    }
-
                                     if (bookReviewMode) {
                                         log.info("[MetaFetch] Review mode enabled — saving proposal for '{}', NOT applying directly", book.getMetadata().getTitle());
                                         saveProposal(task, book.getId(), fetched);
@@ -336,7 +366,6 @@ public class MetadataRefreshService {
                                         log.debug("[MetaFetch] Applying to '{}' with replaceMode={}", book.getMetadata().getTitle(), replaceMode);
                                         updateBookMetadata(book, fetched, refreshOptions.isRefreshCovers(), refreshOptions.isMergeCategories(), replaceMode, true);
                                     }
-
                                     sendBatchProgressNotification(jobId, currentCount + 1, totalBooks, "Processed: " + book.getMetadata().getTitle(), MetadataFetchTaskStatus.IN_PROGRESS, bookReviewMode);
                                 } catch (Exception e) {
                                     if (Thread.currentThread().isInterrupted()) {
@@ -347,10 +376,6 @@ public class MetadataRefreshService {
                                     log.error("Metadata update failed for book: {}", getBookIdentifier(book), e);
                                     sendBatchProgressNotification(jobId, currentCount, totalBooks, String.format("Failed to process: %s - %s", book.getMetadata().getTitle(), e.getMessage()), MetadataFetchTaskStatus.ERROR, isReviewMode);
                                 }
-                                // ── Speed improvement #5 ─────────────────────────
-                                // Replace saveAndFlush with save: the transaction
-                                // template commits on exit, which triggers an automatic
-                                // flush. The explicit flush round-trip is unnecessary.
                                 bookRepository.save(book);
                                 return null;
                             });
