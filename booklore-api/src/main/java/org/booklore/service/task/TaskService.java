@@ -146,7 +146,7 @@ public class TaskService {
             Object parsedOptions = null;
             if (cronConfig.getTaskOptions() != null && !cronConfig.getTaskOptions().isBlank()) {
                 try {
-                    parsedOptions = new ObjectMapper().readValue(cronConfig.getTaskOptions(), Object.class);
+                    parsedOptions = objectMapper.readValue(cronConfig.getTaskOptions(), new tools.jackson.core.type.TypeReference<java.util.Map<String, Object>>() {});
                 } catch (Exception ex) {
                     log.warn("Failed to parse taskOptions for {}: {}", taskType, ex.getMessage());
                 }

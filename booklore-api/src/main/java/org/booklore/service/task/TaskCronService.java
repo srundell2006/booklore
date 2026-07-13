@@ -19,7 +19,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.regex.Pattern;
 import tools.jackson.databind.ObjectMapper;
-import com.fasterxml.jackson.core.type.TypeReference;
+import tools.jackson.core.type.TypeReference;
 
 @Service
 @Slf4j
