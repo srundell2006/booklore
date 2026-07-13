@@ -59,6 +59,14 @@ public enum TaskType {
             "Refresh Metadata",
             "Updates metadata information for your selected books."
     ),
+    LOW_SCORE_METADATA_REFRESH(
+            false,
+            true,
+            true,
+            false,
+            "Low Score Metadata Refresh",
+            "Fetches metadata for up to 1,000 books with the lowest metadata match scores, gradually improving coverage across your library."
+    ),
     EPUB_ISBN_SCAN(
             false,
             true,

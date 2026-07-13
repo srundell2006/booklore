@@ -361,4 +361,7 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     List<BookEntity> findBooksBySeriesNameUngroupedByLibraryId(
             @Param("seriesName") String seriesName,
             @Param("libraryId") Long libraryId);
+    @Query("SELECT b.id FROM BookEntity b WHERE (b.metadataMatchScore IS NULL OR b.metadataMatchScore < :threshold) AND (b.deleted IS NULL OR b.deleted = false) ORDER BY COALESCE(b.metadataMatchScore, -1) ASC")
+    List<Long> findBookIdsWithLowMetadataScore(@Param("threshold") float threshold, Pageable pageable);
+
 }
