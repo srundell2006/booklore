@@ -12,7 +12,7 @@ import lombok.NoArgsConstructor;
 public class LowScoreMetadataRefreshOptions {
 
     @Builder.Default
-    private float scoreThreshold = 0.7f;
+    private float scoreThreshold = 70f;
 
     @Builder.Default
     private int batchSize = 1000;

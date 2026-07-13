@@ -23,7 +23,7 @@ import java.util.List;
 @Slf4j
 public class LowScoreMetadataRefreshTask implements Task {
 
-    private static final float DEFAULT_SCORE_THRESHOLD = 0.7f;
+    private static final float DEFAULT_SCORE_THRESHOLD = 70f;
     private static final int DEFAULT_BATCH_SIZE = 1000;
 
     private final BookRepository bookRepository;

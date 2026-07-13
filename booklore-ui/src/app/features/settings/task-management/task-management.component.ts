@@ -75,7 +75,7 @@ export class TaskManagementComponent implements OnInit, OnDestroy {
   selectedMetadataReplaceMode: MetadataReplaceMode = MetadataReplaceMode.REPLACE_MISSING;
 
   // Low Score Metadata Refresh options (per-task cron options)
-  lowScoreThreshold: number = 0.7;
+  lowScoreThreshold: number = 70;
   lowScoreBatchSize: number = 1000;
 
   // Cron Editing State
