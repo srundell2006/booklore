@@ -442,6 +442,18 @@ public class MetadataRefreshService {
         return defaultOptions;
     }
 
+
+    /**
+     * Returns all metadata providers that are currently enabled in app settings.
+     * Used by background tasks that need to work with whatever providers the user has configured.
+     */
+    public List<MetadataProvider> getEnabledProviders() {
+        AppSettings appSettings = appSettingService.getAppSettings();
+        return Arrays.stream(MetadataProvider.values())
+                .filter(p -> isProviderEnabled(p, appSettings))
+                .collect(java.util.stream.Collectors.toList());
+    }
+
     public Map<MetadataProvider, BookMetadata> fetchMetadataForBook(List<MetadataProvider> providers, Book book) {
         // Query all providers in parallel using virtual threads
         try (var executor = Executors.newVirtualThreadPerTaskExecutor()) {
