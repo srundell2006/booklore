@@ -53,6 +53,10 @@ public class BookEntity {
     @Builder.Default
     private Boolean isPhysical = Boolean.FALSE;
 
+    @Column(name = "is_comic")
+    @Builder.Default
+    private Boolean isComic = Boolean.FALSE;
+
     @Column(name = "added_on")
     private Instant addedOn;
 

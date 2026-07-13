@@ -321,6 +321,8 @@
         "menuDeleteSupplementaryFiles": "",
         "menuDeleteBookAllFiles": "",
         "menuDeleteBook": "",
+        "menuMarkComic": "Jelölés képregényként",
+        "menuUnmarkComic": "Képregény jelölés eltávolítása",
         "navigationPosition": "",
         "channelMono": "",
         "channelStereo": "",

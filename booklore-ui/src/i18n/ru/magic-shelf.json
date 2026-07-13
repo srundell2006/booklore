@@ -102,6 +102,7 @@
         "abridged": "Сокращённая версия",
         "audiobookDuration": "Длительность аудиокниги (с)",
         "isPhysical": "Физическая книга",
+        "isComic": "Комикс",
         "seriesStatus": "Статус серии",
         "seriesGaps": "Пропуски в серии",
         "seriesPosition": "Позиция в серии",

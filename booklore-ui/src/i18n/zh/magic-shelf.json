@@ -102,6 +102,7 @@
         "abridged": "删节版",
         "audiobookDuration": "有声书时长 (秒)",
         "isPhysical": "实体书",
+        "isComic": "漫画",
         "seriesStatus": "系列状态",
         "seriesGaps": "系列缺口",
         "seriesPosition": "系列位置",

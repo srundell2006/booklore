@@ -321,6 +321,8 @@
         "menuDeleteSupplementaryFiles": "",
         "menuDeleteBookAllFiles": "",
         "menuDeleteBook": "",
+        "menuMarkComic": "Označiť ako komiks",
+        "menuUnmarkComic": "Odznačiť komiks",
         "navigationPosition": "",
         "channelMono": "",
         "channelStereo": "",

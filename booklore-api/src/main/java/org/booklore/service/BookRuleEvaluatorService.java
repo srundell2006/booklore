@@ -795,6 +795,7 @@ public class BookRuleEvaluatorService {
             case AUDIOBOOK_CHAPTER_COUNT -> root.join("bookFiles", JoinType.LEFT).get("chapterCount");
             case AUDIOBOOK_BITRATE -> root.join("bookFiles", JoinType.LEFT).get("bitrate");
             case IS_PHYSICAL -> root.get("isPhysical");
+            case IS_COMIC -> root.get("isComic");
             case READING_PROGRESS -> {
                 Expression<Float> koreader = cb.coalesce(progressJoin.get("koreaderProgressPercent"), 0f);
                 Expression<Float> kobo = cb.coalesce(progressJoin.get("koboProgressPercent"), 0f);
@@ -900,7 +901,7 @@ public class BookRuleEvaluatorService {
             return value.toString();
         }
 
-        if (field == RuleField.ABRIDGED || field == RuleField.IS_PHYSICAL) {
+        if (field == RuleField.ABRIDGED || field == RuleField.IS_PHYSICAL || field == RuleField.IS_COMIC) {
             return Boolean.valueOf(value.toString());
         }
 

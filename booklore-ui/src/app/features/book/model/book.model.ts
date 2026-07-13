@@ -56,6 +56,7 @@ export interface Book extends FileInfo {
   alternativeFormats?: AdditionalFile[];
   supplementaryFiles?: AdditionalFile[];
   isPhysical?: boolean;
+  isComic?: boolean;
 
   [key: string]: unknown;
 }

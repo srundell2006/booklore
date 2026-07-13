@@ -321,6 +321,8 @@
         "menuDeleteSupplementaryFiles": "Удалить дополнительные файлы",
         "menuDeleteBookAllFiles": "Удалить книгу и все файлы",
         "menuDeleteBook": "Удалить книгу",
+        "menuMarkComic": "Отметить как комикс",
+        "menuUnmarkComic": "Снять отметку комикса",
         "navigationPosition": "{{ current }} из {{ total }}",
         "channelMono": "Моно",
         "channelStereo": "Стерео",

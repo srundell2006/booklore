@@ -321,6 +321,8 @@
         "menuDeleteSupplementaryFiles": "",
         "menuDeleteBookAllFiles": "",
         "menuDeleteBook": "",
+        "menuMarkComic": "Markeren als strip",
+        "menuUnmarkComic": "Strip markering verwijderen",
         "navigationPosition": "",
         "channelMono": "",
         "channelStereo": "",

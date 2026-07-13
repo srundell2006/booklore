@@ -105,6 +105,7 @@
         "audiobookChapterCount": "Кількість розділів",
         "audiobookBitrate": "Бітрейт (кбіт/с)",
         "isPhysical": "Паперова книга",
+        "isComic": "Комікс",
         "seriesStatus": "Статус серії",
         "seriesGaps": "Пропуски в серії",
         "seriesPosition": "Позиція в серії",

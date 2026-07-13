@@ -102,6 +102,7 @@
         "abridged": "Abreviado",
         "audiobookDuration": "Duração do Audiolivro (s)",
         "isPhysical": "Livro Físico",
+        "isComic": "Quadrinhos",
         "seriesStatus": "Status da Série",
         "seriesGaps": "Lacunas da Série",
         "seriesPosition": "Posição na Série",

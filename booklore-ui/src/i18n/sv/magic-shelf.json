@@ -102,6 +102,7 @@
         "abridged": "Forkortad",
         "audiobookDuration": "Ljudbokslangd (s)",
         "isPhysical": "Fysisk bok",
+        "isComic": "Serietidning",
         "seriesStatus": "Seriestatus",
         "seriesGaps": "Serieluckor",
         "seriesPosition": "Serieposition",

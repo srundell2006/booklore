@@ -321,6 +321,8 @@
         "menuDeleteSupplementaryFiles": "補足ファイルを削除",
         "menuDeleteBookAllFiles": "本とすべてのファイルを削除",
         "menuDeleteBook": "本を削除",
+        "menuMarkComic": "コミックとしてマーク",
+        "menuUnmarkComic": "コミックのマークを解除",
         "navigationPosition": "{{ current }} / {{ total }}",
         "channelMono": "モノラル",
         "channelStereo": "ステレオ",

@@ -95,6 +95,8 @@ public enum RuleField {
     AUDIOBOOK_BITRATE,
     @JsonProperty("isPhysical")
     IS_PHYSICAL,
+    @JsonProperty("isComic")
+    IS_COMIC,
     @JsonProperty("seriesStatus")
     SERIES_STATUS,
     @JsonProperty("seriesGaps")

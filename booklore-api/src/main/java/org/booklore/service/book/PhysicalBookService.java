@@ -158,6 +158,16 @@ public class PhysicalBookService {
         return bookMapper.toBook(book);
     }
 
+    @Transactional
+    public Book toggleComicFlag(long bookId, boolean comic) {
+        BookEntity book = bookRepository.findById(bookId)
+                .orElseThrow(() -> ApiError.BOOK_NOT_FOUND.createException(bookId));
+        book.setIsComic(comic);
+        bookRepository.save(book);
+        log.info("Book {} comic flag set to {}", bookId, comic);
+        return bookMapper.toBook(book);
+    }
+
     private String truncate(String input, int maxLength) {
         if (input == null) return null;
         return input.length() <= maxLength ? input : input.substring(0, maxLength);

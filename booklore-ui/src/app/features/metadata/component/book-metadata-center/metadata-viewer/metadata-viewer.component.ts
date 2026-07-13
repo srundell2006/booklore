@@ -246,6 +246,16 @@ export class MetadataViewerComponent implements OnInit, OnChanges, AfterViewChec
                   this.bookService.togglePhysicalFlag(book.id, !isPhysical).subscribe();
                 }
               });
+              const isComic = book.isComic ?? false;
+              items.push({
+                label: isComic
+                  ? this.t.translate('metadata.viewer.menuUnmarkComic')
+                  : this.t.translate('metadata.viewer.menuMarkComic'),
+                icon: isComic ? 'pi pi-times-circle' : 'pi pi-book',
+                command: () => {
+                  this.bookService.toggleComicFlag(book.id, !isComic).subscribe();
+                }
+              });
             }
 
             // Add allowed submenus based on user permissions

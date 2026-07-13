@@ -98,7 +98,8 @@ export type RuleField =
   | 'seriesPosition'
   | 'readingProgress'
   | 'metadataPresence'
-  | 'titleChangedByAutoFetch';
+  | 'titleChangedByAutoFetch'
+  | 'isComic';
 
 
 interface FullFieldConfig {
@@ -194,7 +195,8 @@ const FIELD_CONFIGS: Record<RuleField, FullFieldConfig> = {
   seriesPosition: {label: 'seriesPosition'},
   readingProgress: {label: 'readingProgress', type: 'decimal', max: 100},
   metadataPresence: {label: 'metadataPresence'},
-  titleChangedByAutoFetch: {label: 'titleChangedByAutoFetch', type: 'boolean'}
+  titleChangedByAutoFetch: {label: 'titleChangedByAutoFetch', type: 'boolean'},
+  isComic: {label: 'isComic', type: 'boolean'}
 };
 
 interface FieldGroup {
@@ -211,7 +213,7 @@ const FIELD_GROUPS: FieldGroup[] = [
   { translationKey: 'qualityMetadata', fields: ['metadataScore', 'metadataPresence', 'titleChangedByAutoFetch'] },
   { translationKey: 'tagsMoods', fields: ['moods', 'tags'] },
   { translationKey: 'audiobook', fields: ['narrator', 'abridged', 'audiobookDuration', 'audiobookCodec', 'audiobookChapterCount', 'audiobookBitrate'] },
-  { translationKey: 'fileIdentifiers', fields: ['fileType', 'fileSize', 'isbn13', 'isbn10', 'isPhysical'] }
+  { translationKey: 'fileIdentifiers', fields: ['fileType', 'fileSize', 'isbn13', 'isbn10', 'isPhysical', 'isComic'] }
 ];
 
 const READ_STATUS_KEYS: Record<string, string> = {
@@ -410,6 +412,7 @@ export class MagicShelfComponent implements OnInit {
         {label: this.t.translate('magicShelf.metadataFields.audiobookDuration'), value: 'audiobookDuration'},
       ]},
       { label: this.t.translate('magicShelf.metadataFieldGroups.comic'), items: [
+        {label: this.t.translate('magicShelf.metadataFields.isComic'), value: 'isComic'},
         {label: this.t.translate('magicShelf.metadataFields.comicCharacters'), value: 'comicCharacters'},
         {label: this.t.translate('magicShelf.metadataFields.comicTeams'), value: 'comicTeams'},
         {label: this.t.translate('magicShelf.metadataFields.comicLocations'), value: 'comicLocations'},

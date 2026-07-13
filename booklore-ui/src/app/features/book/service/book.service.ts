@@ -267,6 +267,16 @@ export class BookService {
     );
   }
 
+  toggleComicFlag(bookId: number, comic: boolean): Observable<Book> {
+    return this.http.patch<Book>(`${this.url}/${bookId}/comic`, null, {params: {comic}}).pipe(
+      tap(updatedBook => {
+        const currentState = this.bookStateService.getCurrentBookState();
+        const updatedBooks = (currentState.books || []).map(b => b.id === bookId ? {...b, isComic: comic} : b);
+        this.bookStateService.updateBookState({...currentState, books: updatedBooks});
+      })
+    );
+  }
+
   /*------------------ Reading & Viewer Settings ------------------*/
 
   readBook(bookId: number, reader?: 'epub-streaming', explicitBookType?: BookType): void {

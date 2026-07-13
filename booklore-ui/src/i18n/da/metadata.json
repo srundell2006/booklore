@@ -329,6 +329,8 @@
         "menuCustomSend": "",
         "menuMarkPhysical": "",
         "menuUnmarkPhysical": "",
+    "menuMarkComic": "Marker som tegneserie",
+    "menuUnmarkComic": "Fjern tegneseriemærke",
         "menuAttachToAnotherBook": "",
         "menuDeleteFileFormats": "",
         "menuDeleteSupplementaryFiles": "",

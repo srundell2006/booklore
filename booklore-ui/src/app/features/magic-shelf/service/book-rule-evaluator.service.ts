@@ -363,6 +363,8 @@ export class BookRuleEvaluatorService {
         return book.metadata?.audiobookMetadata?.bitrate ?? null;
       case 'isPhysical':
         return book.isPhysical;
+      case 'isComic':
+        return book.isComic;
       case 'lubimyczytacRating':
         return book.metadata?.lubimyczytacRating;
       case 'titleChangedByAutoFetch':

@@ -323,6 +323,8 @@
         "menuDeleteSupplementaryFiles": "",
         "menuDeleteBookAllFiles": "",
         "menuDeleteBook": "",
+        "menuMarkComic": "Tandai sebagai komik",
+        "menuUnmarkComic": "Hapus tanda komik",
         "navigationPosition": "",
         "channelMono": "Mono",
         "channelStereo": "Stereo",

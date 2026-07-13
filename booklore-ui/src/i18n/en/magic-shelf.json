@@ -105,6 +105,7 @@
     "audiobookChapterCount": "Chapter Count",
     "audiobookBitrate": "Bitrate (kbps)",
     "isPhysical": "Physical Book",
+    "isComic": "Comic",
     "seriesStatus": "Series Status",
     "seriesGaps": "Series Gaps",
     "seriesPosition": "Series Position",

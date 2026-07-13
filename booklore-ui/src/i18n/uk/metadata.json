@@ -400,7 +400,9 @@
         "firstAuthorBadge": "ОСНОВНИЙ",
         "audiobookAbridged": "Скорочено",
         "menuMarkPhysical": "Позначити як паперову",
-        "menuUnmarkPhysical": "Зняти позначку \"паперова\""
+        "menuUnmarkPhysical": "Зняти позначку \",
+    "menuMarkComic": "Позначити як комікс",
+    "menuUnmarkComic": "Зняти позначку коміксу"паперова\""
     },
     "sidecar": {
         "title": "Метадані sidecar",

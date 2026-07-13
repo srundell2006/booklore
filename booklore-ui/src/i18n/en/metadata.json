@@ -331,6 +331,8 @@
     "menuCustomSend": "Custom Send",
     "menuMarkPhysical": "Mark as Physical",
     "menuUnmarkPhysical": "Unmark as Physical",
+    "menuMarkComic": "Mark as Comic",
+    "menuUnmarkComic": "Unmark as Comic",
     "menuAttachToAnotherBook": "Attach to Another Book",
     "menuDeleteFileFormats": "Delete File Formats",
     "menuDeleteSupplementaryFiles": "Delete Supplementary Files",

@@ -98,6 +98,7 @@
         "seriesTotal": "Knjig v zbirki",
         "genre": "Žanr",
         "isPhysical": "Fizična knjiga",
+        "isComic": "Strip",
         "seriesStatus": "Status zbirke",
         "seriesGaps": "Vrzeli v zbirki",
         "seriesPosition": "Položaj v zbirki",

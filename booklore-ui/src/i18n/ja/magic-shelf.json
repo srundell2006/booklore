@@ -102,6 +102,7 @@
         "abridged": "要約版",
         "audiobookDuration": "オーディオブックの長さ (秒)",
         "isPhysical": "物理本",
+        "isComic": "コミック",
         "seriesStatus": "シリーズ状態",
         "seriesGaps": "シリーズの欠巻",
         "seriesPosition": "シリーズ内の位置",

@@ -331,6 +331,8 @@
         "menuDeleteSupplementaryFiles": "Obriši dopunske datoteke",
         "menuDeleteBookAllFiles": "Obriši knjigu i sve datoteke",
         "menuDeleteBook": "Obriši knjigu",
+        "menuMarkComic": "Označi kao strip",
+        "menuUnmarkComic": "Ukloni oznaku stripa",
         "navigationPosition": "{{ current }} od {{ total }}",
         "channelMono": "Mono",
         "channelStereo": "Stereo",

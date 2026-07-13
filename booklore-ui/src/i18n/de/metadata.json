@@ -395,7 +395,9 @@
         },
         "audiobookAbridged": "Gekürzt",
         "menuMarkPhysical": "Als physisch markieren",
-        "menuUnmarkPhysical": "Markierung als physisch entfernen"
+        "menuUnmarkPhysical": "Markierung als physisch entfernen",
+    "menuMarkComic": "Als Comic markieren",
+    "menuUnmarkComic": "Als Comic entmarkieren"
     },
     "sidecar": {
         "title": "Sidecar-Metadaten",

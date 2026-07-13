@@ -321,6 +321,8 @@
         "menuDeleteSupplementaryFiles": "删除补充文件",
         "menuDeleteBookAllFiles": "删除图书和所有文件",
         "menuDeleteBook": "删除图书",
+        "menuMarkComic": "标记为漫画",
+        "menuUnmarkComic": "取消漫画标记",
         "navigationPosition": "{{ current }} / {{ total }}",
         "channelMono": "单声道",
         "channelStereo": "立体声",

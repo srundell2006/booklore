@@ -321,6 +321,8 @@
         "menuDeleteSupplementaryFiles": "Excluir Arquivos Complementares",
         "menuDeleteBookAllFiles": "Excluir Livro e Todos os Arquivos",
         "menuDeleteBook": "Excluir Livro",
+        "menuMarkComic": "Marcar como quadrinho",
+        "menuUnmarkComic": "Desmarcar como quadrinho",
         "navigationPosition": "{{ current }} de {{ total }}",
         "channelMono": "Mono",
         "channelStereo": "Estéreo",

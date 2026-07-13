@@ -321,6 +321,8 @@
         "menuDeleteSupplementaryFiles": "Elimina file supplementari",
         "menuDeleteBookAllFiles": "Elimina libro e tutti i file",
         "menuDeleteBook": "Elimina libro",
+        "menuMarkComic": "Segna come fumetto",
+        "menuUnmarkComic": "Rimuovi segno fumetto",
         "navigationPosition": "{{ current }} di {{ total }}",
         "channelMono": "Mono",
         "channelStereo": "Stereo",

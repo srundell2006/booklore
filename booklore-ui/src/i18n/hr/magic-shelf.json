@@ -102,6 +102,7 @@
         "abridged": "Skraćeno",
         "audiobookDuration": "Trajanje audioknjige (s)",
         "isPhysical": "Fizička knjiga",
+        "isComic": "Strip",
         "seriesStatus": "Status serijala",
         "seriesGaps": "Praznine u serijalu",
         "seriesPosition": "Pozicija u serijalu",

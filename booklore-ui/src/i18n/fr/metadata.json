@@ -321,6 +321,8 @@
         "menuDeleteSupplementaryFiles": "Supprimer les fichiers supplémentaires",
         "menuDeleteBookAllFiles": "Supprimer le livre et tous les fichiers",
         "menuDeleteBook": "Supprimer le livre",
+        "menuMarkComic": "Marquer comme BD",
+        "menuUnmarkComic": "Démarquer comme BD",
         "navigationPosition": "{{ current }} sur {{ total }}",
         "channelMono": "Mono",
         "channelStereo": "Stéréo",
