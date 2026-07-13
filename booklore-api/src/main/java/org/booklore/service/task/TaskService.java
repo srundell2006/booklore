@@ -142,9 +142,19 @@ public class TaskService {
             securityContext.setAuthentication(authentication);
             SecurityContextHolder.setContext(securityContext);
 
+            var cronConfig = taskCronService.getCronConfigOrDefault(taskType);
+            Object parsedOptions = null;
+            if (cronConfig.getTaskOptions() != null && !cronConfig.getTaskOptions().isBlank()) {
+                try {
+                    parsedOptions = new ObjectMapper().readValue(cronConfig.getTaskOptions(), Object.class);
+                } catch (Exception ex) {
+                    log.warn("Failed to parse taskOptions for {}: {}", taskType, ex.getMessage());
+                }
+            }
             TaskCreateRequest request = TaskCreateRequest.builder()
                     .taskType(taskType)
                     .triggeredByCron(true)
+                    .options(parsedOptions)
                     .build();
 
             runAsSystemUser(request);

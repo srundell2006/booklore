@@ -29,6 +29,9 @@ public class BookEntity {
     @Column(name = "metadata_match_score")
     private Float metadataMatchScore;
 
+    @Column(name = "last_metadata_refresh_at")
+    private java.time.LocalDateTime lastMetadataRefreshAt;
+
     @OneToOne(mappedBy = "book", cascade = CascadeType.ALL, orphanRemoval = true, fetch = FetchType.LAZY)
     private BookMetadataEntity metadata;
 

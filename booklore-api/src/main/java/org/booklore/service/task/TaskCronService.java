@@ -16,7 +16,10 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.util.List;
+import java.util.Map;
 import java.util.regex.Pattern;
+import tools.jackson.databind.ObjectMapper;
+import com.fasterxml.jackson.core.type.TypeReference;
 
 @Service
 @Slf4j
@@ -60,6 +63,9 @@ public class TaskCronService {
         if (request.getEnabled() != null) {
             config.setEnabled(request.getEnabled());
         }
+        if (request.getTaskOptions() != null) {
+            config.setTaskOptions(request.getTaskOptions());
+        }
         config = repository.save(config);
         log.info("Updated cron configuration for task type: {}", taskType);
         return mapToResponse(config);
@@ -90,6 +96,16 @@ public class TaskCronService {
     }
 
     private CronConfig mapToResponse(TaskCronConfigurationEntity config) {
+        Map<String, Object> parsedOptions = null;
+        if (config.getTaskOptions() != null && !config.getTaskOptions().isBlank()) {
+            try {
+                parsedOptions = new ObjectMapper().readValue(
+                        config.getTaskOptions(),
+                        new TypeReference<Map<String, Object>>() {});
+            } catch (Exception e) {
+                log.warn("Failed to parse taskOptions JSON for {}: {}", config.getTaskType(), e.getMessage());
+            }
+        }
         return CronConfig.builder()
                 .id(config.getId())
                 .taskType(config.getTaskType())
@@ -97,6 +113,7 @@ public class TaskCronService {
                 .enabled(config.getEnabled())
                 .createdAt(config.getCreatedAt())
                 .updatedAt(config.getUpdatedAt())
+                .options(parsedOptions)
                 .build();
     }
 }

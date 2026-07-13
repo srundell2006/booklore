@@ -185,6 +185,34 @@
                 </div>
               }
 
+              @if (!isTaskRunning(taskInfo.taskType) && isEditingCron(taskInfo.taskType) && taskInfo.taskType === TaskType.LOW_SCORE_METADATA_REFRESH) {
+                <div class="task-options">
+                  <label class="option-label">Score Threshold</label>
+                  <div class="low-score-options">
+                    <div class="low-score-field">
+                      <label class="field-label">Below score (0.0 – 1.0)</label>
+                      <input
+                        type="number"
+                        class="cron-input"
+                        [(ngModel)]="lowScoreThreshold"
+                        min="0" max="1" step="0.05"
+                        style="width:100px">
+                      <span class="option-hint">Books with a metadata score below this value will be picked up each run.</span>
+                    </div>
+                    <div class="low-score-field">
+                      <label class="field-label">Batch size</label>
+                      <input
+                        type="number"
+                        class="cron-input"
+                        [(ngModel)]="lowScoreBatchSize"
+                        min="1" max="5000" step="100"
+                        style="width:100px">
+                      <span class="option-hint">Max books to refresh per run.</span>
+                    </div>
+                  </div>
+                </div>
+              }
+
               @if (isTaskRunning(taskInfo.taskType)) {
                 <div class="task-progress">
                   @if (isTaskStale(getTaskHistory(taskInfo.taskType))) {

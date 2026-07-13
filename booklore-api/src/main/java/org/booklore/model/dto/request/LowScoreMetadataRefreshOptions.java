@@ -9,9 +9,11 @@ import lombok.NoArgsConstructor;
 @Builder
 @NoArgsConstructor
 @AllArgsConstructor
-public class TaskCronConfigRequest {
-    private String cronExpression;
-    private Boolean enabled;
-    private String taskOptions;
-}
+public class LowScoreMetadataRefreshOptions {
 
+    @Builder.Default
+    private float scoreThreshold = 0.7f;
+
+    @Builder.Default
+    private int batchSize = 1000;
+}

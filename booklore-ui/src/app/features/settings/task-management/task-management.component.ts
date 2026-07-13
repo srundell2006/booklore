@@ -7,6 +7,7 @@ import {Select} from 'primeng/select';
 import {FormsModule} from '@angular/forms';
 import {
   LibraryRescanOptions,
+  LowScoreMetadataRefreshOptions,
   MetadataReplaceMode,
   TASK_TYPE_CONFIG,
   TaskCreateRequest,
@@ -72,6 +73,10 @@ export class TaskManagementComponent implements OnInit, OnDestroy {
     }
   ];
   selectedMetadataReplaceMode: MetadataReplaceMode = MetadataReplaceMode.REPLACE_MISSING;
+
+  // Low Score Metadata Refresh options (per-task cron options)
+  lowScoreThreshold: number = 0.7;
+  lowScoreBatchSize: number = 1000;
 
   // Cron Editing State
   cronUpdating = false;
@@ -326,6 +331,13 @@ export class TaskManagementComponent implements OnInit, OnDestroy {
     this.editingCronExpression = cronConfig?.cronExpression || '';
     this.cronValidationError = null;
     this.validateCronExpression(this.editingCronExpression);
+    // Load saved task options if present
+    const taskInfo = this.taskInfos.find(t => t.taskType === taskType);
+    if (taskType === TaskType.LOW_SCORE_METADATA_REFRESH && taskInfo?.cronConfig?.options) {
+      const opts = taskInfo.cronConfig.options as unknown as LowScoreMetadataRefreshOptions;
+      if (opts.scoreThreshold != null) this.lowScoreThreshold = opts.scoreThreshold;
+      if (opts.batchSize != null) this.lowScoreBatchSize = opts.batchSize;
+    }
   }
 
   cancelEditingCron(): void {
@@ -344,7 +356,19 @@ export class TaskManagementComponent implements OnInit, OnDestroy {
     }
 
     const expression = this.editingCronExpression.trim() || null;
-    this.updateCronExpression(taskType, expression);
+    if (taskType === TaskType.LOW_SCORE_METADATA_REFRESH) {
+      const opts: LowScoreMetadataRefreshOptions = {
+        scoreThreshold: this.lowScoreThreshold,
+        batchSize: this.lowScoreBatchSize
+      };
+      const request: TaskCronConfigRequest = {
+        cronExpression: expression,
+        taskOptions: JSON.stringify(opts)
+      };
+      this.updateCronConfig(taskType, request);
+    } else {
+      this.updateCronExpression(taskType, expression);
+    }
     this.cancelEditingCron();
   }
 
@@ -474,7 +498,8 @@ export class TaskManagementComponent implements OnInit, OnDestroy {
       [TaskType.CLEANUP_DELETED_BOOKS]: 'pi-trash',
       [TaskType.SYNC_LIBRARY_FILES]: 'pi-sync',
       [TaskType.BOOKDROP_PERIODIC_SCANNING]: 'pi-inbox',
-      [TaskType.CLEANUP_TEMP_METADATA]: 'pi-file'
+      [TaskType.CLEANUP_TEMP_METADATA]: 'pi-file',
+      [TaskType.LOW_SCORE_METADATA_REFRESH]: 'pi-chart-bar'
     };
     return icons[taskType] || 'pi-cog';
   }
@@ -493,7 +518,8 @@ export class TaskManagementComponent implements OnInit, OnDestroy {
     const icons: Record<string, string> = {
       [TaskType.CLEAR_PDF_CACHE]: 'pi-database',
       [TaskType.CLEANUP_DELETED_BOOKS]: 'pi-trash',
-      [TaskType.CLEANUP_TEMP_METADATA]: 'pi-file'
+      [TaskType.CLEANUP_TEMP_METADATA]: 'pi-file',
+      [TaskType.LOW_SCORE_METADATA_REFRESH]: 'pi-chart-bar'
     };
     return icons[taskType] || 'pi-info-circle';
   }

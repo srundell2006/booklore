@@ -39,6 +39,9 @@ public class TaskCronConfigurationEntity {
     @Column(name = "updated_at", nullable = false)
     private LocalDateTime updatedAt;
 
+    @Column(name = "task_options", columnDefinition = "TEXT")
+    private String taskOptions;
+
     @PrePersist
     protected void onCreate() {
         createdAt = LocalDateTime.now();
