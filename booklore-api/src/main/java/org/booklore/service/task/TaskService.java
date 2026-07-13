@@ -142,11 +142,11 @@ public class TaskService {
             securityContext.setAuthentication(authentication);
             SecurityContextHolder.setContext(securityContext);
 
-            var cronConfig = taskCronService.getCronConfigOrDefault(taskType);
+            String taskOptionsJson = taskCronService.getTaskOptionsJson(taskType);
             Object parsedOptions = null;
-            if (cronConfig.getTaskOptions() != null && !cronConfig.getTaskOptions().isBlank()) {
+            if (taskOptionsJson != null && !taskOptionsJson.isBlank()) {
                 try {
-                    parsedOptions = objectMapper.readValue(cronConfig.getTaskOptions(), new tools.jackson.core.type.TypeReference<java.util.Map<String, Object>>() {});
+                    parsedOptions = objectMapper.readValue(taskOptionsJson, new tools.jackson.core.type.TypeReference<java.util.Map<String, Object>>() {});
                 } catch (Exception ex) {
                     log.warn("Failed to parse taskOptions for {}: {}", taskType, ex.getMessage());
                 }

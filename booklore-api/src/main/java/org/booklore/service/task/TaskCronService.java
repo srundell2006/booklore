@@ -36,6 +36,13 @@ public class TaskCronService {
     }
 
     @Transactional(readOnly = true)
+    public String getTaskOptionsJson(TaskType taskType) {
+        return repository.findByTaskType(taskType)
+                .map(TaskCronConfigurationEntity::getTaskOptions)
+                .orElse(null);
+    }
+
+    @Transactional(readOnly = true)
     public CronConfig getCronConfigOrDefault(TaskType taskType) {
         validateTaskTypeForCron(taskType);
         return repository.findByTaskType(taskType)
