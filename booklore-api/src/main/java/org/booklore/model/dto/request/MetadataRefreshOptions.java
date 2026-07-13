@@ -97,6 +97,7 @@ public class MetadataRefreshOptions {
         private MetadataProvider p2;
         private MetadataProvider p3;
         private MetadataProvider p4;
+        private MetadataProvider p5;
     }
 
     @Getter

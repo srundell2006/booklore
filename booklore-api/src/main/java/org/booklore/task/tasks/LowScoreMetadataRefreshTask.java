@@ -87,6 +87,7 @@ public class LowScoreMetadataRefreshTask implements Task {
                 .p2(enabledProviders.size() > 1 ? enabledProviders.get(1) : null)
                 .p3(enabledProviders.size() > 2 ? enabledProviders.get(2) : null)
                 .p4(enabledProviders.size() > 3 ? enabledProviders.get(3) : null)
+                .p5(enabledProviders.size() > 4 ? enabledProviders.get(4) : null)
                 .build();
 
         FieldOptions fieldOptions = FieldOptions.builder()

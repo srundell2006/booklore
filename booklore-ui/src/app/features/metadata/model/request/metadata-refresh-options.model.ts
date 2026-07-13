@@ -20,6 +20,7 @@ export interface MetadataRefreshOptions {
 }
 
 export interface FieldProvider {
+  p5: string | null;
   p4: string | null;
   p3: string | null;
   p2: string | null;

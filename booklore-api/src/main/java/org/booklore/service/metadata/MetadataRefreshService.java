@@ -636,6 +636,7 @@ public class MetadataRefreshService {
             if (fieldProvider.getP2() != null && isProviderEnabled(fieldProvider.getP2(), appSettings)) providerSet.add(fieldProvider.getP2());
             if (fieldProvider.getP3() != null && isProviderEnabled(fieldProvider.getP3(), appSettings)) providerSet.add(fieldProvider.getP3());
             if (fieldProvider.getP4() != null && isProviderEnabled(fieldProvider.getP4(), appSettings)) providerSet.add(fieldProvider.getP4());
+            if (fieldProvider.getP5() != null && isProviderEnabled(fieldProvider.getP5(), appSettings)) providerSet.add(fieldProvider.getP5());
         }
     }
 
@@ -986,7 +987,8 @@ public class MetadataRefreshService {
                 fieldProvider.getP1(),
                 fieldProvider.getP2(),
                 fieldProvider.getP3(),
-                fieldProvider.getP4()
+                fieldProvider.getP4(),
+                fieldProvider.getP5()
         };
         for (MetadataProvider provider : providers) {
             if (provider != null && metadataMap.containsKey(provider)) {
@@ -1009,7 +1011,8 @@ public class MetadataRefreshService {
                 fieldProvider.getP1(),
                 fieldProvider.getP2(),
                 fieldProvider.getP3(),
-                fieldProvider.getP4()
+                fieldProvider.getP4(),
+                fieldProvider.getP5()
         };
 
         for (MetadataProvider provider : providers) {

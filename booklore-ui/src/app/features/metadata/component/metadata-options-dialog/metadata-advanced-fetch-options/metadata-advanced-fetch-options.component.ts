@@ -83,6 +83,7 @@ export class MetadataAdvancedFetchOptionsComponent implements OnChanges {
   bulkP2: string | null = null;
   bulkP3: string | null = null;
   bulkP4: string | null = null;
+  bulkP5: string | null = null;
 
   private messageService = inject(MessageService);
   private readonly t = inject(TranslocoService);
@@ -120,7 +121,7 @@ export class MetadataAdvancedFetchOptionsComponent implements OnChanges {
 
   private initializeFieldOptions(): FieldOptions {
     return this.fields.reduce((acc, field) => {
-      acc[field] = {p1: null, p2: null, p3: null, p4: null};
+      acc[field] = {p1: null, p2: null, p3: null, p4: null, p5: null};
       return acc;
     }, {} as FieldOptions);
   }
@@ -144,9 +145,10 @@ export class MetadataAdvancedFetchOptionsComponent implements OnChanges {
       const backendFieldOptions = this.deepCloneFieldOptions(this.currentMetadataOptions.fieldOptions as FieldOptions || {});
       for (const field of this.fields) {
         if (!backendFieldOptions[field]) {
-          backendFieldOptions[field] = {p1: null, p2: null, p3: null, p4: null};
+          backendFieldOptions[field] = {p1: null, p2: null, p3: null, p4: null, p5: null};
         } else {
           backendFieldOptions[field].p4 ??= null;
+          backendFieldOptions[field].p5 ??= null;
         }
       }
       this.fieldOptions = backendFieldOptions;
@@ -166,7 +168,8 @@ export class MetadataAdvancedFetchOptionsComponent implements OnChanges {
         p1: fieldOptions[field]?.p1 || null,
         p2: fieldOptions[field]?.p2 || null,
         p3: fieldOptions[field]?.p3 || null,
-        p4: fieldOptions[field]?.p4 || null
+        p4: fieldOptions[field]?.p4 || null,
+        p5: fieldOptions[field]?.p5 || null
       };
     }
     return cloned;
@@ -176,7 +179,7 @@ export class MetadataAdvancedFetchOptionsComponent implements OnChanges {
     const allFieldsHaveProvider = Object.entries(this.fieldOptions).every(([field, opt]) =>
       !this.enabledFields[field as keyof FieldOptions] ||
       this.isProviderSpecificField(field as keyof FieldOptions) ||
-      opt.p1 !== null || opt.p2 !== null || opt.p3 !== null || opt.p4 !== null
+      opt.p1 !== null || opt.p2 !== null || opt.p3 !== null || opt.p4 !== null || opt.p5 !== null
     );
 
     if (allFieldsHaveProvider) {
@@ -209,7 +212,7 @@ export class MetadataAdvancedFetchOptionsComponent implements OnChanges {
     }
   }
 
-  setBulkProvider(priority: 'p1' | 'p2' | 'p3' | 'p4', provider: string | null): void {
+  setBulkProvider(priority: 'p1' | 'p2' | 'p3' | 'p4' | 'p5', provider: string | null): void {
     if (!provider) return;
 
     const value = provider === 'Clear All' ? null : provider;
@@ -232,6 +235,10 @@ export class MetadataAdvancedFetchOptionsComponent implements OnChanges {
         break;
       case 'p4':
         this.bulkP4 = null;
+    this.bulkP5 = null;
+        break;
+      case 'p5':
+        this.bulkP5 = null;
         break;
     }
   }
@@ -243,7 +250,8 @@ export class MetadataAdvancedFetchOptionsComponent implements OnChanges {
         p1: null,
         p2: null,
         p3: null,
-        p4: null
+        p4: null,
+        p5: null
       };
     }
     this.enabledFields = this.initializeEnabledFields();
@@ -256,6 +264,7 @@ export class MetadataAdvancedFetchOptionsComponent implements OnChanges {
     this.bulkP2 = null;
     this.bulkP3 = null;
     this.bulkP4 = null;
+    this.bulkP5 = null;
   }
 
   formatLabel(field: string): string {

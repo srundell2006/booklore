@@ -29,6 +29,12 @@
            [pTooltip]="t('fourthPriorityTooltip')"
            tooltipPosition="top"></i>
       </th>
+      <th class="table-header">
+        {{ t('fifthPriority') }}
+        <i class="pi pi-question-circle help-icon"
+           [pTooltip]="t('fifthPriorityTooltip')"
+           tooltipPosition="top"></i>
+      </th>
     </tr>
     <tr>
       <td class="table-cell" style="max-width: 70px; width: 70px;"></td>
@@ -58,6 +64,13 @@
         <p-select [options]="providersWithClear" [(ngModel)]="bulkP4"
                   (ngModelChange)="setBulkProvider('p4', $event)"
                   [placeholder]="t('setAllP4')" appendTo="body"
+                  class="select-full-width" size="small">
+        </p-select>
+      </td>
+      <td class="table-cell">
+        <p-select [options]="providersWithClear" [(ngModel)]="bulkP5"
+                  (ngModelChange)="setBulkProvider('p5', $event)"
+                  [placeholder]="t('setAllP5')" appendTo="body"
                   class="select-full-width" size="small">
         </p-select>
       </td>
@@ -95,6 +108,13 @@
           </td>
           <td class="table-cell-sm">
             <p-select [options]="providers" [(ngModel)]="fieldOptions[field].p4"
+                      [disabled]="!enabledFields[field]"
+                      [placeholder]="t('unset')" appendTo="body"
+                      class="select-full-width" size="small">
+            </p-select>
+          </td>
+          <td class="table-cell-sm">
+            <p-select [options]="providers" [(ngModel)]="fieldOptions[field].p5"
                       [disabled]="!enabledFields[field]"
                       [placeholder]="t('unset')" appendTo="body"
                       class="select-full-width" size="small">
