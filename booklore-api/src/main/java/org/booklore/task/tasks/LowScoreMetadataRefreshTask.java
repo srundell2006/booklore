@@ -66,13 +66,14 @@ public class LowScoreMetadataRefreshTask implements Task {
                 .bookIds(new LinkedHashSet<>(bookIds))
                 .build();
 
-        metadataRefreshService.refreshMetadata(refreshRequest, taskId);
+        int updatedCount = metadataRefreshService.refreshMetadata(refreshRequest, taskId);
 
         // Stamp all processed books so they go to the back of the queue next run
         bookRepository.updateLastMetadataRefreshAt(bookIds, LocalDateTime.now());
 
         long duration = System.currentTimeMillis() - startTime;
-        log.info("{}: Task completed. Processed {} books in {} ms", getTaskType(), bookIds.size(), duration);
+        log.info("{}: Task completed in {} ms — {} books processed, {} actually updated",
+                getTaskType(), duration, bookIds.size(), updatedCount);
 
         return TaskCreateResponse.builder()
                 .taskType(getTaskType())

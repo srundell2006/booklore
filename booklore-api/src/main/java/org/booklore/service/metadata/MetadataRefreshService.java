@@ -75,7 +75,7 @@ public class MetadataRefreshService {
     private static final Object GOODREADS_LOCK = new Object();
 
 
-    public void refreshMetadata(MetadataRefreshRequest request, String jobId) {
+    public int refreshMetadata(MetadataRefreshRequest request, String jobId) {
         BookLoreUser user = authenticationService.getAuthenticatedUser();
         Long userId = user != null ? user.getId() : null;
         final Set<Long> bookIds = null;
@@ -153,6 +153,7 @@ public class MetadataRefreshService {
 
             TransactionTemplate txTemplate = new TransactionTemplate(transactionManager);
             AtomicInteger completedCount = new AtomicInteger(0);
+            AtomicInteger updatedCount = new AtomicInteger(0);
             AtomicBoolean cancelled = new AtomicBoolean(false);
 
             // ── Speed improvement #2 ──────────────────────────────────────────────
@@ -365,6 +366,7 @@ public class MetadataRefreshService {
                                                 : MetadataReplaceMode.REPLACE_MISSING;
                                         log.debug("[MetaFetch] Applying to '{}' with replaceMode={}", book.getMetadata().getTitle(), replaceMode);
                                         updateBookMetadata(book, fetched, refreshOptions.isRefreshCovers(), refreshOptions.isMergeCategories(), replaceMode, true);
+                                        updatedCount.incrementAndGet();
                                     }
                                     sendBatchProgressNotification(jobId, currentCount + 1, totalBooks, "Processed: " + book.getMetadata().getTitle(), MetadataFetchTaskStatus.IN_PROGRESS, bookReviewMode);
                                 } catch (Exception e) {
@@ -399,12 +401,13 @@ public class MetadataRefreshService {
                 log.info("RefreshMetadataTask {} was cancelled, stopping execution", jobId);
                 cancelTask(task);
                 cancellationManager.clearCancellation(jobId);
-                return;
+                return updatedCount.get();
             }
 
             completeTask(task, completedCount.get(), totalBooks, isReviewMode);
             cancellationManager.clearCancellation(jobId);
             log.info("Metadata refresh task {} completed successfully", jobId);
+            return updatedCount.get();
 
         } catch (RuntimeException e) {
             cancellationManager.clearCancellation(jobId);
