@@ -80,6 +80,7 @@ public class MetadataRefreshService {
         Long userId = user != null ? user.getId() : null;
         final Set<Long> bookIds = null;
         final int totalBooks;
+        AtomicInteger updatedCount = new AtomicInteger(0);
         try {
             AppSettings appSettings = appSettingService.getAppSettings();
 
@@ -153,7 +154,6 @@ public class MetadataRefreshService {
 
             TransactionTemplate txTemplate = new TransactionTemplate(transactionManager);
             AtomicInteger completedCount = new AtomicInteger(0);
-            AtomicInteger updatedCount = new AtomicInteger(0);
             AtomicBoolean cancelled = new AtomicBoolean(false);
 
             // ── Speed improvement #2 ──────────────────────────────────────────────
