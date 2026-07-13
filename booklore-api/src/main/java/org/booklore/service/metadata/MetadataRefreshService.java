@@ -413,7 +413,7 @@ public class MetadataRefreshService {
             cancellationManager.clearCancellation(jobId);
             if (e.getCause() instanceof InterruptedException) {
                 log.info("Metadata refresh task {} cancelled successfully", jobId);
-                return;
+                return updatedCount.get();
             }
             log.error("Fatal error during metadata refresh", e);
             int totalBooksForError = 0;
