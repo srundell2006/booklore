@@ -4,6 +4,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.booklore.model.dto.BookLoreUser;
 import org.booklore.model.dto.request.LowScoreMetadataRefreshOptions;
+import org.booklore.service.appsettings.AppSettingService;
 import org.booklore.model.dto.request.MetadataRefreshRequest;
 import org.booklore.model.dto.request.TaskCreateRequest;
 import org.booklore.model.dto.response.TaskCreateResponse;
@@ -28,6 +29,7 @@ public class LowScoreMetadataRefreshTask implements Task {
 
     private final BookRepository bookRepository;
     private final MetadataRefreshService metadataRefreshService;
+    private final AppSettingService appSettingService;
 
     @Override
     public void validatePermissions(BookLoreUser user, TaskCreateRequest request) {
@@ -64,6 +66,7 @@ public class LowScoreMetadataRefreshTask implements Task {
         MetadataRefreshRequest refreshRequest = MetadataRefreshRequest.builder()
                 .refreshType(MetadataRefreshRequest.RefreshType.BOOKS)
                 .bookIds(new LinkedHashSet<>(bookIds))
+                .refreshOptions(appSettingService.getAppSettings().getDefaultMetadataRefreshOptions())
                 .build();
 
         int updatedCount = metadataRefreshService.refreshMetadata(refreshRequest, taskId);
