@@ -13,8 +13,12 @@ import org.springframework.transaction.annotation.Transactional;
 import java.time.Instant;
 import java.time.LocalDateTime;
 import java.time.ZoneId;
+import java.time.LocalDateTime;
 import java.util.*;
 import java.util.stream.Collectors;
+
+import org.springframework.boot.context.event.ApplicationReadyEvent;
+import org.springframework.context.event.EventListener;
 import org.booklore.model.enums.AuditAction;
 import org.booklore.service.audit.AuditService;
 
@@ -104,6 +108,20 @@ public class TaskHistoryService {
             taskHistoryRepository.save(task);
             log.error("Task failed: id={}", taskId);
         });
+    }
+
+    @EventListener(ApplicationReadyEvent.class)
+    @Transactional
+    public void abortInterruptedTasksOnStartup() {
+        List<TaskStatus> stuckStatuses = List.of(TaskStatus.ACCEPTED, TaskStatus.IN_PROGRESS);
+        int count = taskHistoryRepository.abortStuckTasks(
+                TaskStatus.FAILED,
+                "Task was interrupted by a server restart",
+                LocalDateTime.now(),
+                stuckStatuses);
+        if (count > 0) {
+            log.warn("Startup cleanup: marked {} interrupted task(s) as FAILED", count);
+        }
     }
 
     @Transactional(readOnly = true)
