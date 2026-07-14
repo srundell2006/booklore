@@ -117,7 +117,7 @@ public class LowScoreMetadataRefreshTask implements Task {
                 .refreshOptions(refreshOptions)
                 .build();
 
-        int updatedCount = metadataRefreshService.refreshMetadata(refreshRequest, taskId);
+        int updatedCount = metadataRefreshService.refreshMetadata(refreshRequest, taskId, TaskType.LOW_SCORE_METADATA_REFRESH);
 
         // Stamp all processed books so they go to the back of the queue next run
         bookRepository.updateLastMetadataRefreshAt(bookIds, LocalDateTime.now());

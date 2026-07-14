@@ -20,7 +20,10 @@ import org.booklore.model.enums.FetchedMetadataProposalStatus;
 import org.booklore.model.enums.MetadataFetchTaskStatus;
 import org.booklore.model.enums.MetadataProvider;
 import org.booklore.model.enums.MetadataReplaceMode;
+import org.booklore.model.enums.TaskType;
+import org.booklore.model.websocket.TaskProgressPayload;
 import org.booklore.model.websocket.Topic;
+import org.booklore.task.TaskStatus;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
 import org.booklore.repository.MetadataFetchJobRepository;
@@ -71,9 +74,21 @@ public class MetadataRefreshService {
     private final AuthenticationService authenticationService;
     private final TaskCancellationManager cancellationManager;
 
+    /** Maps jobId → TaskType for jobs that want TASK_PROGRESS WebSocket events. */
+    private static final Map<String, TaskType> ACTIVE_TASK_TYPES = new ConcurrentHashMap<>();
+
     /** Serialises Goodreads rate-limit delays across parallel book-processing threads. */
     private static final Object GOODREADS_LOCK = new Object();
 
+
+    public int refreshMetadata(MetadataRefreshRequest request, String jobId, TaskType taskType) {
+        ACTIVE_TASK_TYPES.put(jobId, taskType);
+        try {
+            return refreshMetadata(request, jobId);
+        } finally {
+            ACTIVE_TASK_TYPES.remove(jobId);
+        }
+    }
 
     public int refreshMetadata(MetadataRefreshRequest request, String jobId) {
         BookLoreUser user = authenticationService.getAuthenticatedUser();
@@ -512,6 +527,23 @@ public class MetadataRefreshService {
 
     private void sendBatchProgressNotification(String taskId, int current, int total, String message, MetadataFetchTaskStatus status, boolean isReview) {
         notificationService.sendMessage(Topic.BOOK_METADATA_BATCH_PROGRESS, new MetadataBatchProgressNotification(taskId, current, total, message, status.name(), isReview));
+        TaskType taskType = ACTIVE_TASK_TYPES.get(taskId);
+        if (taskType != null) {
+            int pct = total > 0 ? (int)(current * 100L / total) : (status == MetadataFetchTaskStatus.COMPLETED ? 100 : 0);
+            TaskStatus ts = switch (status) {
+                case COMPLETED -> TaskStatus.COMPLETED;
+                case CANCELLED -> TaskStatus.CANCELLED;
+                case ERROR -> TaskStatus.FAILED;
+                default -> TaskStatus.IN_PROGRESS;
+            };
+            notificationService.sendMessage(Topic.TASK_PROGRESS, TaskProgressPayload.builder()
+                    .taskId(taskId)
+                    .taskType(taskType)
+                    .message(message)
+                    .progress(pct)
+                    .taskStatus(ts)
+                    .build());
+        }
     }
 
     private void completeTask(MetadataFetchJobEntity task, int completed, int total, boolean isReviewMode) {
