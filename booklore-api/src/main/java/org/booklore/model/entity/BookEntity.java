@@ -5,6 +5,7 @@ import lombok.*;
 import org.booklore.convertor.BookRecommendationIdsListConverter;
 import org.booklore.model.dto.BookRecommendationLite;
 import org.booklore.model.enums.BookFileType;
+import org.hibernate.annotations.DynamicUpdate;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -14,6 +15,7 @@ import java.util.List;
 import java.util.Set;
 
 @Entity
+@DynamicUpdate
 @Getter
 @Setter
 @Builder

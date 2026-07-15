@@ -120,7 +120,12 @@ public class LowScoreMetadataRefreshTask implements Task {
         int updatedCount = metadataRefreshService.refreshMetadata(refreshRequest, taskId, TaskType.LOW_SCORE_METADATA_REFRESH);
 
         // Stamp all processed books so they go to the back of the queue next run
-        bookRepository.updateLastMetadataRefreshAt(bookIds, LocalDateTime.now());
+        // Batch in chunks of 100 to avoid long IN-clause locks on the book table
+        LocalDateTime now = LocalDateTime.now();
+        for (int i = 0; i < bookIds.size(); i += 100) {
+            bookRepository.updateLastMetadataRefreshAt(
+                    bookIds.subList(i, Math.min(i + 100, bookIds.size())), now);
+        }
 
         long duration = System.currentTimeMillis() - startTime;
         log.info("{}: Task completed in {} ms — {} books processed, {} actually updated",
