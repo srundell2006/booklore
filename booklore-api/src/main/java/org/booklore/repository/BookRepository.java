@@ -252,54 +252,62 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     /**
      * Get distinct series names for a library when groupUnknown=false.
      * Each book without series gets its own entry (title or filename).
+     * Uses a derived-table JOIN instead of a correlated subquery to avoid
+     * N-per-book execution cost on large libraries.
      */
-    @Query("""
+    @Query(value = """
             SELECT DISTINCT 
                 CASE 
-                    WHEN m.seriesName IS NOT NULL THEN m.seriesName
+                    WHEN m.series_name IS NOT NULL THEN m.series_name
                     WHEN m.title IS NOT NULL THEN m.title
-                    ELSE (
-                        SELECT bf2.fileName FROM BookFileEntity bf2
-                        WHERE bf2.book = b
-                          AND bf2.isBookFormat = true
-                          AND bf2.id = (
-                              SELECT MIN(bf3.id) FROM BookFileEntity bf3
-                              WHERE bf3.book = b AND bf3.isBookFormat = true
-                          )
-                    )
+                    ELSE bf_min.file_name
                 END as seriesName
-            FROM BookEntity b
-            LEFT JOIN b.metadata m
-            WHERE b.library.id = :libraryId 
-            AND (b.deleted IS NULL OR b.deleted = false)
+            FROM book b
+            LEFT JOIN book_metadata m ON m.book_id = b.id
+            LEFT JOIN (
+                SELECT bf.book_id, bf.file_name
+                FROM book_file bf
+                INNER JOIN (
+                    SELECT book_id, MIN(id) AS min_id
+                    FROM book_file
+                    WHERE is_book = true
+                    GROUP BY book_id
+                ) agg ON bf.id = agg.min_id
+            ) bf_min ON bf_min.book_id = b.id
+            WHERE b.library_id = :libraryId
+              AND (b.deleted IS NULL OR b.deleted = false)
             ORDER BY seriesName
-            """)
+            """, nativeQuery = true)
     List<String> findDistinctSeriesNamesUngroupedByLibraryId(@Param("libraryId") Long libraryId);
 
     /**
      * Get distinct series names across all libraries when groupUnknown=false.
      * Each book without series gets its own entry (title or filename).
+     * Uses a derived-table JOIN instead of a correlated subquery to avoid
+     * N-per-book execution cost on large libraries.
      */
-    @Query("""
+    @Query(value = """
             SELECT DISTINCT 
                 CASE 
-                    WHEN m.seriesName IS NOT NULL THEN m.seriesName
+                    WHEN m.series_name IS NOT NULL THEN m.series_name
                     WHEN m.title IS NOT NULL THEN m.title
-                    ELSE (
-                        SELECT bf2.fileName FROM BookFileEntity bf2
-                        WHERE bf2.book = b
-                          AND bf2.isBookFormat = true
-                          AND bf2.id = (
-                              SELECT MIN(bf3.id) FROM BookFileEntity bf3
-                              WHERE bf3.book = b AND bf3.isBookFormat = true
-                          )
-                    )
+                    ELSE bf_min.file_name
                 END as seriesName
-            FROM BookEntity b
-            LEFT JOIN b.metadata m
+            FROM book b
+            LEFT JOIN book_metadata m ON m.book_id = b.id
+            LEFT JOIN (
+                SELECT bf.book_id, bf.file_name
+                FROM book_file bf
+                INNER JOIN (
+                    SELECT book_id, MIN(id) AS min_id
+                    FROM book_file
+                    WHERE is_book = true
+                    GROUP BY book_id
+                ) agg ON bf.id = agg.min_id
+            ) bf_min ON bf_min.book_id = b.id
             WHERE (b.deleted IS NULL OR b.deleted = false)
             ORDER BY seriesName
-            """)
+            """, nativeQuery = true)
     List<String> findDistinctSeriesNamesUngrouped();
 
     /**
