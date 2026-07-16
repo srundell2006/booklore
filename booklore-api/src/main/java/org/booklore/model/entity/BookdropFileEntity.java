@@ -42,6 +42,9 @@ public class BookdropFileEntity {
     @Column(name = "fetched_metadata", columnDefinition = "JSON")
     private String fetchedMetadata;
 
+    @Column(name = "match_score")
+    private Integer matchScore;
+
     @CreationTimestamp
     @Column(name = "created_at", updatable = false)
     private Instant createdAt;

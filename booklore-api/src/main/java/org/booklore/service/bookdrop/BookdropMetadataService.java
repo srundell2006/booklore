@@ -26,9 +26,12 @@ import org.apache.commons.io.FilenameUtils;
 import java.io.File;
 import java.io.IOException;
 import java.time.Instant;
+import java.util.HashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 import java.util.concurrent.ThreadLocalRandom;
+import java.util.stream.Collectors;
 
 import static org.booklore.model.entity.BookdropFileEntity.Status.PENDING_REVIEW;
 
@@ -90,6 +93,7 @@ public class BookdropMetadataService {
         String fetchedJson = objectMapper.writeValueAsString(fetchedMetadata);
 
         entity.setFetchedMetadata(fetchedJson);
+        entity.setMatchScore(computeMatchScore(initial, fetchedMetadata));
         entity.setStatus(PENDING_REVIEW);
         entity.setUpdatedAt(Instant.now());
 
@@ -119,5 +123,92 @@ public class BookdropMetadataService {
                 log.warn("Failed to save extracted cover for file: {}", entity.getFilePath(), e);
             }
         }
+    }
+
+    /**
+     * Computes a 0–100 match score comparing fetched metadata against the original.
+     * <ul>
+     *   <li>Title similarity (Levenshtein normalised): 0–70 points</li>
+     *   <li>Author overlap (Jaccard): 0–20 points</li>
+     *   <li>ISBN match bonus: 0–10 points</li>
+     * </ul>
+     */
+    private static int computeMatchScore(BookMetadata original, BookMetadata fetched) {
+        if (fetched == null || fetched.getTitle() == null) return 0;
+
+        // Title similarity: 0-70 points
+        String origTitle = normalizeTitle(original != null ? original.getTitle() : null);
+        String fetchTitle = normalizeTitle(fetched.getTitle());
+        int titleScore = 0;
+        if (!fetchTitle.isEmpty()) {
+            if (origTitle.isEmpty()) {
+                titleScore = 35; // no original title to compare against
+            } else {
+                int maxLen = Math.max(origTitle.length(), fetchTitle.length());
+                int dist = levenshteinDistance(origTitle, fetchTitle);
+                titleScore = (int) Math.round(70.0 * (1.0 - (double) dist / maxLen));
+            }
+        }
+
+        // Author overlap: 0-20 points (Jaccard similarity)
+        int authorScore = 0;
+        List<String> origAuthors = normalizeAuthors(original != null ? original.getAuthors() : null);
+        List<String> fetchAuthors = normalizeAuthors(fetched.getAuthors());
+        if (!fetchAuthors.isEmpty()) {
+            if (origAuthors.isEmpty()) {
+                authorScore = 10; // can't compare, partial credit
+            } else {
+                long matched = fetchAuthors.stream().filter(origAuthors::contains).count();
+                Set<String> union = new HashSet<>(origAuthors);
+                union.addAll(fetchAuthors);
+                authorScore = union.isEmpty() ? 0 : (int) Math.round(20.0 * matched / union.size());
+            }
+        }
+
+        // ISBN match: 0-10 points
+        int isbnScore = 0;
+        boolean fetchedHasIsbn = fetched.getIsbn13() != null || fetched.getIsbn10() != null;
+        boolean originalHasIsbn = original != null && (original.getIsbn13() != null || original.getIsbn10() != null);
+        if (fetchedHasIsbn) {
+            if (!originalHasIsbn) {
+                isbnScore = 5; // fetched has ISBN but original doesn't — still useful
+            } else if ((fetched.getIsbn13() != null && fetched.getIsbn13().equals(original.getIsbn13()))
+                    || (fetched.getIsbn10() != null && fetched.getIsbn10().equals(original.getIsbn10()))) {
+                isbnScore = 10;
+            }
+        }
+
+        return Math.min(100, Math.max(0, titleScore + authorScore + isbnScore));
+    }
+
+    private static String normalizeTitle(String s) {
+        if (s == null || s.isBlank()) return "";
+        return s.toLowerCase().replaceAll("[^a-z0-9 ]", "").trim();
+    }
+
+    private static List<String> normalizeAuthors(List<String> authors) {
+        if (authors == null) return List.of();
+        return authors.stream()
+                .filter(a -> a != null && !a.isBlank())
+                .map(a -> a.toLowerCase().trim())
+                .collect(Collectors.toList());
+    }
+
+    private static int levenshteinDistance(String a, String b) {
+        int la = a.length(), lb = b.length();
+        int[] dp = new int[lb + 1];
+        for (int j = 0; j <= lb; j++) dp[j] = j;
+        for (int i = 1; i <= la; i++) {
+            int prev = dp[0];
+            dp[0] = i;
+            for (int j = 1; j <= lb; j++) {
+                int temp = dp[j];
+                dp[j] = (a.charAt(i - 1) == b.charAt(j - 1))
+                        ? prev
+                        : 1 + Math.min(prev, Math.min(dp[j], dp[j - 1]));
+                prev = temp;
+            }
+        }
+        return dp[lb];
     }
 }

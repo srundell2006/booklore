@@ -30,6 +30,7 @@ export interface BookdropFile {
   fileSize: number;
   originalMetadata?: BookMetadata;
   fetchedMetadata?: BookMetadata;
+  matchScore?: number;
   createdAt: string;
   updatedAt: string;
   status: BookdropFileStatus;

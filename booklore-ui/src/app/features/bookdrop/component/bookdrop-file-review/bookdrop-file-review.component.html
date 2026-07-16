@@ -185,6 +185,20 @@
                 {{ file.file.fileName }}
               </div>
 
+              @if (file.file.matchScore != null) {
+                <div
+                  class="match-score"
+                  [pTooltip]="'Metadata match score: ' + file.file.matchScore + '%'"
+                  tooltipPosition="top"
+                  [ngClass]="{
+                    'score-high': file.file.matchScore >= 80,
+                    'score-mid': file.file.matchScore >= 50 && file.file.matchScore < 80,
+                    'score-low': file.file.matchScore < 50
+                  }">
+                  {{ file.file.matchScore }}%
+                </div>
+              }
+
               <div class="file-library">
                 <i
                   class="pi metadata-status"
