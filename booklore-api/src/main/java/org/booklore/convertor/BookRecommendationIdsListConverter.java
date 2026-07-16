@@ -8,6 +8,8 @@ import tools.jackson.core.JacksonException;
 import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
+import java.util.Comparator;
+import java.util.List;
 import java.util.Set;
 
 @Converter
@@ -23,7 +25,14 @@ public class BookRecommendationIdsListConverter implements AttributeConverter<Se
             return null;
         }
         try {
-            return objectMapper.writeValueAsString(recommendations);
+            // Sort by bookId before serializing so the JSON string is deterministic.
+            // Without this, HashSet iteration order varies between JVM invocations,
+            // causing Hibernate's dirty check to always see a "change" in similar_books_json
+            // and include it in every @DynamicUpdate — generating unnecessary lock contention.
+            List<BookRecommendationLite> sorted = recommendations.stream()
+                    .sorted(Comparator.comparingLong(BookRecommendationLite::getB))
+                    .toList();
+            return objectMapper.writeValueAsString(sorted);
         } catch (JacksonException e) {
             log.error("Failed to convert BookRecommendation set to JSON string: {}", recommendations, e);
             throw new RuntimeException("Error converting BookRecommendation list to JSON", e);
