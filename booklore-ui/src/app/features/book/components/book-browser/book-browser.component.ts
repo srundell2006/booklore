@@ -33,6 +33,7 @@ import {CoverScalePreferenceService} from './cover-scale-preference.service';
 import {BookSorter} from './sorting/BookSorter';
 import {BookDialogHelperService} from './book-dialog-helper.service';
 import {Checkbox} from 'primeng/checkbox';
+import {Skeleton} from 'primeng/skeleton';
 import {Popover} from 'primeng/popover';
 import {Slider} from 'primeng/slider';
 import {Divider} from 'primeng/divider';
@@ -76,7 +77,8 @@ export enum EntityType {
   imports: [
     Button, VirtualScrollerModule, BookCardComponent, AsyncPipe, ProgressSpinner, Menu, InputText, FormsModule,
     BookTableComponent, BookFilterComponent, Tooltip, NgClass, NgStyle, Popover,
-    Checkbox, Slider, Divider, MultiSelect, TieredMenu, BadgeModule, MultiSortPopoverComponent, TranslocoDirective
+    Checkbox, Slider, Divider, MultiSelect, TieredMenu, BadgeModule, MultiSortPopoverComponent, TranslocoDirective,
+    Skeleton
   ],
   providers: [SeriesCollapseFilter],
   animations: [
@@ -153,6 +155,7 @@ export class BookBrowserComponent implements OnInit, AfterViewInit, OnDestroy {
   screenWidth = typeof window !== 'undefined' ? window.innerWidth : 1024;
   mobileColumnCount = 3;
   selectedCount = 0;
+  readonly skeletonItems = Array.from({length: 16}, (_, i) => i);
 
   private readonly MOBILE_BREAKPOINT = 768;
   private readonly CARD_ASPECT_RATIO = 7 / 5;

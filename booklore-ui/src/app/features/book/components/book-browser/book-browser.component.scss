@@ -484,8 +484,7 @@
     top: 0;
     left: 0;
     z-index: 998;
-    width: 100%;
-    height: 100%;
+    width: 100%;  height: 100%;
     background-color: rgba(0, 0, 0, 0.4);
   }
 }
@@ -537,4 +536,35 @@
 // Book state container
 .book-state-wrapper {
   position: relative;
+}
+
+// Skeleton loading grid
+.skeleton-book-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(clamp(90px, 30vw, 160px), 1fr));
+  gap: 0.5rem;
+  padding: 0.5rem;
+
+  @media (min-width: 768px) {
+    grid-template-columns: repeat(auto-fill, minmax(130px, 1fr));
+    gap: 1.3rem;
+    padding: 1rem;
+  }
+}
+
+.skeleton-book-card {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+
+  ::ng-deep .skeleton-cover {
+    border-radius: 4px;
+    aspect-ratio: 5 / 7;
+    width: 100% !important;
+    height: auto !important;
+  }
+
+  ::ng-deep .skeleton-title {
+    border-radius: 2px;
+  }
 }
