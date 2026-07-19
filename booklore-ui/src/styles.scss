@@ -85,3 +85,23 @@ html {
   top: auto !important;
   bottom: 0;
 }
+
+// Mobile: hide native scrollbars to save space (momentum scrolling still works)
+@media (max-width: 768px) {
+  * {
+    &::-webkit-scrollbar {
+      width: 4px;
+      height: 4px;
+    }
+    scrollbar-width: none;
+  }
+}
+
+// Remove 300ms tap delay on mobile
+button,
+a,
+[role="button"],
+input[type="submit"],
+input[type="button"] {
+  touch-action: manipulation;
+}

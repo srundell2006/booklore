@@ -55,6 +55,8 @@
     border: 1px solid var(--border-color);
     width: 2.5rem;
     height: 2.5rem;
+    min-width: 44px;
+    min-height: 44px;
     transition: outline-color .2s, border-color .2s;
     border-radius: 6px;
     margin: 0;
@@ -95,7 +97,7 @@
     box-shadow: 0 4px 6px -1px rgb(0 0 0 / 0.1), 0 2px 4px -2px rgb(0 0 0 / 0.1);
 
     &.notification-box {
-      width: 30rem;
+      width: min(30rem, calc(100vw - 2rem));
       background-color: var(--card-background);
       border: 0.25px solid var(--primary-color);
       border-radius: 4px;

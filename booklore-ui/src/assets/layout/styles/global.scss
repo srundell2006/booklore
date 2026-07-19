@@ -130,3 +130,21 @@
     overflow-wrap: break-word;
   }
 }
+// =============================================================================
+// Mobile Overrides
+// =============================================================================
+
+@media (max-width: 480px) {
+  // Dialogs should use nearly full screen on very small phones
+  .p-dialog {
+    width: 98vw !important;
+    max-width: 98vw !important;
+    max-height: 92dvh !important;
+    margin: 0 !important;
+  }
+
+  .p-confirmdialog {
+    width: 95vw;
+    max-width: 95vw;
+  }
+}
