@@ -172,6 +172,23 @@
   visibility: visible;
 }
 
+@media (max-width: 767px) {
+  .info-btn,
+  .read-btn {
+    opacity: 1;
+    visibility: visible;
+  }
+
+  .cover-container::after {
+    opacity: 0.35;
+  }
+
+  .select-checkbox {
+    opacity: 1;
+    visibility: visible;
+  }
+}
+
 .cover-container.center-info-btn .info-btn {
   top: 50%;
   transform: translate(-50%, -50%);
