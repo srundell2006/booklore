@@ -422,7 +422,30 @@ $transition-normal: 200ms ease;
 @media (max-width: 600px) {
   .reader-navbar {
     padding: 0 8px;
-    height: 44px;
+    height: 52px;
+  }
+
+  .icon-btn {
+    min-width: 44px;
+    min-height: 44px;
+  }
+
+  .progress-section {
+    .progress-slider-wrapper {
+      .progress-slider {
+        height: 8px;
+
+        &::-webkit-slider-thumb {
+          width: 24px;
+          height: 24px;
+        }
+
+        &::-moz-range-thumb {
+          width: 24px;
+          height: 24px;
+        }
+      }
+    }
   }
 
   .location-popover {
