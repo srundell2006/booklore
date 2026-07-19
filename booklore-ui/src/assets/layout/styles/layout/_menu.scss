@@ -77,6 +77,13 @@
       padding: 0.45rem 0.3rem 0.45rem 0.6rem;
       border-radius: variables.$borderRadius;
       transition: background-color variables.$transitionDuration, box-shadow variables.$transitionDuration;
+      min-height: 2.5rem;
+
+      @media (max-width: 991px) {
+        min-height: 3rem;
+        padding-top: 0.65rem;
+        padding-bottom: 0.65rem;
+      }
 
       .layout-submenu-toggler {
         font-size: 75%;
