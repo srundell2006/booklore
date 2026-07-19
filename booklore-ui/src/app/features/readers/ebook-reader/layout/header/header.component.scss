@@ -129,10 +129,13 @@
 @media (max-width: 600px) {
   .reader-header {
     padding: 0 2px;
+    height: 44px;
 
     .icon-btn {
       padding: 10px;
       margin-right: 2px;
+      min-width: 44px;
+      min-height: 44px;
     }
 
     .desktop-only {
