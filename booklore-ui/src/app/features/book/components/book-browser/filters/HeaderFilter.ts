@@ -12,7 +12,7 @@ export class HeaderFilter implements BookFilter {
     const normalize = (str: string): string => {
       if (!str) return '';
       // Normalize Unicode combining characters (e.g., é -> e)
-      let s = str.normalize('NFD').replace(/[\u0300-\u036f]/g, '');
+      let s = str.normalize('NFD').replace(/[̀-ͯ]/g, '');
       s = s.replace(/ø/gi, 'o')
            .replace(/ł/gi, 'l')
            .replace(/æ/gi, 'ae')
@@ -31,7 +31,7 @@ export class HeaderFilter implements BookFilter {
           return of(bookState);
         }
         return of(normalizedTerm).pipe(
-          debounceTime(500),
+          debounceTime(300),
           map(nTerm => {
             const filteredBooks = bookState.books?.filter(book => {
               const title = book.metadata?.title || '';
