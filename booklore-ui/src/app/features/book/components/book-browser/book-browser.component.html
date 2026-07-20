@@ -264,13 +264,8 @@
     @if (bookState$ | async; as bookState) {
       <div>
         @if (!bookState?.loaded && !bookState?.error) {
-          <div class="skeleton-book-grid">
-            @for (i of skeletonItems; track i) {
-              <div class="skeleton-book-card">
-                <p-skeleton styleClass="skeleton-cover"></p-skeleton>
-                <p-skeleton height="0.875rem" width="75%" styleClass="skeleton-title"></p-skeleton>
-              </div>
-            }
+          <div>
+            <p-progressSpinner></p-progressSpinner>
           </div>
         }
         <div class="book-state-wrapper">
@@ -299,11 +294,12 @@
               ></app-book-table>
             }
             @if (currentViewMode === 'grid') {
-              <virtual-scroller class="virtual-scroller" #scroll [items]="books">
+              <virtual-scroller class="virtual-scroller" #scroll [items]="books" [childWidth]="currentCardSize.width" [childHeight]="defaultCardHeight" [bufferAmount]="3">
                 <div
                   class="grid"
                   #container
-                  [ngStyle]="{'grid-template-columns': 'repeat(auto-fill, minmax(' + gridColumnMinWidth + ', 1fr))'}">                  @for (book of scroll.viewPortItems; let i = $index; track book.id) {
+                  [ngStyle]="{'grid-template-columns': 'repeat(auto-fill, minmax(' + gridColumnMinWidth + ', 1fr))'}">
+                  @for (book of scroll.viewPortItems; let i = $index; track book.id) {
                     <div
                       class="virtual-scroller-item"
                       [ngStyle]="{width: currentCardSize.width + 'px', height: getCardHeight(book) + 'px'}">
