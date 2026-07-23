@@ -32,6 +32,7 @@ import org.booklore.service.fileprocessor.BookFileProcessor;
 import org.booklore.service.fileprocessor.BookFileProcessorRegistry;
 import org.booklore.service.kobo.KoboAutoShelfService;
 import org.booklore.service.metadata.MetadataRefreshService;
+import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
 import org.booklore.service.monitoring.MonitoringRegistrationService;
 import org.booklore.util.FileUtils;
 import org.springframework.core.io.FileSystemResource;
@@ -67,6 +68,7 @@ public class BookDropService {
     private final MetadataRefreshService metadataRefreshService;
     private final BookdropNotificationService bookdropNotificationService;
     private final BookFileProcessorRegistry processorRegistry;
+    private final SidecarMetadataWriter sidecarMetadataWriter;
     private final AppProperties appProperties;
     private final BookdropFileMapper mapper;
     private final ObjectMapper objectMapper;
@@ -402,7 +404,14 @@ public class BookDropService {
 
         if (targetFile.exists()) {
             log.warn("Target file already exists: id={}, name={}, target={}", bookdropFile.getId(), bookdropFile.getFileName(), target);
-            return failureResult(targetFile.getName(), "File already exists in the library '" + library.getName() + "'");
+            try {
+                Files.deleteIfExists(source);
+                log.info("Deleted duplicate bookdrop file '{}' (already exists in library as '{}')", source, target);
+            } catch (IOException e) {
+                log.warn("Failed to delete duplicate bookdrop file '{}': {}", source, e.getMessage());
+            }
+            cleanupBookdropData(bookdropFile);
+            return failureResult(targetFile.getName(), "Duplicate removed from bookdrop: file already exists in the library '" + library.getName() + "'");
         }
 
         return performFileMove(bookdropFile, source, target, library, path, metadata);
@@ -482,6 +491,18 @@ public class BookDropService {
                 .build();
 
         metadataRefreshService.updateBookMetadata(context);
+
+        // Scan-time sidecar write is deferred for bookdrop imports; the metadata
+        // update above writes the authoritative sidecar when changes exist. If it
+        // skipped (no changes), make sure a sidecar still gets written once.
+        if (sidecarMetadataWriter.isWriteOnScanEnabled() || sidecarMetadataWriter.isWriteOnUpdateEnabled()) {
+            try {
+                sidecarMetadataWriter.writeSidecarMetadataIfMissing(bookEntity);
+            } catch (Exception e) {
+                log.warn("Failed to write sidecar metadata for book ID {}: {}", bookEntity.getId(), e.getMessage());
+            }
+        }
+
         koboAutoShelfService.autoAddBookToKoboShelves(bookEntity.getId());
 
         cleanupBookdropData(bookdropFile);
@@ -552,6 +573,7 @@ public class BookDropService {
                 .fileSubPath(FileUtils.getRelativeSubPath(path.getPath(), file.toPath()))
                 .bookFileType(type)
                 .fileName(fileName)
+                .deferSidecarWrite(true)
                 .build();
 
         BookFileProcessor processor = processorRegistry.getProcessorOrThrow(type);

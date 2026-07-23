@@ -16,6 +16,14 @@ import java.nio.file.Paths;
 @NoArgsConstructor
 @AllArgsConstructor
 public class LibraryFile {
+
+    /**
+     * When true, skips the scan-time sidecar write in AbstractFileProcessor.
+     * Used by bookdrop imports where a metadata update (and authoritative
+     * sidecar write) immediately follows file processing.
+     */
+    @Builder.Default
+    private boolean deferSidecarWrite = false;
     private LibraryEntity libraryEntity;
     private LibraryPathEntity libraryPathEntity;
     private String fileSubPath;

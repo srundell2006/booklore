@@ -336,7 +336,7 @@ public class BookMetadataEntity {
         this.language = trimOrNull(this.language);
         this.isbn13 = trimOrNull(this.isbn13);
         this.isbn10 = trimOrNull(this.isbn10);
-        this.asin = trimOrNull(this.asin);
+        this.asin = maxLen(trimOrNull(this.asin), 20); // column is VARCHAR(20); bad MOBI EXTH data can exceed it
         this.goodreadsId = trimOrNull(this.goodreadsId);
         this.hardcoverId = trimOrNull(this.hardcoverId);
         this.hardcoverBookId = trimOrNull(this.hardcoverBookId);
@@ -347,6 +347,13 @@ public class BookMetadataEntity {
         this.audibleId = trimOrNull(this.audibleId);
         this.contentRating = trimOrNull(this.contentRating);
         this.narrator = trimOrNull(this.narrator);
+    }
+
+    private static String maxLen(String value, int max) {
+        if (value == null || value.length() <= max) {
+            return value;
+        }
+        return value.substring(0, max).trim();
     }
 
     private static String trimOrNull(String value) {

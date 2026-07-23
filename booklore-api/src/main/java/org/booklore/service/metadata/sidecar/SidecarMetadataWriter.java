@@ -40,6 +40,22 @@ public class SidecarMetadataWriter {
                 .build();
     }
 
+    /**
+     * Writes the sidecar only when no sidecar json exists yet for the book.
+     * Used by bookdrop imports as a safety net when the metadata-update step
+     * detected no changes and therefore skipped its own sidecar write.
+     */
+    public void writeSidecarMetadataIfMissing(BookEntity book) {
+        Path bookPath = book.getFullFilePath();
+        if (bookPath == null) return;
+        try {
+            if (java.nio.file.Files.exists(getSidecarPath(bookPath))) return;
+        } catch (Exception ignored) {
+            // fall through and attempt the write
+        }
+        writeSidecarMetadata(book);
+    }
+
     public void writeSidecarMetadata(BookEntity book) {
         if (!appProperties.isLocalStorage()) {
             return;

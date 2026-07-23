@@ -70,7 +70,7 @@ public abstract class AbstractFileProcessor implements BookFileProcessor {
         entity.setMetadataMatchScore(metadataMatchService.calculateMatchScore(entity));
         bookCreatorService.saveConnections(entity);
 
-        if (sidecarMetadataWriter.isWriteOnScanEnabled()) {
+        if (!libraryFile.isDeferSidecarWrite() && sidecarMetadataWriter.isWriteOnScanEnabled()) {
             try {
                 sidecarMetadataWriter.writeSidecarMetadata(entity);
             } catch (Exception e) {
