@@ -34,10 +34,11 @@ public class EmailProviderV2Service {
     public List<EmailProviderV2> getEmailProviders() {
         BookLoreUser user = authService.getAuthenticatedUser();
         List<EmailProviderV2Entity> userProviders = repository.findAllByUserId(user.getId());
-        if (!user.getPermissions().isAdmin()) {
-            List<EmailProviderV2Entity> sharedProviders = repository.findAllBySharedTrueAndAdmin();
-            userProviders.addAll(sharedProviders);
-        }
+        // Shared providers are visible to everyone, including other admins who
+        // don't own them. Exclude the user's own providers to avoid duplicates.
+        repository.findAllBySharedTrueAndAdmin().stream()
+                .filter(p -> !p.getUserId().equals(user.getId()))
+                .forEach(userProviders::add);
 
         Long defaultProviderId = getDefaultProviderIdForUser(user.getId());
         return userProviders.stream()
@@ -143,7 +144,9 @@ public class EmailProviderV2Service {
 
     private List<EmailProviderV2Entity> getAccessibleProvidersForUser(Long userId) {
         List<EmailProviderV2Entity> providers = repository.findAllByUserId(userId);
-        providers.addAll(repository.findAllBySharedTrueAndAdmin());
+        repository.findAllBySharedTrueAndAdmin().stream()
+                .filter(p -> !p.getUserId().equals(userId))
+                .forEach(providers::add);
         return providers;
     }
 }
