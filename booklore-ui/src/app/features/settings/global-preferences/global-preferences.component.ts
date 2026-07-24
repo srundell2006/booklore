@@ -39,7 +39,7 @@ export class GlobalPreferencesComponent implements OnInit {
     similarBookRecommendation: false
   };
 
-  supportButtonAnimation = localStorage.getItem(SUPPORT_ANIMATION_KEY) !== 'false';
+  supportButtonAnimation = localStorage.getItem(SUPPORT_ANIMATION_KEY) === 'true';
 
   coverCroppingSettings: CoverCroppingSettings = {
     verticalCroppingEnabled: false,

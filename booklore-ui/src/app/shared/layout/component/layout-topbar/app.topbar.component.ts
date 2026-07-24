@@ -71,7 +71,7 @@ export class AppTopBarComponent implements OnDestroy {
   showPulse = false;
   hasAnyTasks = false;
   hasPendingBookdropFiles = false;
-  supportAnimationEnabled = localStorage.getItem(SUPPORT_ANIMATION_KEY) !== 'false';
+  supportAnimationEnabled = localStorage.getItem(SUPPORT_ANIMATION_KEY) === 'true';
 
   private eventTimer: number | undefined;
   private destroy$ = new Subject<void>();
@@ -150,7 +150,7 @@ export class AppTopBarComponent implements OnDestroy {
 
   private onStorageChange(event: StorageEvent): void {
     if (event.key === SUPPORT_ANIMATION_KEY) {
-      this.supportAnimationEnabled = event.newValue !== 'false';
+      this.supportAnimationEnabled = event.newValue === 'true';
     }
   }
 
