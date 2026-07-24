@@ -192,6 +192,7 @@ export interface AppSettings {
   autoBookSearch: boolean;
   similarBookRecommendation: boolean;
   defaultMetadataRefreshOptions: MetadataRefreshOptions;
+  bookAcquisitionSettings?: unknown;
   libraryMetadataRefreshOptions: MetadataRefreshOptions[];
   uploadPattern: string;
   opdsServerEnabled: boolean;

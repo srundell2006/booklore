@@ -81,6 +81,15 @@
             </li>
           }
         }
+        @if (userService.userState$ | async; as userState) {
+          @if (userState.user?.permissions?.admin) {
+            <li>
+              <a class="topbar-item" (click)="navigateToWantedBooks()" pTooltip="Wanted Books" tooltipPosition="bottom">
+                <i class="pi pi-flag topbar-icon"></i>
+              </a>
+            </li>
+          }
+        }
         <li>
           <a class="topbar-item" (click)="navigateToSettings()" [pTooltip]="t('settings')" tooltipPosition="bottom">
             <i class="pi pi-cog topbar-icon"></i>

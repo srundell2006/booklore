@@ -33,6 +33,7 @@ import org.booklore.service.fileprocessor.BookFileProcessorRegistry;
 import org.booklore.service.kobo.KoboAutoShelfService;
 import org.booklore.service.metadata.MetadataRefreshService;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
+import org.booklore.service.acquisition.BookAcquisitionService;
 import org.booklore.service.monitoring.MonitoringRegistrationService;
 import org.booklore.util.FileUtils;
 import org.springframework.core.io.FileSystemResource;
@@ -69,6 +70,7 @@ public class BookDropService {
     private final BookdropNotificationService bookdropNotificationService;
     private final BookFileProcessorRegistry processorRegistry;
     private final SidecarMetadataWriter sidecarMetadataWriter;
+    private final BookAcquisitionService bookAcquisitionService;
     private final AppProperties appProperties;
     private final BookdropFileMapper mapper;
     private final ObjectMapper objectMapper;
@@ -504,6 +506,13 @@ public class BookDropService {
         }
 
         koboAutoShelfService.autoAddBookToKoboShelves(bookEntity.getId());
+
+        // If this import satisfies a wanted-list entry, mark it IMPORTED
+        try {
+            bookAcquisitionService.markImportedIfWanted(bookEntity);
+        } catch (Exception e) {
+            log.warn("Wanted-list matching failed for imported book {}: {}", bookEntity.getId(), e.getMessage());
+        }
 
         cleanupBookdropData(bookdropFile);
 

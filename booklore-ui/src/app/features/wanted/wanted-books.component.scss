@@ -1,0 +1,69 @@
+.wanted-container {
+  padding: 1.25rem;
+
+  .header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 1rem;
+
+    h2 { margin: 0; }
+    .header-actions { display: flex; gap: 0.5rem; }
+  }
+
+  .settings-panel {
+    border: 1px solid var(--p-content-border-color, #444);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-bottom: 1.25rem;
+
+    h3 { margin-top: 0; }
+
+    .settings-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(280px, 1fr));
+      gap: 1rem;
+
+      .wide { grid-column: 1 / -1; }
+
+      .setting-group h4 { margin: 0 0 0.5rem 0; }
+
+      .setting-item {
+        display: flex;
+        align-items: center;
+        gap: 0.5rem;
+        margin-bottom: 0.5rem;
+
+        label { min-width: 110px; font-size: 0.9rem; }
+        input { flex: 1; }
+      }
+    }
+
+    .settings-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.75rem;
+      margin-top: 0.75rem;
+
+      .test-results { display: flex; gap: 0.5rem; }
+    }
+  }
+
+  .release-cell {
+    max-width: 420px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  .warn-icon { color: var(--p-orange-400, orange); margin-left: 0.4rem; }
+  .empty-message { text-align: center; padding: 1.5rem; opacity: 0.7; }
+}
+
+.dialog-form {
+  display: flex;
+  flex-direction: column;
+  gap: 0.4rem;
+
+  label { font-size: 0.85rem; opacity: 0.85; margin-top: 0.4rem; }
+}

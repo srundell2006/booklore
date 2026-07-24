@@ -74,6 +74,14 @@ public enum TaskType {
             false,
             "Scan EPUBs for ISBN",
             "Scans the content pages of EPUB files (title page, copyright page, etc.) to find and populate missing ISBN numbers."
+    ),
+    WANTED_BOOK_SEARCH(
+            false,
+            true,
+            true,
+            false,
+            "Wanted Book Search",
+            "Searches your configured indexers (via Prowlarr) for books on the wanted list and automatically sends the best matching release to your download client."
     );
 
     @Getter

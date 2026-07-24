@@ -33,6 +33,7 @@ public class AppSettings {
     private MetadataPersistenceSettings metadataPersistenceSettings;
     private MetadataPublicReviewsSettings metadataPublicReviewsSettings;
     private KoboSettings koboSettings;
+    private BookAcquisitionSettings bookAcquisitionSettings;
     private CoverCroppingSettings coverCroppingSettings;
     private MetadataProviderSpecificFields metadataProviderSpecificFields;
     private Integer oidcSessionDurationHours;

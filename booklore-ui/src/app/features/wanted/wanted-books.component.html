@@ -1,0 +1,150 @@
+<div class="wanted-container">
+  <div class="header-row">
+    <h2>Wanted Books</h2>
+    <div class="header-actions">
+      <p-button label="Add Book" icon="pi pi-plus" size="small" (onClick)="openAdd()"></p-button>
+      <p-button label="Search All Now" icon="pi pi-search" size="small" severity="secondary" outlined="true"
+                (onClick)="searchAll()" pTooltip="Search indexers for every wanted book and auto-grab the best releases"></p-button>
+      <p-button label="Settings" icon="pi pi-cog" size="small" severity="secondary" outlined="true"
+                (onClick)="settingsVisible = !settingsVisible"></p-button>
+    </div>
+  </div>
+
+  @if (settingsVisible) {
+    <div class="settings-panel">
+      <h3>Acquisition Settings</h3>
+      <div class="settings-grid">
+        <div class="setting-item wide">
+          <label><p-checkbox [(ngModel)]="settings.enabled" [binary]="true"></p-checkbox> Enable automated acquisition (scheduled search + auto-grab)</label>
+        </div>
+
+        <div class="setting-group">
+          <h4>Prowlarr</h4>
+          <div class="setting-item"><label>URL</label><input pInputText [(ngModel)]="settings.prowlarrUrl" placeholder="http://prowlarr:9696"/></div>
+          <div class="setting-item"><label>API Key</label><input pInputText type="password" [(ngModel)]="settings.prowlarrApiKey"/></div>
+          <div class="setting-item"><label>Categories</label><input pInputText [(ngModel)]="settings.searchCategories" pTooltip="Newznab categories: 7000/7020 books, 3030 audiobooks"/></div>
+        </div>
+
+        <div class="setting-group">
+          <h4>SABnzbd (usenet)</h4>
+          <div class="setting-item"><label>URL</label><input pInputText [(ngModel)]="settings.sabnzbdUrl" placeholder="http://sabnzbd:8080"/></div>
+          <div class="setting-item"><label>API Key</label><input pInputText type="password" [(ngModel)]="settings.sabnzbdApiKey"/></div>
+          <div class="setting-item"><label>Category</label><input pInputText [(ngModel)]="settings.sabnzbdCategory" pTooltip="Point this category's completed folder at your bookdrop directory"/></div>
+        </div>
+
+        <div class="setting-group">
+          <h4>qBittorrent (torrents)</h4>
+          <div class="setting-item"><label>URL</label><input pInputText [(ngModel)]="settings.qbittorrentUrl" placeholder="http://qbittorrent:8080"/></div>
+          <div class="setting-item"><label>Username</label><input pInputText [(ngModel)]="settings.qbittorrentUsername"/></div>
+          <div class="setting-item"><label>Password</label><input pInputText type="password" [(ngModel)]="settings.qbittorrentPassword"/></div>
+          <div class="setting-item"><label>Category</label><input pInputText [(ngModel)]="settings.qbittorrentCategory" pTooltip="Point this category's save path at your bookdrop directory"/></div>
+        </div>
+
+        <div class="setting-group">
+          <h4>Automation</h4>
+          <div class="setting-item"><label><p-checkbox [(ngModel)]="settings.autoGrab" [binary]="true"></p-checkbox> Auto-grab best release</label></div>
+          <div class="setting-item"><label>Min score (0-100)</label><p-inputnumber [(ngModel)]="settings.autoGrabMinScore" [min]="0" [max]="100" size="small"></p-inputnumber></div>
+          <div class="setting-item"><label>Format priority</label><input pInputText [(ngModel)]="settings.formatPriority"/></div>
+          <div class="setting-item"><label><p-checkbox [(ngModel)]="settings.preferUsenet" [binary]="true"></p-checkbox> Prefer usenet over torrents</label></div>
+          <div class="setting-item"><label>Max size (MB)</label><p-inputnumber [(ngModel)]="settings.maxSizeMb" [min]="1" size="small"></p-inputnumber></div>
+        </div>
+      </div>
+
+      <div class="settings-actions">
+        <p-button label="Test Connections" icon="pi pi-bolt" size="small" severity="secondary" outlined="true"
+                  [loading]="testing" (onClick)="testConnections()"></p-button>
+        @if (testResult) {
+          <span class="test-results">
+            <p-tag [severity]="testResult.prowlarr ? 'success' : 'danger'" [value]="'Prowlarr: ' + (testResult.prowlarr ? 'OK' : 'Failed')"></p-tag>
+            <p-tag [severity]="testResult.sabnzbd ? 'success' : 'danger'" [value]="'SABnzbd: ' + (testResult.sabnzbd ? 'OK' : 'Failed')"></p-tag>
+            <p-tag [severity]="testResult.qbittorrent ? 'success' : 'danger'" [value]="'qBittorrent: ' + (testResult.qbittorrent ? 'OK' : 'Failed')"></p-tag>
+          </span>
+        }
+        <p-button label="Save Settings" icon="pi pi-save" size="small" severity="success" outlined="true"
+                  [loading]="savingSettings" (onClick)="saveSettings()"></p-button>
+      </div>
+    </div>
+  }
+
+  <p-table [value]="books" [loading]="loading" [paginator]="books.length > 25" [rows]="25" dataKey="id" size="small">
+    <ng-template #header>
+      <tr>
+        <th>Title</th>
+        <th>Author</th>
+        <th>Status</th>
+        <th>Last Search</th>
+        <th>Grabbed Release</th>
+        <th style="width: 180px">Actions</th>
+      </tr>
+    </ng-template>
+    <ng-template #body let-book>
+      <tr>
+        <td>{{ book.title }}</td>
+        <td>{{ book.author || '—' }}</td>
+        <td>
+          <p-tag [severity]="statusSeverity(book.status)" [value]="book.status"></p-tag>
+          @if (book.failureReason) {
+            <i class="pi pi-exclamation-triangle warn-icon" [pTooltip]="book.failureReason"></i>
+          }
+        </td>
+        <td>{{ book.lastSearchAt ? (book.lastSearchAt | date:'MMM d, HH:mm') : 'never' }} ({{ book.searchAttempts }})</td>
+        <td class="release-cell" [pTooltip]="book.grabbedReleaseTitle">{{ book.grabbedReleaseTitle || '—' }}</td>
+        <td>
+          <p-button icon="pi pi-search" size="small" text="true" pTooltip="Search releases" (onClick)="openReleases(book)"></p-button>
+          @if (book.status !== 'WANTED') {
+            <p-button icon="pi pi-refresh" size="small" text="true" severity="secondary" pTooltip="Reset to wanted" (onClick)="reset(book)"></p-button>
+          }
+          <p-button icon="pi pi-trash" size="small" text="true" severity="danger" pTooltip="Remove" (onClick)="remove(book)"></p-button>
+        </td>
+      </tr>
+    </ng-template>
+    <ng-template #emptymessage>
+      <tr><td colspan="6" class="empty-message">No wanted books yet. Add one to start hunting.</td></tr>
+    </ng-template>
+  </p-table>
+</div>
+
+<p-dialog header="Add Wanted Book" [(visible)]="addDialogVisible" [modal]="true" [style]="{width: '420px'}">
+  <div class="dialog-form">
+    <label>Title *</label>
+    <input pInputText [(ngModel)]="newBook.title" autofocus/>
+    <label>Author</label>
+    <input pInputText [(ngModel)]="newBook.author"/>
+    <label>ISBN-13</label>
+    <input pInputText [(ngModel)]="newBook.isbn13"/>
+  </div>
+  <ng-template #footer>
+    <p-button label="Cancel" severity="secondary" text="true" (onClick)="addDialogVisible = false"></p-button>
+    <p-button label="Add" icon="pi pi-plus" (onClick)="saveNew()"></p-button>
+  </ng-template>
+</p-dialog>
+
+<p-dialog [header]="'Releases: ' + (activeBook?.title || '')" [(visible)]="releaseDialogVisible" [modal]="true" [style]="{width: '80vw'}">
+  <p-table [value]="releases" [loading]="releasesLoading" size="small" [paginator]="releases.length > 15" [rows]="15">
+    <ng-template #header>
+      <tr>
+        <th>Score</th>
+        <th>Title</th>
+        <th>Indexer</th>
+        <th>Protocol</th>
+        <th>Size</th>
+        <th>Seeders</th>
+        <th style="width: 90px"></th>
+      </tr>
+    </ng-template>
+    <ng-template #body let-release>
+      <tr>
+        <td><p-tag [severity]="(release.score ?? 0) >= 60 ? 'success' : (release.score ?? 0) >= 35 ? 'warn' : 'danger'" [value]="'' + (release.score ?? 0)"></p-tag></td>
+        <td class="release-cell" [pTooltip]="release.title">{{ release.title }}</td>
+        <td>{{ release.indexer }}</td>
+        <td>{{ release.protocol }}</td>
+        <td>{{ formatSize(release.size) }}</td>
+        <td>{{ release.protocol === 'torrent' ? (release.seeders ?? 0) : '—' }}</td>
+        <td><p-button label="Grab" icon="pi pi-download" size="small" (onClick)="grab(release)"></p-button></td>
+      </tr>
+    </ng-template>
+    <ng-template #emptymessage>
+      <tr><td colspan="7" class="empty-message">{{ releasesLoading ? 'Searching indexers…' : 'No releases found.' }}</td></tr>
+    </ng-template>
+  </p-table>
+</p-dialog>

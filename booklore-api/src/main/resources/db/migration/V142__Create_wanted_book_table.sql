@@ -1,0 +1,21 @@
+CREATE TABLE IF NOT EXISTS wanted_book (
+    id BIGINT AUTO_INCREMENT PRIMARY KEY,
+    title VARCHAR(512) NOT NULL,
+    author VARCHAR(512),
+    isbn13 VARCHAR(20),
+    asin VARCHAR(20),
+    status VARCHAR(20) NOT NULL DEFAULT 'WANTED',
+    preferred_format VARCHAR(20),
+    added_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+    last_search_at TIMESTAMP NULL,
+    grabbed_at TIMESTAMP NULL,
+    grabbed_release_title VARCHAR(1024),
+    grabbed_indexer VARCHAR(255),
+    download_client VARCHAR(20),
+    download_id VARCHAR(255),
+    failure_reason VARCHAR(1024),
+    search_attempts INT NOT NULL DEFAULT 0,
+    imported_book_id BIGINT NULL,
+    added_by_user_id BIGINT NULL,
+    KEY idx_wanted_book_status (status)
+);
