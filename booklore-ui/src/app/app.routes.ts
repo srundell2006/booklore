@@ -45,6 +45,8 @@ export const routes: Routes = [
       {path: 'book/:bookId', loadComponent: () => import('./features/metadata/component/book-metadata-center/book-metadata-center.component').then(m => m.BookMetadataCenterComponent), canActivate: [AuthGuard]},
       {path: 'bookdrop', loadComponent: () => import('./features/bookdrop/component/bookdrop-file-review/bookdrop-file-review.component').then(m => m.BookdropFileReviewComponent), canActivate: [BookdropGuard]},
       {path: 'wanted-books', loadComponent: () => import('./features/wanted/wanted-books.component').then(m => m.WantedBooksComponent), canActivate: [AuthGuard]},
+      {path: 'add-book', loadComponent: () => import('./features/wanted/add-book-search.component').then(m => m.AddBookSearchComponent), canActivate: [AuthGuard]},
+      {path: 'download-queue', loadComponent: () => import('./features/wanted/download-queue.component').then(m => m.DownloadQueueComponent), canActivate: [AuthGuard]},
       {path: 'metadata-manager', loadComponent: () => import('./features/metadata/component/metadata-manager/metadata-manager.component').then(m => m.MetadataManagerComponent), canActivate: [EditMetadataGuard]},
       {path: 'library-stats', loadComponent: () => import('./features/stats/component/library-stats/library-stats.component').then(m => m.LibraryStatsComponent), canActivate: [LibraryStatsGuard]},
       {path: 'reading-stats', loadComponent: () => import('./features/stats/component/user-stats/user-stats.component').then(m => m.UserStatsComponent), canActivate: [UserStatsGuard]},

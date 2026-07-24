@@ -191,6 +191,14 @@ export class AppTopBarComponent implements OnDestroy {
     this.router.navigate(['/wanted-books']);
   }
 
+  navigateToAddBook() {
+    this.router.navigate(['/add-book']);
+  }
+
+  navigateToDownloadQueue() {
+    this.router.navigate(['/download-queue']);
+  }
+
   navigateToStats() {
     this.router.navigate(['/library-stats']);
   }

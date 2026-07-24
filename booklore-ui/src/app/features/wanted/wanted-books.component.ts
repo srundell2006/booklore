@@ -14,6 +14,7 @@ import {WantedBookService} from './wanted-book.service';
 import {BookAcquisitionSettings, ConnectionTestResult, ProwlarrRelease, WantedBook} from './wanted-book.model';
 import {AppSettingsService} from '../../shared/service/app-settings.service';
 import {filter, take} from 'rxjs/operators';
+import {Router} from '@angular/router';
 
 @Component({
   selector: 'app-wanted-books',
@@ -26,6 +27,7 @@ export class WantedBooksComponent implements OnInit {
   private wantedBookService = inject(WantedBookService);
   private appSettingsService = inject(AppSettingsService);
   private messageService = inject(MessageService);
+  private router = inject(Router);
 
   books: WantedBook[] = [];
   loading = false;
@@ -72,6 +74,14 @@ export class WantedBooksComponent implements OnInit {
         this.toast('error', 'Failed to load wanted books');
       }
     });
+  }
+
+  goToSearch(): void {
+    this.router.navigate(['/add-book']);
+  }
+
+  goToQueue(): void {
+    this.router.navigate(['/download-queue']);
   }
 
   openAdd(): void {

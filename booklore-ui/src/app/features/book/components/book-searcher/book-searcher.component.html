@@ -77,6 +77,13 @@
           <span>{{ t('noResults') }}</span>
         </div>
       }
+
+      @if (canLookupOnline && searchQuery.trim().length >= 2 && !isLoading) {
+        <div class="search-dropdown-item lookup-online" (click)="searchOnline()">
+          <i class="pi pi-globe"></i>
+          <span>Search online for "{{ searchQuery | slice: 0:40 }}"</span>
+        </div>
+      }
     </div>
   }
 </div>

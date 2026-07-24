@@ -1,0 +1,71 @@
+<div class="add-book-container">
+  <div class="header-row">
+    <div>
+      <h2>Add New Book</h2>
+      <p class="subtitle">Search metadata providers and add books to your wanted list.</p>
+    </div>
+    <p-button label="Wanted List" icon="pi pi-flag" size="small" severity="secondary" outlined="true"
+              (onClick)="goToWanted()"></p-button>
+  </div>
+
+  <div class="search-row">
+    <span class="search-wrapper">
+      <i class="pi pi-search search-icon"></i>
+      <input pInputText class="search-input" [(ngModel)]="query"
+             (ngModelChange)="onQueryChange($event)"
+             placeholder="Start typing a title or author…" autofocus/>
+      @if (searching) {
+        <p-progressSpinner styleClass="search-spinner" strokeWidth="4"></p-progressSpinner>
+      }
+    </span>
+  </div>
+
+  @if (!searching && searched && results.length === 0) {
+    <div class="empty-state">
+      <i class="pi pi-book empty-icon"></i>
+      <p>No books found for "{{ query }}".</p>
+      <p class="hint">Try a different spelling, or include the author's name.</p>
+    </div>
+  }
+
+  @if (!searched && !searching) {
+    <div class="empty-state">
+      <i class="pi pi-search empty-icon"></i>
+      <p>Type at least two characters to search.</p>
+    </div>
+  }
+
+  <div class="results-grid">
+    @for (result of results; track key(result)) {
+      <div class="result-card" [class.in-library]="result.inLibrary">
+        <div class="cover-wrap">
+          @if (result.thumbnailUrl) {
+            <img [src]="result.thumbnailUrl" [alt]="result.title" class="cover" loading="lazy"/>
+          } @else {
+            <div class="cover placeholder"><i class="pi pi-book"></i></div>
+          }
+        </div>
+        <div class="details">
+          <div class="title-line" [pTooltip]="result.title">{{ result.title }}</div>
+          <div class="author-line">{{ authorLine(result) }}</div>
+          <div class="meta-line">
+            @if (result.publishedYear) { <span>{{ result.publishedYear }}</span> }
+            @if (result.provider) { <span class="provider">{{ result.provider }}</span> }
+          </div>
+
+          <div class="action-row">
+            @if (result.inLibrary) {
+              <p-tag severity="success" value="In Library" icon="pi pi-check"></p-tag>
+              <p-button label="View" size="small" text="true" (onClick)="openBook(result)"></p-button>
+            } @else if (result.alreadyWanted) {
+              <p-tag severity="info" value="On Wanted List" icon="pi pi-flag"></p-tag>
+            } @else {
+              <p-button label="Add" icon="pi pi-plus" size="small"
+                        [loading]="isAdding(result)" (onClick)="add(result)"></p-button>
+            }
+          </div>
+        </div>
+      </div>
+    }
+  </div>
+</div>

@@ -112,6 +112,11 @@ public class BookMetadataService {
         return null;
     }
 
+    /** Public accessor for the configured provider chain (used by book lookup). */
+    public List<MetadataProvider> getConfiguredProviderChain() {
+        return deriveProviderChainFromSettings();
+    }
+
     private List<MetadataProvider> deriveProviderChainFromSettings() {
         try {
             MetadataRefreshOptions options = appSettingService.getAppSettings().getDefaultMetadataRefreshOptions();

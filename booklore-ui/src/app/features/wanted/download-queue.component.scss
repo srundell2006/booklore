@@ -1,0 +1,50 @@
+.queue-container {
+  padding: 1.25rem;
+
+  .header-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    margin-bottom: 1rem;
+
+    h2 { margin: 0; }
+    .subtitle {
+      margin: 0.25rem 0 0 0;
+      opacity: 0.7;
+      font-size: 0.9rem;
+      .updated { opacity: 0.75; }
+    }
+
+    .header-actions {
+      display: flex;
+      align-items: center;
+      gap: 0.85rem;
+
+      .auto-refresh {
+        display: flex;
+        align-items: center;
+        gap: 0.4rem;
+        font-size: 0.88rem;
+        cursor: pointer;
+      }
+    }
+  }
+
+  .name-cell {
+    max-width: 420px;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+  }
+
+  ::ng-deep .queue-progress {
+    height: 1.1rem;
+    .p-progressbar-label { font-size: 0.75rem; }
+  }
+
+  .empty-message {
+    text-align: center;
+    padding: 2rem;
+    opacity: 0.7;
+  }
+}

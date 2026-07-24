@@ -12,10 +12,15 @@ import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
 import java.nio.charset.StandardCharsets;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 @Slf4j
 @Service
+@lombok.RequiredArgsConstructor
 public class QbittorrentClient {
+
+    private final tools.jackson.databind.ObjectMapper objectMapper;
 
     /**
      * Adds a torrent by magnet/URL. Returns true on success.
@@ -46,6 +51,81 @@ public class QbittorrentClient {
             return false;
         } catch (Exception e) {
             log.error("qBittorrent add error: {}", e.getMessage());
+            return false;
+        }
+    }
+
+    /** Reads active torrents and normalizes them. */
+    public List<DownloadQueueItem> getQueue(BookAcquisitionSettings settings) {
+        List<DownloadQueueItem> items = new ArrayList<>();
+        HttpClient client = newClient();
+        if (!ensureAccess(client, settings)) {
+            return items;
+        }
+        try {
+            HttpResponse<String> response = client.send(HttpRequest.newBuilder()
+                            .uri(URI.create(trim(settings.getQbittorrentUrl()) + "/api/v2/torrents/info"))
+                            .header("Referer", trim(settings.getQbittorrentUrl()))
+                            .timeout(Duration.ofSeconds(20))
+                            .GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            if (!isSuccess(response.statusCode())) {
+                log.warn("qBittorrent queue read failed. HTTP {}", response.statusCode());
+                return items;
+            }
+            for (tools.jackson.databind.JsonNode torrent : objectMapper.readTree(response.body())) {
+                double ratio = torrent.path("progress").asDouble(0);
+                long eta = torrent.path("eta").asLong(0);
+                items.add(DownloadQueueItem.builder()
+                        .id(torrent.path("hash").asText(null))
+                        .name(torrent.path("name").asText(""))
+                        .client("QBITTORRENT")
+                        .state(torrent.path("state").asText(""))
+                        .progress(Math.round(ratio * 1000) / 10.0)
+                        .sizeBytes(torrent.path("size").asLong(0))
+                        .remainingBytes(torrent.path("amount_left").asLong(0))
+                        .downloadSpeed(torrent.path("dlspeed").asLong(0))
+                        // qBittorrent uses 8640000 as its "unknown/infinite" sentinel
+                        .etaSeconds(eta <= 0 || eta >= 8640000 ? null : eta)
+                        .category(torrent.path("category").asText(null))
+                        .completed(ratio >= 1.0)
+                        .build());
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            log.warn("qBittorrent queue read error: {}", e.getMessage());
+        }
+        return items;
+    }
+
+    /** Deletes a torrent, optionally removing downloaded files. */
+    public boolean deleteTorrent(BookAcquisitionSettings settings, String hash, boolean deleteFiles) {
+        HttpClient client = newClient();
+        if (!ensureAccess(client, settings)) {
+            return false;
+        }
+        try {
+            String form = "hashes=" + URLEncoder.encode(nullSafe(hash), StandardCharsets.UTF_8)
+                    + "&deleteFiles=" + deleteFiles;
+            HttpResponse<String> response = client.send(HttpRequest.newBuilder()
+                            .uri(URI.create(trim(settings.getQbittorrentUrl()) + "/api/v2/torrents/delete"))
+                            .header("Content-Type", "application/x-www-form-urlencoded")
+                            .header("Referer", trim(settings.getQbittorrentUrl()))
+                            .timeout(Duration.ofSeconds(20))
+                            .POST(HttpRequest.BodyPublishers.ofString(form))
+                            .build(),
+                    HttpResponse.BodyHandlers.ofString());
+            boolean ok = isSuccess(response.statusCode());
+            if (!ok) {
+                log.warn("qBittorrent delete failed. HTTP {}: {}", response.statusCode(), truncate(response.body()));
+            }
+            return ok;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        } catch (Exception e) {
+            log.warn("qBittorrent delete error: {}", e.getMessage());
             return false;
         }
     }

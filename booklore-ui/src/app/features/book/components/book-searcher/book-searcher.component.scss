@@ -259,3 +259,20 @@
   gap: 0.5rem;
   flex: 1;
 }
+
+.search-dropdown-item.lookup-online {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  cursor: pointer;
+  border-top: 1px solid var(--p-content-border-color, rgba(128, 128, 128, 0.25));
+  font-size: 0.88rem;
+  opacity: 0.9;
+
+  &:hover {
+    opacity: 1;
+    background: var(--p-content-hover-background, rgba(128, 128, 128, 0.12));
+  }
+
+  i { opacity: 0.75; }
+}

@@ -2,7 +2,7 @@ import {inject, Injectable} from '@angular/core';
 import {HttpClient} from '@angular/common/http';
 import {Observable} from 'rxjs';
 import {API_CONFIG} from '../../core/config/api-config';
-import {BookAcquisitionSettings, ConnectionTestResult, ProwlarrRelease, WantedBook} from './wanted-book.model';
+import {BookAcquisitionSettings, BookLookupResult, ConnectionTestResult, DownloadQueueItem, ProwlarrRelease, WantedBook} from './wanted-book.model';
 
 @Injectable({providedIn: 'root'})
 export class WantedBookService {
@@ -39,5 +39,20 @@ export class WantedBookService {
 
   testConnections(settings: BookAcquisitionSettings): Observable<ConnectionTestResult> {
     return this.http.post<ConnectionTestResult>(`${this.url}/test-connections`, settings);
+  }
+
+  lookup(query: string): Observable<BookLookupResult[]> {
+    return this.http.get<BookLookupResult[]>(`${this.url}/lookup`, {params: {query}});
+  }
+
+  getQueue(): Observable<DownloadQueueItem[]> {
+    return this.http.get<DownloadQueueItem[]>(`${API_CONFIG.BASE_URL}/api/v1/download-queue`);
+  }
+
+  removeFromQueue(client: string, id: string, deleteFiles: boolean): Observable<void> {
+    return this.http.delete<void>(
+      `${API_CONFIG.BASE_URL}/api/v1/download-queue/${client}/${id}`,
+      {params: {deleteFiles}}
+    );
   }
 }

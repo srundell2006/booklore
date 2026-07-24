@@ -13,6 +13,7 @@ import {Router} from '@angular/router';
 import {IconField} from 'primeng/iconfield';
 import {InputIcon} from 'primeng/inputicon';
 import {HeaderFilter} from '../book-browser/filters/HeaderFilter';
+import {UserService} from '../../../settings/user-management/user.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 
 @Component({
@@ -45,6 +46,7 @@ export class BookSearcherComponent implements OnInit, OnDestroy {
   protected urlHelper = inject(UrlHelperService);
   private readonly t = inject(TranslocoService);
   private elRef = inject(ElementRef);
+  private userService = inject(UserService);
   private headerFilter = new HeaderFilter(
     this.#searchSubject.pipe(debounceTime(200), distinctUntilChanged())
   );
@@ -105,8 +107,20 @@ export class BookSearcherComponent implements OnInit, OnDestroy {
     this.isLoading = false;
   }
 
+  /** Admins can hand the current term off to the external book lookup. */
+  get canLookupOnline(): boolean {
+    return !!this.userService.getCurrentUser()?.permissions?.admin;
+  }
+
+  searchOnline(): void {
+    const term = this.searchQuery.trim();
+    if (!term) return;
+    this.clearSearch();
+    this.router.navigate(['/add-book'], {queryParams: {q: term}});
+  }
+
   get isDropdownOpen(): boolean {
-    return this.books.length > 0 || this.isLoading;
+    return this.books.length > 0 || this.isLoading || this.searchQuery.trim().length >= 2;
   }
 
   @HostListener('document:click', ['$event'])

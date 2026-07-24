@@ -58,3 +58,33 @@ export interface ConnectionTestResult {
   sabnzbd: boolean;
   qbittorrent: boolean;
 }
+
+export interface BookLookupResult {
+  title: string;
+  authors?: string[];
+  description?: string;
+  publisher?: string;
+  publishedYear?: number;
+  isbn13?: string;
+  isbn10?: string;
+  asin?: string;
+  thumbnailUrl?: string;
+  provider?: string;
+  inLibrary: boolean;
+  existingBookId?: number;
+  alreadyWanted: boolean;
+}
+
+export interface DownloadQueueItem {
+  id: string;
+  name: string;
+  client: 'SABNZBD' | 'QBITTORRENT';
+  state: string;
+  progress: number;
+  sizeBytes?: number;
+  remainingBytes?: number;
+  downloadSpeed?: number;
+  etaSeconds?: number;
+  category?: string;
+  completed: boolean;
+}

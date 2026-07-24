@@ -3,6 +3,10 @@
     <h2>Wanted Books</h2>
     <div class="header-actions">
       <p-button label="Add Book" icon="pi pi-plus" size="small" (onClick)="openAdd()"></p-button>
+      <p-button label="Search Online" icon="pi pi-globe" size="small" severity="secondary" outlined="true"
+                (onClick)="goToSearch()" pTooltip="Look up books by title/author from metadata providers"></p-button>
+      <p-button label="Queue" icon="pi pi-download" size="small" severity="secondary" outlined="true"
+                (onClick)="goToQueue()"></p-button>
       <p-button label="Search All Now" icon="pi pi-search" size="small" severity="secondary" outlined="true"
                 (onClick)="searchAll()" pTooltip="Search indexers for every wanted book and auto-grab the best releases"></p-button>
       <p-button label="Settings" icon="pi pi-cog" size="small" severity="secondary" outlined="true"

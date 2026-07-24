@@ -1,0 +1,62 @@
+<div class="queue-container">
+  <div class="header-row">
+    <div>
+      <h2>Download Queue</h2>
+      <p class="subtitle">
+        {{ items.length }} active {{ items.length === 1 ? 'item' : 'items' }}
+        @if (totalSpeed !== '—') { <span>· {{ totalSpeed }}</span> }
+        @if (lastUpdated) { <span class="updated">· updated {{ lastUpdated | date:'HH:mm:ss' }}</span> }
+      </p>
+    </div>
+    <div class="header-actions">
+      <label class="auto-refresh">
+        <p-checkbox [(ngModel)]="autoRefresh" [binary]="true"></p-checkbox> Auto-refresh
+      </label>
+      <p-button icon="pi pi-refresh" label="Refresh" size="small" severity="secondary" outlined="true"
+                [loading]="loading" (onClick)="load()"></p-button>
+    </div>
+  </div>
+
+  <p-table [value]="items" [loading]="loading" size="small" dataKey="id">
+    <ng-template #header>
+      <tr>
+        <th>Name</th>
+        <th style="width: 120px">Client</th>
+        <th style="width: 200px">Progress</th>
+        <th style="width: 110px">Size</th>
+        <th style="width: 110px">Speed</th>
+        <th style="width: 90px">ETA</th>
+        <th style="width: 120px">State</th>
+        <th style="width: 110px">Actions</th>
+      </tr>
+    </ng-template>
+    <ng-template #body let-item>
+      <tr>
+        <td class="name-cell" [pTooltip]="item.name">{{ item.name }}</td>
+        <td><p-tag [severity]="clientSeverity(item.client)" [value]="clientLabel(item.client)"></p-tag></td>
+        <td>
+          <p-progressBar [value]="item.progress" [showValue]="true" styleClass="queue-progress"></p-progressBar>
+        </td>
+        <td>{{ formatSize(item.sizeBytes) }}</td>
+        <td>{{ formatSpeed(item.downloadSpeed) }}</td>
+        <td>{{ formatEta(item.etaSeconds) }}</td>
+        <td><p-tag [severity]="stateSeverity(item)" [value]="item.state || 'unknown'"></p-tag></td>
+        <td>
+          <p-button icon="pi pi-times" size="small" text="true" severity="secondary"
+                    pTooltip="Remove from queue (keep files)" (onClick)="remove(item, false)"></p-button>
+          <p-button icon="pi pi-trash" size="small" text="true" severity="danger"
+                    pTooltip="Remove and delete files" (onClick)="remove(item, true)"></p-button>
+        </td>
+      </tr>
+    </ng-template>
+    <ng-template #emptymessage>
+      <tr>
+        <td colspan="8" class="empty-message">
+          Nothing downloading right now.
+        </td>
+      </tr>
+    </ng-template>
+  </p-table>
+</div>
+
+<p-confirmDialog></p-confirmDialog>

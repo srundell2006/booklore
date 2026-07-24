@@ -10,6 +10,8 @@ import org.booklore.model.entity.WantedBookEntity;
 import org.booklore.model.enums.WantedBookStatus;
 import org.booklore.repository.WantedBookRepository;
 import org.booklore.service.acquisition.BookAcquisitionService;
+import org.booklore.service.acquisition.BookLookupResult;
+import org.booklore.service.acquisition.BookLookupService;
 import org.booklore.service.acquisition.ProwlarrClient;
 import org.booklore.service.acquisition.ProwlarrRelease;
 import org.booklore.service.acquisition.QbittorrentClient;
@@ -29,6 +31,7 @@ public class WantedBookController {
 
     private final WantedBookRepository wantedBookRepository;
     private final BookAcquisitionService acquisitionService;
+    private final BookLookupService bookLookupService;
     private final ProwlarrClient prowlarrClient;
     private final SabnzbdClient sabnzbdClient;
     private final QbittorrentClient qbittorrentClient;
@@ -56,6 +59,14 @@ public class WantedBookController {
                 .addedByUserId(user != null ? user.getId() : null)
                 .build();
         return ResponseEntity.ok(wantedBookRepository.save(entity));
+    }
+
+    @Operation(summary = "Search metadata providers for books to add",
+            description = "Sonarr-style lookup: free-text search across configured metadata providers, annotated with whether each result is already in the library or on the wanted list.")
+    @PreAuthorize("@securityUtil.isAdmin()")
+    @GetMapping("/lookup")
+    public ResponseEntity<List<BookLookupResult>> lookup(@RequestParam String query) {
+        return ResponseEntity.ok(bookLookupService.lookup(query));
     }
 
     @Operation(summary = "Remove a wanted book")

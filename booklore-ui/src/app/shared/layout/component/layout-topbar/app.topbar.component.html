@@ -84,8 +84,18 @@
         @if (userService.userState$ | async; as userState) {
           @if (userState.user?.permissions?.admin) {
             <li>
+              <a class="topbar-item" (click)="navigateToAddBook()" pTooltip="Add New Book" tooltipPosition="bottom">
+                <i class="pi pi-plus-circle topbar-icon"></i>
+              </a>
+            </li>
+            <li>
               <a class="topbar-item" (click)="navigateToWantedBooks()" pTooltip="Wanted Books" tooltipPosition="bottom">
                 <i class="pi pi-flag topbar-icon"></i>
+              </a>
+            </li>
+            <li>
+              <a class="topbar-item" (click)="navigateToDownloadQueue()" pTooltip="Download Queue" tooltipPosition="bottom">
+                <i class="pi pi-download topbar-icon"></i>
               </a>
             </li>
           }
