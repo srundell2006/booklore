@@ -70,15 +70,25 @@ public class SabnzbdClient {
             HttpResponse<String> response = httpClient.send(
                     HttpRequest.newBuilder().uri(uri).timeout(Duration.ofSeconds(15)).GET().build(),
                     HttpResponse.BodyHandlers.ofString());
-            return response.statusCode() == 200 && response.body().contains("version");
+            if (response.statusCode() == 200 && response.body().contains("version")) {
+                return true;
+            }
+            log.warn("SABnzbd connection test failed: HTTP {} - {}", response.statusCode(), truncate(response.body()));
+            return false;
         } catch (Exception e) {
-            log.warn("SABnzbd connection test failed: {}", e.getMessage());
+            log.warn("SABnzbd connection test failed: {}: {}", e.getClass().getSimpleName(), e.getMessage());
             return false;
         }
     }
 
     private String trim(String url) {
         if (url == null) return "";
-        return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
+        String trimmed = url.trim();
+        return trimmed.endsWith("/") ? trimmed.substring(0, trimmed.length() - 1) : trimmed;
+    }
+
+    private String truncate(String s) {
+        if (s == null) return "";
+        return s.length() > 200 ? s.substring(0, 200) : s;
     }
 }

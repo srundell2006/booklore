@@ -22,7 +22,7 @@ public class QbittorrentClient {
      */
     public boolean addTorrent(BookAcquisitionSettings settings, String torrentUrl) {
         HttpClient client = newClient();
-        if (!login(client, settings)) {
+        if (!ensureAccess(client, settings)) {
             return false;
         }
         try {
@@ -31,13 +31,14 @@ public class QbittorrentClient {
             HttpResponse<String> response = client.send(HttpRequest.newBuilder()
                             .uri(URI.create(trim(settings.getQbittorrentUrl()) + "/api/v2/torrents/add"))
                             .header("Content-Type", "application/x-www-form-urlencoded")
+                            .header("Referer", trim(settings.getQbittorrentUrl()))
                             .timeout(Duration.ofSeconds(30))
                             .POST(HttpRequest.BodyPublishers.ofString(form))
                             .build(),
                     HttpResponse.BodyHandlers.ofString());
-            boolean ok = response.statusCode() == 200 && !"Fails.".equalsIgnoreCase(response.body().trim());
+            boolean ok = isSuccess(response.statusCode()) && !"Fails.".equalsIgnoreCase(response.body().trim());
             if (!ok) {
-                log.warn("qBittorrent add failed. Status: {}, body: {}", response.statusCode(), response.body());
+                log.warn("qBittorrent add failed. HTTP {}: {}", response.statusCode(), truncate(response.body()));
             }
             return ok;
         } catch (InterruptedException e) {
@@ -50,13 +51,39 @@ public class QbittorrentClient {
     }
 
     public boolean testConnection(BookAcquisitionSettings settings) {
-        return login(newClient(), settings);
+        return ensureAccess(newClient(), settings);
     }
 
-    private boolean login(HttpClient client, BookAcquisitionSettings settings) {
+    /**
+     * Establishes usable API access.
+     * <p>
+     * qBittorrent can be configured with an auth-subnet whitelist
+     * (WebUI\AuthSubnetWhitelistEnabled), in which case /auth/login returns
+     * HTTP 204 with an empty body instead of "Ok." and no cookie is issued —
+     * yet every API endpoint is fully usable. So rather than trusting the login
+     * response alone, we attempt login best-effort and then verify real access
+     * by calling an authenticated endpoint.
+     */
+    private boolean ensureAccess(HttpClient client, BookAcquisitionSettings settings) {
+        String baseUrl = trim(settings.getQbittorrentUrl());
+        if (baseUrl.isEmpty()) {
+            log.warn("qBittorrent URL is not configured");
+            return false;
+        }
+        attemptLogin(client, settings);
+        return verifyApiAccess(client, baseUrl);
+    }
+
+    private void attemptLogin(HttpClient client, BookAcquisitionSettings settings) {
+        String username = nullSafe(settings.getQbittorrentUsername());
+        String password = nullSafe(settings.getQbittorrentPassword());
+        if (username.isEmpty() && password.isEmpty()) {
+            log.debug("qBittorrent credentials empty; relying on subnet whitelist if configured");
+            return;
+        }
         try {
-            String form = "username=" + URLEncoder.encode(nullSafe(settings.getQbittorrentUsername()), StandardCharsets.UTF_8)
-                    + "&password=" + URLEncoder.encode(nullSafe(settings.getQbittorrentPassword()), StandardCharsets.UTF_8);
+            String form = "username=" + URLEncoder.encode(username, StandardCharsets.UTF_8)
+                    + "&password=" + URLEncoder.encode(password, StandardCharsets.UTF_8);
             HttpResponse<String> response = client.send(HttpRequest.newBuilder()
                             .uri(URI.create(trim(settings.getQbittorrentUrl()) + "/api/v2/auth/login"))
                             .header("Content-Type", "application/x-www-form-urlencoded")
@@ -65,18 +92,47 @@ public class QbittorrentClient {
                             .POST(HttpRequest.BodyPublishers.ofString(form))
                             .build(),
                     HttpResponse.BodyHandlers.ofString());
-            boolean ok = response.statusCode() == 200 && "Ok.".equalsIgnoreCase(response.body().trim());
-            if (!ok) {
-                log.warn("qBittorrent login failed. Status: {}, body: {}", response.statusCode(), response.body());
+            String body = response.body() == null ? "" : response.body().trim();
+            if ("Ok.".equalsIgnoreCase(body)) {
+                log.debug("qBittorrent login succeeded");
+            } else if (response.statusCode() == 204 || body.isEmpty()) {
+                log.debug("qBittorrent login returned HTTP {} with empty body — auth likely bypassed via subnet whitelist", response.statusCode());
+            } else {
+                log.warn("qBittorrent login rejected. HTTP {}: {}", response.statusCode(), truncate(body));
             }
-            return ok;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+        } catch (Exception e) {
+            log.warn("qBittorrent login error: {}", e.getMessage());
+        }
+    }
+
+    /** Calls an authenticated endpoint to confirm the session (or bypass) actually works. */
+    private boolean verifyApiAccess(HttpClient client, String baseUrl) {
+        try {
+            HttpResponse<String> response = client.send(HttpRequest.newBuilder()
+                            .uri(URI.create(baseUrl + "/api/v2/app/version"))
+                            .header("Referer", baseUrl)
+                            .timeout(Duration.ofSeconds(15))
+                            .GET().build(),
+                    HttpResponse.BodyHandlers.ofString());
+            if (isSuccess(response.statusCode())) {
+                log.debug("qBittorrent API reachable, version {}", response.body().trim());
+                return true;
+            }
+            log.warn("qBittorrent API access check failed. HTTP {}: {}", response.statusCode(), truncate(response.body()));
+            return false;
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return false;
         } catch (Exception e) {
-            log.warn("qBittorrent login error: {}", e.getMessage());
+            log.warn("qBittorrent API access check error: {}", e.getMessage());
             return false;
         }
+    }
+
+    private boolean isSuccess(int statusCode) {
+        return statusCode >= 200 && statusCode < 300;
     }
 
     private HttpClient newClient() {
@@ -88,10 +144,16 @@ public class QbittorrentClient {
 
     private String trim(String url) {
         if (url == null) return "";
-        return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
+        String trimmed = url.trim();
+        return trimmed.endsWith("/") ? trimmed.substring(0, trimmed.length() - 1) : trimmed;
     }
 
     private String nullSafe(String value) {
-        return value == null ? "" : value;
+        return value == null ? "" : value.trim();
+    }
+
+    private String truncate(String s) {
+        if (s == null) return "";
+        return s.length() > 200 ? s.substring(0, 200) : s;
     }
 }

@@ -64,16 +64,26 @@ public class ProwlarrClient {
                     .header("X-Api-Key", settings.getProwlarrApiKey())
                     .timeout(Duration.ofSeconds(15))
                     .GET().build();
-            return httpClient.send(request, HttpResponse.BodyHandlers.ofString()).statusCode() == 200;
+            HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
+            if (response.statusCode() == 200) {
+                return true;
+            }
+            if (response.statusCode() == 401) {
+                log.warn("Prowlarr connection test failed: HTTP 401 Unauthorized — check the API key");
+            } else {
+                log.warn("Prowlarr connection test failed: HTTP {} - {}", response.statusCode(), truncate(response.body()));
+            }
+            return false;
         } catch (Exception e) {
-            log.warn("Prowlarr connection test failed: {}", e.getMessage());
+            log.warn("Prowlarr connection test failed: {}: {}", e.getClass().getSimpleName(), e.getMessage());
             return false;
         }
     }
 
     private String trimTrailingSlash(String url) {
         if (url == null) return "";
-        return url.endsWith("/") ? url.substring(0, url.length() - 1) : url;
+        String trimmed = url.trim();
+        return trimmed.endsWith("/") ? trimmed.substring(0, trimmed.length() - 1) : trimmed;
     }
 
     private String truncate(String s) {
