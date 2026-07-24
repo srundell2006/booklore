@@ -163,7 +163,7 @@ export class WantedBooksComponent implements OnInit {
   saveSettings(): void {
     this.savingSettings = true;
     this.appSettingsService.saveSettings([
-      {key: 'book_acquisition_settings', newValue: this.settings}
+      {key: 'BOOK_ACQUISITION_SETTINGS', newValue: this.settings}
     ]).subscribe({
       next: () => {
         this.savingSettings = false;
