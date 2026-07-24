@@ -215,6 +215,14 @@ public class OllamaMetadataParser implements BookParser {
 
     @Override
     public BookMetadata fetchTopMetadata(Book book, FetchMetadataRequest request) {
+        // This provider enriches books that already exist in the library; its cache is
+        // keyed on book id. A caller without a persisted book (e.g. an add-new lookup)
+        // has nothing for it to work with, and ConcurrentHashMap rejects null keys.
+        if (book == null || book.getId() == null) {
+            log.debug("Ollama: no persisted book id supplied — skipping");
+            return null;
+        }
+
         // Fast path: return cached result from preFetchBooks
         if (prefetchCache.containsKey(book.getId())) {
             BookMetadata cached = prefetchCache.get(book.getId());
