@@ -19,7 +19,20 @@ public class ProwlarrRelease {
     private String protocol;      // "usenet" | "torrent"
     private Integer seeders;
     private Integer leechers;
-    private List<Integer> categories;
+    /**
+     * Prowlarr returns categories as objects ({"id":7020,"name":"Books/EBook"}),
+     * not bare ints. Typing this as List<Integer> made Jackson throw on every
+     * successful search — "Cannot deserialize value of type java.lang.Integer
+     * from Object value" — so results were parsed as a failure.
+     */
+    private List<Category> categories;
+
+    @Data
+    @JsonIgnoreProperties(ignoreUnknown = true)
+    public static class Category {
+        private Integer id;
+        private String name;
+    }
 
     /** Set server-side after scoring; serialized to the UI. */
     private Integer score;
