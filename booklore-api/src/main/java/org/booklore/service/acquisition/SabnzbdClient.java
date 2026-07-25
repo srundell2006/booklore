@@ -9,9 +9,11 @@ import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
@@ -30,14 +32,20 @@ public class SabnzbdClient {
      * Adds an NZB by URL. Returns the SABnzbd nzo_id, or null on failure.
      */
     public String addNzb(BookAcquisitionSettings settings, String nzbUrl, String niceName) {
-        URI uri = UriComponentsBuilder.fromUriString(trim(settings.getSabnzbdUrl()) + "/api")
-                .queryParam("mode", "addurl")
-                .queryParam("name", nzbUrl)
-                .queryParam("nzbname", niceName)
-                .queryParam("cat", settings.getSabnzbdCategory())
-                .queryParam("apikey", settings.getSabnzbdApiKey())
-                .queryParam("output", "json")
-                .build().toUri();
+        // Values are percent-encoded explicitly. UriComponentsBuilder.queryParam
+        // does NOT encode them, so an NZB URL carrying its own query string —
+        // Prowlarr hands out ".../download?apikey=...&link=..." — broke out of
+        // the `name` parameter: SABnzbd read `link` as one of its own
+        // parameters and then fetched a download URL with no link at all.
+        // Prowlarr cannot resolve that, so the item sat in the queue retrying
+        // forever, showing "WAIT nn sec" and never downloading.
+        String query = "mode=addurl"
+                + "&name=" + encode(nzbUrl)
+                + "&nzbname=" + encode(niceName)
+                + "&cat=" + encode(settings.getSabnzbdCategory())
+                + "&apikey=" + encode(settings.getSabnzbdApiKey())
+                + "&output=json";
+        URI uri = URI.create(trim(settings.getSabnzbdUrl()) + "/api?" + query);
         try {
             HttpResponse<String> response = httpClient.send(
                     HttpRequest.newBuilder().uri(uri).timeout(Duration.ofSeconds(30)).GET().build(),
@@ -60,6 +68,10 @@ public class SabnzbdClient {
             log.error("SABnzbd addurl error: {}", e.getMessage());
             return null;
         }
+    }
+
+    private static String encode(String value) {
+        return value == null ? "" : URLEncoder.encode(value, StandardCharsets.UTF_8);
     }
 
     /** Reads the active SABnzbd queue and normalizes it. */

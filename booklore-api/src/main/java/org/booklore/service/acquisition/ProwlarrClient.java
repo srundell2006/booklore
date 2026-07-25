@@ -9,9 +9,11 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
+import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
+import java.nio.charset.StandardCharsets;
 import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
@@ -28,10 +30,12 @@ public class ProwlarrClient {
 
     public List<ProwlarrRelease> search(BookAcquisitionSettings settings, String query) {
         String baseUrl = trimTrailingSlash(settings.getProwlarrUrl());
-        UriComponentsBuilder builder = UriComponentsBuilder.fromUriString(baseUrl + "/api/v1/search")
-                .queryParam("query", query)
-                .queryParam("type", "search")
-                .queryParam("limit", 100);
+        // Built by hand and percent-encoded: UriComponentsBuilder.queryParam does
+        // not encode values, so a title containing '&' (say "Dungeons & Dragons")
+        // would break out of the query parameter and corrupt the request.
+        StringBuilder q = new StringBuilder("query=")
+                .append(URLEncoder.encode(query, StandardCharsets.UTF_8))
+                .append("&type=search&limit=100");
 
         // Prowlarr expects categories as repeated query parameters
         // (categories=7000&categories=7020). Passing the configured value as a
@@ -39,10 +43,10 @@ public class ProwlarrClient {
         // with 400 "The value '7000,7020' is not valid.", so every search came
         // back empty.
         for (String category : splitCategories(settings.getSearchCategories())) {
-            builder.queryParam("categories", category);
+            q.append("&categories=").append(URLEncoder.encode(category, StandardCharsets.UTF_8));
         }
 
-        URI uri = builder.build().toUri();
+        URI uri = URI.create(baseUrl + "/api/v1/search?" + q);
 
         try {
             log.info("Prowlarr search: {}", query);
