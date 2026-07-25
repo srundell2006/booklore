@@ -26,6 +26,7 @@ import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.Future;
+import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 /**
@@ -38,6 +39,15 @@ import java.util.stream.Collectors;
 public class BookLookupService {
 
     private static final int MAX_RESULTS = 40;
+
+    /** Amazon/Audible identifiers: a literal B followed by nine alphanumerics. */
+    private static final Pattern ASIN_PATTERN = Pattern.compile("^B[0-9A-Z]{9}$", Pattern.CASE_INSENSITIVE);
+
+    /** ISBN-13 once punctuation is stripped. */
+    private static final Pattern ISBN13_PATTERN = Pattern.compile("^\\d{13}$");
+
+    /** ISBN-10 once punctuation is stripped; the check digit may be X. */
+    private static final Pattern ISBN10_PATTERN = Pattern.compile("^\\d{9}[\\dXx]$");
 
     /**
      * Providers capable of answering a free-text title search for a book that is
@@ -79,15 +89,37 @@ public class BookLookupService {
         }
         log.info("Book lookup '{}' querying providers: {}", trimmedQuery, providers);
 
-        FetchMetadataRequest request = FetchMetadataRequest.builder()
-                .title(trimmedQuery)
-                .providers(providers)
-                .build();
+        // Route the query to the right field. Every parser checks getIsbn() and
+        // getAsin() before falling back to a title search, but this service used
+        // to put the raw query in title unconditionally — so searching an ISBN
+        // ran a title search for a number string and matched nothing.
+        FetchMetadataRequest.FetchMetadataRequestBuilder requestBuilder =
+                FetchMetadataRequest.builder().providers(providers);
+        BookMetadata.BookMetadataBuilder stubMetadata = BookMetadata.builder();
+
+        String compact = stripIsbnPunctuation(trimmedQuery);
+        if (ISBN13_PATTERN.matcher(compact).matches() || ISBN10_PATTERN.matcher(compact).matches()) {
+            requestBuilder.isbn(compact);
+            stubMetadata.isbn13(compact);
+            log.info("Book lookup '{}' recognised as an ISBN, searching by identifier", trimmedQuery);
+        } else if (ASIN_PATTERN.matcher(trimmedQuery).matches()) {
+            String asin = trimmedQuery.toUpperCase(Locale.ROOT);
+            requestBuilder.asin(asin);
+            stubMetadata.asin(asin);
+            log.info("Book lookup '{}' recognised as an ASIN, searching by identifier", trimmedQuery);
+        } else {
+            requestBuilder.title(trimmedQuery);
+            stubMetadata.title(trimmedQuery);
+        }
+
+        FetchMetadataRequest request = requestBuilder.build();
         // Parsers read title/author off the book as a fallback, and some key caches
         // on book id — give them a well-formed stub rather than a bare empty object.
+        // The stub deliberately carries no title for identifier searches, so a
+        // parser falling back cannot title-search the bare number.
         Book emptyBook = Book.builder()
                 .title(trimmedQuery)
-                .metadata(BookMetadata.builder().title(trimmedQuery).build())
+                .metadata(stubMetadata.build())
                 .build();
 
         // Query providers in parallel; a slow provider shouldn't stall the type-ahead.
@@ -270,6 +302,11 @@ public class BookLookupService {
             score += 6;
         }
         return score;
+    }
+
+    /** "978-1-59420-266-7" -> "9781594202667". Parsers clean ISBNs themselves; this is for detection. */
+    private static String stripIsbnPunctuation(String value) {
+        return value.replaceAll("[\\s-]", "");
     }
 
     private String normalize(String value) {
