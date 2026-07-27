@@ -8,11 +8,15 @@ import {Observable} from 'rxjs';
 import {AppSettingKey, AppSettings} from '../../../shared/model/app-settings.model';
 import {filter, take} from 'rxjs/operators';
 import {ToggleSwitch} from 'primeng/toggleswitch';
+import {InputNumber} from 'primeng/inputnumber';
+import {Select} from 'primeng/select';
 import {MetadataMatchWeightsComponent} from '../global-preferences/metadata-match-weights/metadata-match-weights-component';
 import {MetadataPersistenceSettingsComponent} from './metadata-persistence-settings/metadata-persistence-settings-component';
 import {PublicReviewsSettingsComponent} from './public-reviews-settings/public-reviews-settings-component';
 import {MetadataProviderFieldSelectorComponent} from '../../metadata/component/metadata-provider-field-selector/metadata-provider-field-selector.component';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
+import {LibraryService} from '../../book/service/library.service';
+import {Library} from '../../book/model/library.model';
 
 @Component({
   selector: 'app-metadata-settings-component',
@@ -23,6 +27,8 @@ import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
     FormsModule,
     MetadataMatchWeightsComponent,
     ToggleSwitch,
+    InputNumber,
+    Select,
     MetadataPersistenceSettingsComponent,
     PublicReviewsSettingsComponent,
     MetadataProviderFieldSelectorComponent,
@@ -35,20 +41,60 @@ export class MetadataSettingsComponent implements OnInit {
 
   currentMetadataOptions!: MetadataRefreshOptions;
   metadataDownloadOnBookdrop = true;
+  bookdropAutoImportEnabled = false;
+  bookdropAutoImportMinScore = 50;
+  bookdropAutoImportLibraryId: number | null = null;
+  bookdropAutoImportPathId: number | null = null;
+  libraries: Library[] = [];
 
   private readonly appSettingsService = inject(AppSettingsService);
   private readonly settingsHelper = inject(SettingsHelperService);
+  private readonly libraryService = inject(LibraryService);
   private t = inject(TranslocoService);
 
   readonly appSettings$: Observable<AppSettings | null> = this.appSettingsService.appSettings$;
 
+  get libraryOptions() {
+    return this.libraries.map(lib => ({label: lib.name, value: lib.id}));
+  }
+
+  get selectedLibraryPaths() {
+    const lib = this.libraries.find(l => l.id === this.bookdropAutoImportLibraryId);
+    return lib?.paths.map(p => ({label: p.path, value: p.id})) ?? [];
+  }
+
   ngOnInit(): void {
+    this.libraryService.libraryState$.subscribe(state => {
+      this.libraries = state.libraries ?? [];
+    });
     this.loadSettings();
   }
 
   onMetadataDownloadOnBookdropToggle(checked: boolean): void {
     this.metadataDownloadOnBookdrop = checked;
     this.settingsHelper.saveSetting(AppSettingKey.METADATA_DOWNLOAD_ON_BOOKDROP, checked);
+  }
+
+  onBookdropAutoImportEnabledToggle(checked: boolean): void {
+    this.bookdropAutoImportEnabled = checked;
+    this.settingsHelper.saveSetting(AppSettingKey.BOOKDROP_AUTO_IMPORT_ENABLED, checked);
+  }
+
+  onBookdropAutoImportMinScoreChange(value: number): void {
+    this.bookdropAutoImportMinScore = value;
+    this.settingsHelper.saveSetting(AppSettingKey.BOOKDROP_AUTO_IMPORT_MIN_SCORE, value);
+  }
+
+  onBookdropAutoImportLibraryChange(libraryId: number | null): void {
+    this.bookdropAutoImportLibraryId = libraryId;
+    this.bookdropAutoImportPathId = null;
+    this.settingsHelper.saveSetting(AppSettingKey.BOOKDROP_AUTO_IMPORT_LIBRARY_ID, libraryId ?? '');
+    this.settingsHelper.saveSetting(AppSettingKey.BOOKDROP_AUTO_IMPORT_PATH_ID, '');
+  }
+
+  onBookdropAutoImportPathChange(pathId: number | null): void {
+    this.bookdropAutoImportPathId = pathId;
+    this.settingsHelper.saveSetting(AppSettingKey.BOOKDROP_AUTO_IMPORT_PATH_ID, pathId ?? '');
   }
 
   onMetadataSubmit(metadataRefreshOptions: MetadataRefreshOptions): void {
@@ -75,5 +121,9 @@ export class MetadataSettingsComponent implements OnInit {
     }
 
     this.metadataDownloadOnBookdrop = settings.metadataDownloadOnBookdrop ?? true;
+    this.bookdropAutoImportEnabled = settings.bookdropAutoImportEnabled ?? false;
+    this.bookdropAutoImportMinScore = settings.bookdropAutoImportMinScore ?? 50;
+    this.bookdropAutoImportLibraryId = settings.bookdropAutoImportLibraryId ?? null;
+    this.bookdropAutoImportPathId = settings.bookdropAutoImportPathId ?? null;
   }
 }
