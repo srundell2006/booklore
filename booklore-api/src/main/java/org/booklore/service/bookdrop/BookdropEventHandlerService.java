@@ -1,6 +1,8 @@
 package org.booklore.service.bookdrop;
 
 import org.booklore.model.BookDropFileEvent;
+import org.booklore.model.dto.request.BookdropFinalizeRequest;
+import org.booklore.model.dto.settings.AppSettings;
 import org.booklore.model.entity.BookdropFileEntity;
 import org.booklore.model.enums.BookFileExtension;
 import org.booklore.model.enums.PermissionType;
@@ -13,6 +15,8 @@ import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
@@ -21,6 +25,7 @@ import java.nio.file.Path;
 import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.WatchEvent;
 import java.time.Instant;
+import java.util.List;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -35,6 +40,12 @@ public class BookdropEventHandlerService {
     private final BookdropNotificationService bookdropNotificationService;
     private final AppSettingService appSettingService;
     private final BookdropMetadataService bookdropMetadataService;
+
+    // Field-injected with @Lazy to break the circular dependency:
+    // BookdropEventHandlerService -> BookDropService -> BookdropMonitoringService -> BookdropEventHandlerService
+    @Lazy
+    @Autowired
+    private BookDropService bookDropService;
 
     private static final long STABILITY_CHECK_INTERVAL_MS = 500;
     private static final int STABILITY_REQUIRED_CHECKS = 3;
@@ -133,6 +144,40 @@ public class BookdropEventHandlerService {
                 if (appSettingService.getAppSettings().isMetadataDownloadOnBookdrop()) {
                     bookdropMetadataService.attachInitialMetadata(bookdropFileEntity.getId());
                     bookdropMetadataService.attachFetchedMetadata(bookdropFileEntity.getId());
+
+                    // Auto-import if enabled and score meets threshold
+                    AppSettings settings = appSettingService.getAppSettings();
+                    if (settings.isBookdropAutoImportEnabled()
+                            && settings.getBookdropAutoImportLibraryId() != null
+                            && settings.getBookdropAutoImportPathId() != null) {
+                        final long savedId = bookdropFileEntity.getId();
+                        bookdropFileRepository.findById(savedId).ifPresent(refreshed -> {
+                            int score = refreshed.getMatchScore() != null ? refreshed.getMatchScore() : 0;
+                            int minScore = settings.getBookdropAutoImportMinScore() != null ? settings.getBookdropAutoImportMinScore() : 50;
+                            if (score >= minScore) {
+                                log.info("Auto-importing '{}' with match score {} >= threshold {}", fileName, score, minScore);
+                                BookdropFinalizeRequest.BookdropFinalizeFile fileReq = BookdropFinalizeRequest.BookdropFinalizeFile.builder()
+                                        .fileId(savedId)
+                                        .libraryId(settings.getBookdropAutoImportLibraryId())
+                                        .pathId(settings.getBookdropAutoImportPathId())
+                                        .build();
+                                BookdropFinalizeRequest finalizeRequest = BookdropFinalizeRequest.builder()
+                                        .selectAll(false)
+                                        .defaultLibraryId(settings.getBookdropAutoImportLibraryId())
+                                        .defaultPathId(settings.getBookdropAutoImportPathId())
+                                        .files(List.of(fileReq))
+                                        .build();
+                                try {
+                                    bookDropService.finalizeImport(finalizeRequest);
+                                    log.info("Auto-import successful for '{}'", fileName);
+                                } catch (Exception e) {
+                                    log.error("Auto-import failed for '{}': {}", fileName, e.getMessage(), e);
+                                }
+                            } else {
+                                log.info("Score {} below threshold {}, leaving '{}' in PENDING_REVIEW", score, minScore, fileName);
+                            }
+                        });
+                    }
                 } else {
                     bookdropMetadataService.attachInitialMetadata(bookdropFileEntity.getId());
                     log.info("Metadata download is disabled. Only initial metadata extracted for file: {}", bookdropFileEntity.getFileName());
