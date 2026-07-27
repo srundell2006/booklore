@@ -35,6 +35,69 @@
               <label class="setting-label">{{ t('autoDownload.enableLabel') }}</label>
             </div>
           </div>
+
+          @if (metadataDownloadOnBookdrop) {
+            <div class="setting-item">
+              <div class="setting-header">
+                <p-toggleswitch
+                  [(ngModel)]="bookdropAutoImportEnabled"
+                  (onChange)="onBookdropAutoImportEnabledToggle($event.checked)">
+                </p-toggleswitch>
+                <label class="setting-label">Auto-import when score meets threshold</label>
+              </div>
+            </div>
+
+            @if (bookdropAutoImportEnabled) {
+              <div class="setting-item">
+                <div class="setting-header">
+                  <label class="setting-label">Minimum match score (0–100)</label>
+                </div>
+                <div class="setting-control">
+                  <p-inputnumber
+                    [(ngModel)]="bookdropAutoImportMinScore"
+                    [min]="0"
+                    [max]="100"
+                    [showButtons]="true"
+                    (onChange)="onBookdropAutoImportMinScoreChange($event.value)">
+                  </p-inputnumber>
+                </div>
+              </div>
+
+              <div class="setting-item">
+                <div class="setting-header">
+                  <label class="setting-label">Target library</label>
+                </div>
+                <div class="setting-control">
+                  <p-select
+                    [options]="libraryOptions"
+                    [(ngModel)]="bookdropAutoImportLibraryId"
+                    (onChange)="onBookdropAutoImportLibraryChange($event.value)"
+                    placeholder="Select library"
+                    [showClear]="true"
+                    styleClass="w-full">
+                  </p-select>
+                </div>
+              </div>
+
+              @if (bookdropAutoImportLibraryId) {
+                <div class="setting-item">
+                  <div class="setting-header">
+                    <label class="setting-label">Target path</label>
+                  </div>
+                  <div class="setting-control">
+                    <p-select
+                      [options]="selectedLibraryPaths"
+                      [(ngModel)]="bookdropAutoImportPathId"
+                      (onChange)="onBookdropAutoImportPathChange($event.value)"
+                      placeholder="Select path"
+                      [showClear]="true"
+                      styleClass="w-full">
+                    </p-select>
+                  </div>
+                </div>
+              }
+            }
+          }
         </div>
       </div>
     </div>
