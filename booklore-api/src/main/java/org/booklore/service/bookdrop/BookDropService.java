@@ -353,6 +353,12 @@ public class BookDropService {
             libraryId = fileReq.getLibraryId() != null ? fileReq.getLibraryId() : defaultLibraryId;
             pathId = fileReq.getPathId() != null ? fileReq.getPathId() : defaultPathId;
             metadata = fileReq.getMetadata();
+            // Fall back to entity metadata when fileReq carries no metadata (e.g. auto-import path)
+            if (metadata == null) {
+                metadata = fileEntity.getFetchedMetadata() != null
+                        ? objectMapper.readValue(fileEntity.getFetchedMetadata(), BookMetadata.class)
+                        : objectMapper.readValue(fileEntity.getOriginalMetadata(), BookMetadata.class);
+            }
             log.debug("Processing fileId={}, fileName={} with provided metadata, libraryId={}, pathId={}", fileEntity.getId(), fileEntity.getFileName(), libraryId, pathId);
         } else {
             if (defaultLibraryId == null || defaultPathId == null) {
@@ -668,4 +674,3 @@ public class BookDropService {
     private record FileProcessingContext(Long libraryId, Long pathId, BookMetadata metadata) {
     }
 }
-
