@@ -210,6 +210,10 @@ export interface AppSettings {
   koboSettings: KoboSettings;
   coverCroppingSettings: CoverCroppingSettings;
   metadataDownloadOnBookdrop: boolean;
+  bookdropAutoImportEnabled: boolean;
+  bookdropAutoImportMinScore: number;
+  bookdropAutoImportLibraryId: number | null;
+  bookdropAutoImportPathId: number | null;
   metadataProviderSpecificFields: MetadataProviderSpecificFields;
   oidcSessionDurationHours: number | null;
   oidcGroupSyncMode: string | null;
@@ -256,6 +260,10 @@ export enum AppSettingKey {
   METADATA_MATCH_WEIGHTS = 'METADATA_MATCH_WEIGHTS',
   METADATA_PERSISTENCE_SETTINGS = 'METADATA_PERSISTENCE_SETTINGS',
   METADATA_DOWNLOAD_ON_BOOKDROP = 'METADATA_DOWNLOAD_ON_BOOKDROP',
+  BOOKDROP_AUTO_IMPORT_ENABLED = 'BOOKDROP_AUTO_IMPORT_ENABLED',
+  BOOKDROP_AUTO_IMPORT_MIN_SCORE = 'BOOKDROP_AUTO_IMPORT_MIN_SCORE',
+  BOOKDROP_AUTO_IMPORT_LIBRARY_ID = 'BOOKDROP_AUTO_IMPORT_LIBRARY_ID',
+  BOOKDROP_AUTO_IMPORT_PATH_ID = 'BOOKDROP_AUTO_IMPORT_PATH_ID',
   METADATA_PUBLIC_REVIEWS_SETTINGS = 'METADATA_PUBLIC_REVIEWS_SETTINGS',
   KOBO_SETTINGS = 'KOBO_SETTINGS',
   BOOK_ACQUISITION_SETTINGS = 'BOOK_ACQUISITION_SETTINGS',
