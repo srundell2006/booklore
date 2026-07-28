@@ -313,11 +313,21 @@ public class AudiobookMergeService {
         // sitting at the destination looking like a real one.
         Path partial = target.resolveSibling(target.getFileName() + ".partial");
         try {
-            try (var in = Files.newInputStream(source);
-                 var out = Files.newOutputStream(partial,
+            // An explicit byte-buffer loop, deliberately NOT InputStream.transferTo():
+            // transferTo detects two file channels and delegates to sendfile(2)
+            // (FileDispatcherImpl.transferTo0), which is exactly the kernel fast
+            // path CIFS rejects with EAGAIN. A manual loop forces ordinary
+            // read(2)/write(2) syscalls, which CIFS handles.
+            byte[] buffer = new byte[1 << 16];
+            try (java.io.InputStream in = new java.io.BufferedInputStream(Files.newInputStream(source), 1 << 16);
+                 java.io.OutputStream out = new java.io.BufferedOutputStream(Files.newOutputStream(partial,
                          StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
-                         StandardOpenOption.WRITE)) {
-                in.transferTo(out);
+                         StandardOpenOption.WRITE), 1 << 16)) {
+                int read;
+                while ((read = in.read(buffer)) != -1) {
+                    out.write(buffer, 0, read);
+                }
+                out.flush();
             }
             Files.move(partial, target, StandardCopyOption.REPLACE_EXISTING);
             Files.delete(source);
