@@ -39,6 +39,7 @@ public class MergeContextLoader {
         BookMetadataEntity metadata = book.getMetadata();
         return MergeContext.builder()
                 .bookId(bookId)
+                .libraryId(book.getLibrary() != null ? book.getLibrary().getId() : null)
                 .sourcePath(sourcePath.toString())
                 .folderBased(primaryFile.isFolderBased())
                 .title(metadata != null ? metadata.getTitle() : null)

@@ -6,12 +6,17 @@ import lombok.extern.slf4j.Slf4j;
 import org.booklore.exception.ApiError;
 import org.booklore.model.dto.settings.AudiobookMergeSettings;
 import org.booklore.service.appsettings.AppSettingService;
+import org.booklore.repository.LibraryRepository;
+import org.booklore.model.entity.LibraryEntity;
+import org.booklore.model.entity.LibraryPathEntity;
+import org.booklore.service.monitoring.MonitoringRegistrationService;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
 
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.*;
+import java.nio.file.StandardOpenOption;
 import java.util.ArrayList;
 import java.util.HashMap;
 import java.util.List;
@@ -42,6 +47,8 @@ public class AudiobookMergeService {
     private static final long POLL_INTERVAL_MS = 5000;
 
     private final MergeContextLoader contextLoader;
+    private final MonitoringRegistrationService monitoringRegistrationService;
+    private final LibraryRepository libraryRepository;
     private final AppSettingService appSettingService;
     private final M4bMergeClient mergeClient;
     private final ObjectMapper objectMapper;
@@ -150,6 +157,10 @@ public class AudiobookMergeService {
         Path destination = resolveDestination(sourcePath, context.folderBased(), targetName);
 
         boolean sourceMoved = false;
+        // Staging moves files out of a watched library. Without pausing the watcher
+        // it sees them as deletions (and as new files again on restore), which is
+        // the same reason BookDropService unregisters libraries around an import.
+        pauseMonitoring(context.libraryId());
         try {
             Files.createDirectories(stagedOut);
             writeManifest(jobDir, MergeStagingManifest.builder()
@@ -188,9 +199,7 @@ public class AudiobookMergeService {
             }
 
             listener.onProgress(97, "Moving merged file into the library");
-            Files.createDirectories(destination.getParent());
-            // Same filesystem as the library, so this is a rename rather than a copy.
-            Files.move(produced, destination, StandardCopyOption.REPLACE_EXISTING);
+            moveFile(produced, destination);
             log.info("Merged audiobook for book {} -> {}", context.bookId(), destination);
 
             if (settings.isDeleteSourcesAfterMerge()) {
@@ -223,6 +232,31 @@ public class AudiobookMergeService {
             throw e instanceof RuntimeException runtime ? runtime : new IllegalStateException(e);
         } finally {
             deleteRecursively(jobDir);
+            resumeMonitoring(context.libraryId());
+        }
+    }
+
+    private void pauseMonitoring(Long libraryId) {
+        if (libraryId == null) return;
+        try {
+            monitoringRegistrationService.unregisterLibrary(libraryId);
+            log.info("Paused file monitoring for library {} during merge", libraryId);
+        } catch (Exception e) {
+            log.warn("Could not pause monitoring for library {}: {}", libraryId, e.getMessage());
+        }
+    }
+
+    private void resumeMonitoring(Long libraryId) {
+        if (libraryId == null) return;
+        try {
+            LibraryEntity library = libraryRepository.findById(libraryId).orElse(null);
+            if (library == null) return;
+            for (LibraryPathEntity libraryPath : library.getLibraryPaths()) {
+                monitoringRegistrationService.registerLibraryPaths(libraryId, Path.of(libraryPath.getPath()));
+            }
+            log.info("Resumed file monitoring for library {}", libraryId);
+        } catch (Exception e) {
+            log.warn("Could not resume monitoring for library {}: {}", libraryId, e.getMessage());
         }
     }
 
@@ -256,6 +290,47 @@ public class AudiobookMergeService {
         }
     }
 
+
+    /**
+     * Moves a file, tolerating CIFS/SMB.
+     *
+     * Files.move across docker bind mounts falls back to a copy, and the JDK's
+     * copy path uses copy_file_range(2) (LinuxNativeDispatcher.directCopy0),
+     * which CIFS rejects with EAGAIN -- surfacing as
+     * "IOException: Resource temporarily unavailable" partway through a large
+     * file. A plain stream copy uses ordinary read/write syscalls and works.
+     */
+    private void moveFile(Path source, Path target) throws IOException {
+        Files.createDirectories(target.getParent());
+        try {
+            Files.move(source, target, StandardCopyOption.REPLACE_EXISTING);
+            return;
+        } catch (IOException e) {
+            log.debug("Fast move {} -> {} failed ({}), falling back to stream copy",
+                    source.getFileName(), target.getFileName(), e.getMessage());
+        }
+        // Copy to a temp name first so a failure never leaves a truncated file
+        // sitting at the destination looking like a real one.
+        Path partial = target.resolveSibling(target.getFileName() + ".partial");
+        try {
+            try (var in = Files.newInputStream(source);
+                 var out = Files.newOutputStream(partial,
+                         StandardOpenOption.CREATE, StandardOpenOption.TRUNCATE_EXISTING,
+                         StandardOpenOption.WRITE)) {
+                in.transferTo(out);
+            }
+            Files.move(partial, target, StandardCopyOption.REPLACE_EXISTING);
+            Files.delete(source);
+        } catch (IOException e) {
+            try {
+                Files.deleteIfExists(partial);
+            } catch (IOException ignored) {
+                // best effort
+            }
+            throw e;
+        }
+    }
+
     /**
      * Moves the source files into staging, one file at a time.
      *
@@ -269,16 +344,14 @@ public class AudiobookMergeService {
     private void stageSource(Path source, Path stagedSource, boolean folderBased) throws IOException {
         Files.createDirectories(stagedSource);
         if (!folderBased) {
-            Files.move(source, stagedSource.resolve(source.getFileName()), StandardCopyOption.REPLACE_EXISTING);
+            moveFile(source, stagedSource.resolve(source.getFileName()));
             return;
         }
         try (Stream<Path> walk = Files.walk(source)) {
             List<Path> files = walk.filter(Files::isRegularFile).toList();
             for (Path file : files) {
                 Path relative = source.relativize(file);
-                Path target = stagedSource.resolve(relative);
-                Files.createDirectories(target.getParent());
-                Files.move(file, target, StandardCopyOption.REPLACE_EXISTING);
+                moveFile(file, stagedSource.resolve(relative));
             }
         }
     }
@@ -298,8 +371,7 @@ public class AudiobookMergeService {
                         Files.deleteIfExists(entry);
                         continue;
                     }
-                    Files.createDirectories(originalPath.getParent());
-                    Files.move(entry, originalPath, StandardCopyOption.REPLACE_EXISTING);
+                    moveFile(entry, originalPath);
                 }
             }
             return;
@@ -312,10 +384,7 @@ public class AudiobookMergeService {
                     Files.deleteIfExists(file);
                     continue;
                 }
-                Path relative = stagedSource.relativize(file);
-                Path target = originalPath.resolve(relative);
-                Files.createDirectories(target.getParent());
-                Files.move(file, target, StandardCopyOption.REPLACE_EXISTING);
+                moveFile(file, originalPath.resolve(stagedSource.relativize(file)));
             }
         }
     }

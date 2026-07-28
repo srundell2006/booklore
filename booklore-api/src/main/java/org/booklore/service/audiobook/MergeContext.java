@@ -10,6 +10,7 @@ import lombok.Builder;
 @Builder
 public record MergeContext(
         long bookId,
+        Long libraryId,
         String sourcePath,
         boolean folderBased,
         String title,
