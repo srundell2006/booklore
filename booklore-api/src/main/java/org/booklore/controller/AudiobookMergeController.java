@@ -7,6 +7,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.booklore.model.dto.settings.AudiobookMergeSettings;
 import org.booklore.service.audiobook.AudiobookMergeService;
+import org.booklore.service.audiobook.MergeContext;
 import org.booklore.service.audiobook.M4bMergeClient;
 import org.booklore.service.NotificationService;
 import org.booklore.model.websocket.Topic;
@@ -46,6 +47,20 @@ public class AudiobookMergeController {
                     "error", "A merge is already running for this book", "bookId", bookId));
         }
 
+        // Validate synchronously so real problems (service not configured, staging
+        // folder missing, already a single m4b) come back as an HTTP error the UI
+        // can show, rather than the user seeing nothing happen.
+        final MergeContext context;
+        try {
+            context = mergeService.prepare(bookId);
+        } catch (Exception e) {
+            running.remove(bookId);
+            log.warn("Audiobook merge rejected for book {}: {}", bookId, e.getMessage());
+            return ResponseEntity.badRequest().body(Map.of(
+                    "error", e.getMessage() == null ? "Merge cannot start" : e.getMessage(),
+                    "bookId", bookId));
+        }
+
         // Virtual threads start with an empty ThreadLocal, so without this the
         // SecurityContext is missing and every progress notification is silently
         // dropped by NotificationService.
@@ -54,7 +69,7 @@ public class AudiobookMergeController {
             SecurityContextHolder.setContext(securityContext);
             AtomicBoolean cancelFlag = running.get(bookId);
             try {
-                Path result = mergeService.mergeBook(bookId, new AudiobookMergeService.ProgressListener() {
+                Path result = mergeService.mergeBook(context, new AudiobookMergeService.ProgressListener() {
                     @Override
                     public void onProgress(int percent, String message) {
                         notificationService.sendMessage(Topic.LOG,

@@ -37,6 +37,8 @@ public class AudiobookMergeService {
     private static final java.util.Set<String> AUDIO_EXTENSIONS = java.util.Set.of(
             "m4b", "m4a", "mp3", "aac", "flac", "ogg", "oga", "opus", "wav", "wma", "alac", "mp4");
     private static final String MANIFEST_NAME = "booklore-merge.json";
+    /** Files we create for m4b-tool; deleted rather than restored into the library. */
+    private static final java.util.Set<String> GENERATED_ASSETS = java.util.Set.of("description.txt");
     private static final long POLL_INTERVAL_MS = 5000;
 
     private final MergeContextLoader contextLoader;
@@ -82,8 +84,7 @@ public class AudiobookMergeService {
                 log.info("Staging leftovers for book {} but original path already exists; discarding staged copy at {}",
                         manifest.getBookId(), jobDir);
             } else if (Files.exists(staged)) {
-                Files.createDirectories(original.getParent());
-                Files.move(staged, original, StandardCopyOption.REPLACE_EXISTING);
+                restoreSource(staged, original, manifest.isFolderBased());
                 log.info("Recovered orphaned merge staging: restored {} -> {}", staged, original);
             }
             deleteRecursively(jobDir);
@@ -96,10 +97,23 @@ public class AudiobookMergeService {
      * Runs a full merge for one book. Blocking: intended to be called from a
      * task thread, which supplies the progress callback.
      */
-    public Path mergeBook(long bookId, ProgressListener listener) {
+    /**
+     * Validates everything that can fail fast, so the caller can surface a real
+     * error synchronously instead of the user seeing nothing happen.
+     */
+    public MergeContext prepare(long bookId) {
         AudiobookMergeSettings settings = getSettings();
         if (!settings.isEnabled()) {
             throw ApiError.GENERIC_BAD_REQUEST.createException("Audiobook merging is not enabled");
+        }
+        if (settings.getServiceUrl() == null || settings.getServiceUrl().isBlank()) {
+            throw ApiError.GENERIC_BAD_REQUEST.createException("Audiobook merge service URL is not configured");
+        }
+
+        Path stagingRoot = Path.of(settings.getStagingPath());
+        if (!Files.isDirectory(stagingRoot)) {
+            throw ApiError.GENERIC_BAD_REQUEST.createException(
+                    "Staging folder does not exist or is not mounted: " + stagingRoot);
         }
 
         // Read everything we need inside a short transaction. The merge itself runs
@@ -119,6 +133,12 @@ public class AudiobookMergeService {
         if (audioFiles.size() == 1 && isM4b(audioFiles.getFirst())) {
             throw ApiError.GENERIC_BAD_REQUEST.createException("Book is already a single .m4b file");
         }
+        return context;
+    }
+
+    public Path mergeBook(MergeContext context, ProgressListener listener) {
+        AudiobookMergeSettings settings = getSettings();
+        Path sourcePath = Path.of(context.sourcePath());
 
         String jobKey = UUID.randomUUID().toString().replace("-", "");
         Path stagingRoot = Path.of(settings.getStagingPath());
@@ -133,7 +153,7 @@ public class AudiobookMergeService {
         try {
             Files.createDirectories(stagedOut);
             writeManifest(jobDir, MergeStagingManifest.builder()
-                    .bookId(bookId)
+                    .bookId(context.bookId())
                     .originalPath(sourcePath.toString())
                     .folderBased(context.folderBased())
                     .destinationPath(destination.toString())
@@ -153,7 +173,7 @@ public class AudiobookMergeService {
             MergeJobStatus job = mergeClient.submit(settings, serviceInput, serviceOutput,
                     buildOptions(settings, context));
             log.info("Merge job {} submitted for book {} ({} source file(s), lossless={})",
-                    job.getJobId(), bookId, job.getSourceFileCount(), job.isLossless());
+                    job.getJobId(), context.bookId(), job.getSourceFileCount(), job.isLossless());
 
             MergeJobStatus finished = awaitCompletion(settings, job.getJobId(), listener);
 
@@ -171,13 +191,16 @@ public class AudiobookMergeService {
             Files.createDirectories(destination.getParent());
             // Same filesystem as the library, so this is a rename rather than a copy.
             Files.move(produced, destination, StandardCopyOption.REPLACE_EXISTING);
-            log.info("Merged audiobook for book {} -> {}", bookId, destination);
+            log.info("Merged audiobook for book {} -> {}", context.bookId(), destination);
 
             if (settings.isDeleteSourcesAfterMerge()) {
                 deleteRecursively(stagedSource);
-                log.info("Deleted original sources for book {} after successful merge", bookId);
+                if (context.folderBased()) {
+                    deleteRecursively(sourcePath);
+                }
+                log.info("Deleted original sources for book {} after successful merge", context.bookId());
             } else {
-                restoreSource(stagedSource, sourcePath);
+                restoreSource(stagedSource, sourcePath, context.folderBased());
             }
             sourceMoved = false;
 
@@ -187,12 +210,12 @@ public class AudiobookMergeService {
         } catch (Exception e) {
             if (sourceMoved) {
                 try {
-                    restoreSource(stagedSource, sourcePath);
-                    log.info("Restored source files for book {} after failed merge", bookId);
+                    restoreSource(stagedSource, sourcePath, context.folderBased());
+                    log.info("Restored source files for book {} after failed merge", context.bookId());
                 } catch (Exception restoreError) {
                     log.error("CRITICAL: merge failed AND source restore failed for book {}. "
                                     + "Files remain at {} and must be moved back to {} manually.",
-                            bookId, stagedSource, sourcePath, restoreError);
+                            context.bookId(), stagedSource, sourcePath, restoreError);
                     throw new IllegalStateException("Merge failed and sources could not be restored; "
                             + "they are at " + stagedSource, e);
                 }
@@ -233,28 +256,66 @@ public class AudiobookMergeService {
         }
     }
 
-    /** Moves the source into staging. Rename on the same filesystem, so effectively free. */
+    /**
+     * Moves the source files into staging, one file at a time.
+     *
+     * Renaming the directory wholesale looks tempting but does not work here:
+     * /audiobooks and /merge are separate docker bind mounts, and rename(2)
+     * returns EXDEV across mount points even when the underlying filesystem is
+     * the same. Java then falls back to a copy, which refuses to move a
+     * non-empty directory. Moving regular files individually works either way --
+     * Files.move transparently falls back to copy+delete per file.
+     */
     private void stageSource(Path source, Path stagedSource, boolean folderBased) throws IOException {
-        if (folderBased) {
-            Files.move(source, stagedSource, StandardCopyOption.REPLACE_EXISTING);
-        } else {
-            Files.createDirectories(stagedSource);
+        Files.createDirectories(stagedSource);
+        if (!folderBased) {
             Files.move(source, stagedSource.resolve(source.getFileName()), StandardCopyOption.REPLACE_EXISTING);
+            return;
+        }
+        try (Stream<Path> walk = Files.walk(source)) {
+            List<Path> files = walk.filter(Files::isRegularFile).toList();
+            for (Path file : files) {
+                Path relative = source.relativize(file);
+                Path target = stagedSource.resolve(relative);
+                Files.createDirectories(target.getParent());
+                Files.move(file, target, StandardCopyOption.REPLACE_EXISTING);
+            }
         }
     }
 
-    private void restoreSource(Path stagedSource, Path originalPath) throws IOException {
+    /**
+     * Moves staged files back to where they came from, preserving relative layout.
+     * Assets we generated for m4b-tool are deleted rather than restored.
+     */
+    private void restoreSource(Path stagedSource, Path originalPath, boolean folderBased) throws IOException {
         if (!Files.exists(stagedSource)) {
             return;
         }
-        Files.createDirectories(originalPath.getParent());
-        if (Files.isDirectory(stagedSource) && !Files.exists(originalPath)) {
-            Files.move(stagedSource, originalPath, StandardCopyOption.REPLACE_EXISTING);
+        if (!folderBased) {
+            try (Stream<Path> entries = Files.list(stagedSource)) {
+                for (Path entry : entries.toList()) {
+                    if (GENERATED_ASSETS.contains(entry.getFileName().toString())) {
+                        Files.deleteIfExists(entry);
+                        continue;
+                    }
+                    Files.createDirectories(originalPath.getParent());
+                    Files.move(entry, originalPath, StandardCopyOption.REPLACE_EXISTING);
+                }
+            }
             return;
         }
-        try (Stream<Path> entries = Files.list(stagedSource)) {
-            for (Path entry : entries.toList()) {
-                Files.move(entry, originalPath.resolve(entry.getFileName()), StandardCopyOption.REPLACE_EXISTING);
+        Files.createDirectories(originalPath);
+        try (Stream<Path> walk = Files.walk(stagedSource)) {
+            List<Path> files = walk.filter(Files::isRegularFile).toList();
+            for (Path file : files) {
+                if (GENERATED_ASSETS.contains(file.getFileName().toString())) {
+                    Files.deleteIfExists(file);
+                    continue;
+                }
+                Path relative = stagedSource.relativize(file);
+                Path target = originalPath.resolve(relative);
+                Files.createDirectories(target.getParent());
+                Files.move(file, target, StandardCopyOption.REPLACE_EXISTING);
             }
         }
     }
