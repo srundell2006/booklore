@@ -75,6 +75,14 @@ public enum TaskType {
             "Scan EPUBs for ISBN",
             "Scans the content pages of EPUB files (title page, copyright page, etc.) to find and populate missing ISBN numbers."
     ),
+    AUDIOBOOK_MERGE(
+            false,
+            true,
+            false,
+            false,
+            "Merge Audiobook",
+            "Merges an audiobook's files into a single .m4b with chapters using the m4b-merge service."
+    ),
     WANTED_BOOK_SEARCH(
             false,
             true,

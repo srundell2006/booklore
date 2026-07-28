@@ -38,6 +38,7 @@ public class AppSettings {
     private MetadataPublicReviewsSettings metadataPublicReviewsSettings;
     private KoboSettings koboSettings;
     private BookAcquisitionSettings bookAcquisitionSettings;
+    private AudiobookMergeSettings audiobookMergeSettings;
     private CoverCroppingSettings coverCroppingSettings;
     private MetadataProviderSpecificFields metadataProviderSpecificFields;
     private Integer oidcSessionDurationHours;
