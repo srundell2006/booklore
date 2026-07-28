@@ -329,7 +329,11 @@ public class AudiobookMergeService {
                 }
                 out.flush();
             }
-            Files.move(partial, target, StandardCopyOption.REPLACE_EXISTING);
+            // CIFS/SMB has no POSIX rename-over-existing: renaming onto a file that
+            // already exists fails with EBUSY ("Resource busy") regardless of
+            // REPLACE_EXISTING. Remove the destination first.
+            Files.deleteIfExists(target);
+            Files.move(partial, target);
             Files.delete(source);
         } catch (IOException e) {
             try {
