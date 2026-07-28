@@ -42,7 +42,8 @@ export class MetadataSettingsComponent implements OnInit {
   currentMetadataOptions!: MetadataRefreshOptions;
   metadataDownloadOnBookdrop = true;
   bookdropAutoImportEnabled = false;
-  bookdropAutoImportMinScore = 50;
+  // number | null: InputNumber's ControlValueAccessor writes number | null to the bound field
+  bookdropAutoImportMinScore: number | null = 50;
   bookdropAutoImportLibraryId: number | null = null;
   bookdropAutoImportPathId: number | null = null;
   libraries: Library[] = [];
@@ -80,9 +81,10 @@ export class MetadataSettingsComponent implements OnInit {
     this.settingsHelper.saveSetting(AppSettingKey.BOOKDROP_AUTO_IMPORT_ENABLED, checked);
   }
 
-  onBookdropAutoImportMinScoreChange(value: number): void {
+  // InputNumber onChange emits InputNumberChangeEvent { value: number | null }
+  onBookdropAutoImportMinScoreChange(value: number | null): void {
     this.bookdropAutoImportMinScore = value;
-    this.settingsHelper.saveSetting(AppSettingKey.BOOKDROP_AUTO_IMPORT_MIN_SCORE, value);
+    this.settingsHelper.saveSetting(AppSettingKey.BOOKDROP_AUTO_IMPORT_MIN_SCORE, value ?? 50);
   }
 
   onBookdropAutoImportLibraryChange(libraryId: number | null): void {
