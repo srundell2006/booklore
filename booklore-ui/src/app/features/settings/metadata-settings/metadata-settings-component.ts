@@ -54,13 +54,13 @@ export class MetadataSettingsComponent implements OnInit {
 
   readonly appSettings$: Observable<AppSettings | null> = this.appSettingsService.appSettings$;
 
-  get libraryOptions() {
-    return this.libraries.map(lib => ({label: lib.name, value: lib.id}));
+  get libraryOptions(): {label: string; value: number | null}[] {
+    return this.libraries.map(lib => ({label: lib.name, value: lib.id ?? null}));
   }
 
-  get selectedLibraryPaths() {
-    const lib = this.libraries.find(l => l.id === this.bookdropAutoImportLibraryId);
-    return lib?.paths.map(p => ({label: p.path, value: p.id})) ?? [];
+  get selectedLibraryPaths(): {label: string; value: number | null}[] {
+    const lib = this.libraries.find(l => l.id != null && l.id === this.bookdropAutoImportLibraryId);
+    return lib?.paths.map(p => ({label: p.path, value: p.id ?? null})) ?? [];
   }
 
   ngOnInit(): void {
