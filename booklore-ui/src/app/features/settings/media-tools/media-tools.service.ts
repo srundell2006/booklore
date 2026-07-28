@@ -1,5 +1,5 @@
 import {inject, Injectable} from '@angular/core';
-import {HttpClient} from '@angular/common/http';
+import {HttpClient, HttpParams} from '@angular/common/http';
 import {Observable} from 'rxjs';
 import {API_CONFIG} from '../../../core/config/api-config';
 import {AudiobookMergeSettings, EbookConversionSettings} from './media-tools-settings.model';
@@ -19,7 +19,12 @@ export class MediaToolsService {
   }
 
   convertBook(bookId: number, target?: string): Observable<unknown> {
-    const params = target ? {target} : {};
+    // Build params explicitly: a conditional object literal widens to
+    // { target?: undefined }, which HttpParams' index signature rejects.
+    let params = new HttpParams();
+    if (target) {
+      params = params.set('target', target);
+    }
     return this.http.post(`${this.convertUrl}/books/${bookId}`, {}, {params});
   }
 
