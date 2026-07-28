@@ -51,6 +51,11 @@
                 <i class="pi pi-history"></i> {{ t('auditLogs') }}
               </p-tab>
             }
+            @if (userState.user.permissions.admin) {
+              <p-tab [value]="SettingsTab.MediaTools">
+                <i class="pi pi-sliders-h"></i> Media Tools
+              </p-tab>
+            }
             <p-tab [value]="SettingsTab.OpdsV2">
               <i class="pi pi-globe"></i> {{ t('opds') }}
             </p-tab>
@@ -125,6 +130,13 @@
               <p-tabpanel [value]="SettingsTab.AuditLogs">
                 <ng-template #content>
                   <app-audit-logs></app-audit-logs>
+                </ng-template>
+              </p-tabpanel>
+            }
+            @if (userState.user.permissions.admin) {
+              <p-tabpanel [value]="SettingsTab.MediaTools">
+                <ng-template #content>
+                  <app-media-tools-settings></app-media-tools-settings>
                 </ng-template>
               </p-tabpanel>
             }

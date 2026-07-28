@@ -27,6 +27,7 @@ import {BookDialogHelperService} from '../book-dialog-helper.service';
 import {TaskHelperService} from '../../../../settings/task-management/task-helper.service';
 import {BookNavigationService} from '../../../service/book-navigation.service';
 import {BookCardOverlayPreferenceService} from '../book-card-overlay-preference.service';
+import {MediaToolsService} from '../../../../settings/media-tools/media-tools.service';
 import {AppSettingsService} from '../../../../../shared/service/app-settings.service';
 import {TranslocoPipe, TranslocoService} from '@jsverse/transloco';
 
@@ -65,6 +66,7 @@ export class BookCardComponent implements OnInit, OnChanges, OnDestroy {
 
   private bookService = inject(BookService);
   private bookFileService = inject(BookFileService);
+  private mediaToolsService = inject(MediaToolsService);
   private bookMetadataManageService = inject(BookMetadataManageService);
   private taskHelperService = inject(TaskHelperService);
   private userService = inject(UserService);
@@ -396,6 +398,66 @@ export class BookCardComponent implements OnInit, OnChanges, OnDestroy {
           label: this.t.translate('book.card.menu.download'),
           icon: this.isSubMenuLoading ? 'pi pi-spin pi-spinner' : 'pi pi-download',
           items: [{label: this.t.translate('book.card.menu.loading'), disabled: true}]
+        });
+      }
+    }
+
+    // Media tools: convert ebooks / merge multi-file audiobooks via the sidecars
+    if (this.user?.permissions.admin) {
+      const primaryType = (this.book.primaryFile?.bookType || '').toString().toUpperCase();
+      const fileName = this.book.primaryFile?.fileName || '';
+      const extension = fileName.includes('.')
+        ? fileName.slice(fileName.lastIndexOf('.') + 1).toLowerCase() : '';
+
+      if (primaryType === 'AUDIOBOOK') {
+        // Merging only makes sense when there is more than one file, or a single non-m4b
+        const alreadySingleM4b = extension === 'm4b' && !this.book.primaryFile?.folderBased;
+        if (!alreadySingleM4b) {
+          items.push({
+            label: 'Merge to M4B',
+            icon: 'pi pi-compress',
+            command: () => {
+              this.confirmationService.confirm({
+                message: `Merge "${this.book.metadata?.title}" into a single .m4b? `
+                  + 'Files are staged, merged, and the result moved back into the library. '
+                  + 'Originals are restored if it fails.',
+                header: 'Merge audiobook',
+                icon: 'pi pi-exclamation-triangle',
+                acceptLabel: 'Merge',
+                rejectLabel: this.t.translate('common.cancel'),
+                rejectButtonStyleClass: 'p-button-outlined',
+                accept: () => {
+                  this.mediaToolsService.mergeAudiobook(this.book.id).subscribe({
+                    next: () => this.messageService.add({
+                      severity: 'info', summary: 'Merge started',
+                      detail: 'Progress is reported in the notification log', life: 5000
+                    }),
+                    error: (err) => this.messageService.add({
+                      severity: 'error', summary: 'Error',
+                      detail: err?.error?.error || 'Failed to start merge', life: 5000
+                    })
+                  });
+                }
+              });
+            }
+          });
+        }
+      } else if (extension && extension !== 'epub') {
+        items.push({
+          label: 'Convert to EPUB',
+          icon: 'pi pi-sync',
+          command: () => {
+            this.mediaToolsService.convertBook(this.book.id, 'epub').subscribe({
+              next: () => this.messageService.add({
+                severity: 'info', summary: 'Conversion started',
+                detail: 'Progress is reported in the notification log', life: 5000
+              }),
+              error: (err) => this.messageService.add({
+                severity: 'error', summary: 'Error',
+                detail: err?.error?.error || 'Failed to start conversion', life: 5000
+              })
+            });
+          }
         });
       }
     }

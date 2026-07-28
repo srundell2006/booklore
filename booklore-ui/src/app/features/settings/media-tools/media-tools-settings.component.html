@@ -1,0 +1,117 @@
+<div class="media-tools">
+
+  <section class="tool-section">
+    <div class="section-header">
+      <h3>Ebook Conversion</h3>
+      <p class="hint">Converts MOBI, AZW3, PDF and others to EPUB using a Calibre sidecar.</p>
+    </div>
+
+    <div class="field-row">
+      <label><p-checkbox [(ngModel)]="conversion.enabled" [binary]="true"></p-checkbox> Enable ebook conversion</label>
+    </div>
+    <div class="field-row">
+      <label>Service URL</label>
+      <input pInputText [(ngModel)]="conversion.serviceUrl" placeholder="http://172.30.0.36:8080"/>
+    </div>
+    <div class="field-row">
+      <label>Default target</label>
+      <input pInputText [(ngModel)]="conversion.defaultTargetFormat" class="narrow"/>
+      <span class="inline-hint">Format used by the one-click convert action</span>
+    </div>
+    <div class="field-row">
+      <label>Timeout (min)</label>
+      <input pInputText type="number" [(ngModel)]="conversion.timeoutMinutes" class="narrow"/>
+    </div>
+
+    <div class="actions">
+      <p-button label="Test Connection" icon="pi pi-bolt" size="small" severity="secondary" outlined="true"
+                [loading]="testingConverter" (onClick)="testConverter()"></p-button>
+      @if (converterResult !== undefined) {
+        <p-tag [severity]="converterResult ? 'success' : 'danger'"
+               [value]="converterResult ? 'Converter reachable' : 'Converter unreachable'"></p-tag>
+      }
+    </div>
+
+    <p class="caveat">
+      <i class="pi pi-info-circle"></i>
+      PDF to EPUB is unreliable by nature — PDF is fixed-layout, so anything with columns,
+      footnotes or figures converts poorly, and scanned PDFs produce nothing without OCR.
+      MOBI and AZW3 convert well.
+    </p>
+  </section>
+
+  <section class="tool-section">
+    <div class="section-header">
+      <h3>Audiobook Merge</h3>
+      <p class="hint">Merges multi-file audiobooks into a single .m4b with chapters, using m4b-tool.</p>
+    </div>
+
+    <div class="field-row">
+      <label><p-checkbox [(ngModel)]="merge.enabled" [binary]="true"></p-checkbox> Enable audiobook merging</label>
+    </div>
+    <div class="field-row">
+      <label>Service URL</label>
+      <input pInputText [(ngModel)]="merge.serviceUrl" placeholder="http://172.30.0.37:8080"/>
+    </div>
+    <div class="field-row">
+      <label [pTooltip]="'Staging folder as BookLore sees it'">Staging path</label>
+      <input pInputText [(ngModel)]="merge.stagingPath" class="medium"/>
+      <label [pTooltip]="'The same folder as the merge service sees it'">Service path</label>
+      <input pInputText [(ngModel)]="merge.serviceStagingPath" class="medium"/>
+    </div>
+
+    <h4>Encoding</h4>
+    <div class="field-row">
+      <label><p-checkbox [(ngModel)]="merge.preferLossless" [binary]="true"></p-checkbox>
+        Prefer lossless remux when sources are already AAC/M4B</label>
+    </div>
+    <div class="field-row">
+      <label>Codec</label>
+      <input pInputText [(ngModel)]="merge.audioCodec" class="narrow"/>
+      <label>Bitrate</label>
+      <input pInputText [(ngModel)]="merge.audioBitrate" class="narrow"/>
+      <label>Sample rate</label>
+      <input pInputText [(ngModel)]="merge.audioSamplerate" class="narrow"/>
+      <label>Channels</label>
+      <input pInputText [(ngModel)]="merge.audioChannels" class="narrow"/>
+    </div>
+    <div class="field-row">
+      <label [pTooltip]="'e.g. 300,900 — aim for 5 min chapters, split at silence, hard cap 15 min'">Max chapter length</label>
+      <input pInputText [(ngModel)]="merge.maxChapterLength" class="narrow"/>
+      <label>Parallel jobs</label>
+      <input pInputText type="number" [(ngModel)]="merge.jobs" class="narrow"/>
+      <label>Timeout (min)</label>
+      <input pInputText type="number" [(ngModel)]="merge.jobTimeoutMinutes" class="narrow"/>
+    </div>
+    <div class="field-row">
+      <label><p-checkbox [(ngModel)]="merge.useFilenamesAsChapters" [binary]="true"></p-checkbox>
+        Use filenames as chapter titles instead of tags</label>
+    </div>
+    <div class="field-row danger-row">
+      <label><p-checkbox [(ngModel)]="merge.deleteSourcesAfterMerge" [binary]="true"></p-checkbox>
+        Delete original files after a successful merge</label>
+      <span class="inline-hint danger">Destructive — leave off until you've verified a few merges</span>
+    </div>
+
+    <div class="actions">
+      <p-button label="Test Connection" icon="pi pi-bolt" size="small" severity="secondary" outlined="true"
+                [loading]="testingMerge" (onClick)="testMerge()"></p-button>
+      @if (mergeResult !== undefined) {
+        <p-tag [severity]="mergeResult ? 'success' : 'danger'"
+               [value]="mergeResult ? 'Merge service reachable' : 'Merge service unreachable'"></p-tag>
+      }
+    </div>
+
+    <p class="caveat">
+      <i class="pi pi-info-circle"></i>
+      The merge service has no access to your library. BookLore moves the files for one job
+      into the staging folder and moves the finished file back itself. Sources are restored
+      automatically if a merge fails.
+    </p>
+  </section>
+
+  <div class="save-row">
+    <p-button label="Save Settings" icon="pi pi-save" severity="success" [loading]="saving"
+              (onClick)="save()"></p-button>
+  </div>
+</div>

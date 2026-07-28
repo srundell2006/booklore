@@ -171,6 +171,7 @@ public class AppSettingService {
         builder.koboSettings(settingPersistenceHelper.getJsonSetting(settingsMap, AppSettingKey.KOBO_SETTINGS, KoboSettings.class, settingPersistenceHelper.getDefaultKoboSettings(), true));
         builder.bookAcquisitionSettings(settingPersistenceHelper.getJsonSetting(settingsMap, AppSettingKey.BOOK_ACQUISITION_SETTINGS, BookAcquisitionSettings.class, BookAcquisitionSettings.builder().build(), false));
         builder.audiobookMergeSettings(settingPersistenceHelper.getJsonSetting(settingsMap, AppSettingKey.AUDIOBOOK_MERGE_SETTINGS, AudiobookMergeSettings.class, AudiobookMergeSettings.builder().build(), false));
+        builder.ebookConversionSettings(settingPersistenceHelper.getJsonSetting(settingsMap, AppSettingKey.EBOOK_CONVERSION_SETTINGS, EbookConversionSettings.class, EbookConversionSettings.builder().build(), false));
         builder.coverCroppingSettings(settingPersistenceHelper.getJsonSetting(settingsMap, AppSettingKey.COVER_CROPPING_SETTINGS, CoverCroppingSettings.class, settingPersistenceHelper.getDefaultCoverCroppingSettings(), true));
         builder.metadataProviderSpecificFields(
             settingPersistenceHelper.getJsonSetting(

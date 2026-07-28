@@ -13,6 +13,7 @@ import {FileNamingPatternComponent} from './file-naming-pattern/file-naming-patt
 import {TaskManagementComponent} from './task-management/task-management.component';
 import {AuditLogsComponent} from './audit-logs/audit-logs.component';
 import {OpdsSettings} from './opds-settings/opds-settings';
+import {MediaToolsSettingsComponent} from './media-tools/media-tools-settings.component';
 import {MetadataSettingsComponent} from './metadata-settings/metadata-settings-component';
 import {DeviceSettingsComponent} from './device-settings/device-settings-component';
 import {LibraryMetadataSettingsComponent} from './library-metadata-settings/library-metadata-settings.component';
@@ -34,6 +35,7 @@ export enum SettingsTab {
   OpdsV2 = 'opds',
   Tasks = 'task',
   AuditLogs = 'audit-logs',
+  MediaTools = 'media-tools',
 }
 
 @Component({
@@ -54,6 +56,7 @@ export enum SettingsTab {
     DeviceSettingsComponent,
     FileNamingPatternComponent,
     OpdsSettings,
+    MediaToolsSettingsComponent,
     LibraryMetadataSettingsComponent,
     TaskManagementComponent,
     AuditLogsComponent,
