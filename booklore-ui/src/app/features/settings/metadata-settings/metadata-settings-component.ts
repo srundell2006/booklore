@@ -8,7 +8,6 @@ import {Observable} from 'rxjs';
 import {AppSettingKey, AppSettings} from '../../../shared/model/app-settings.model';
 import {filter, take} from 'rxjs/operators';
 import {ToggleSwitch} from 'primeng/toggleswitch';
-import {InputNumber} from 'primeng/inputnumber';
 import {Select} from 'primeng/select';
 import {MetadataMatchWeightsComponent} from '../global-preferences/metadata-match-weights/metadata-match-weights-component';
 import {MetadataPersistenceSettingsComponent} from './metadata-persistence-settings/metadata-persistence-settings-component';
@@ -27,7 +26,6 @@ import {Library} from '../../book/model/library.model';
     FormsModule,
     MetadataMatchWeightsComponent,
     ToggleSwitch,
-    InputNumber,
     Select,
     MetadataPersistenceSettingsComponent,
     PublicReviewsSettingsComponent,
@@ -42,10 +40,11 @@ export class MetadataSettingsComponent implements OnInit {
   currentMetadataOptions!: MetadataRefreshOptions;
   metadataDownloadOnBookdrop = true;
   bookdropAutoImportEnabled = false;
-  // number | null: InputNumber's ControlValueAccessor writes number | null to the bound field
+  // number | null: native <input type="number"> via NumberValueAccessor writes number | null
   bookdropAutoImportMinScore: number | null = 50;
-  bookdropAutoImportLibraryId: number | null = null;
-  bookdropAutoImportPathId: number | null = null;
+  // string | null: matches proven pattern in bookdrop-file-review (String(id) values)
+  bookdropAutoImportLibraryId: string | null = null;
+  bookdropAutoImportPathId: string | null = null;
   libraries: Library[] = [];
 
   private readonly appSettingsService = inject(AppSettingsService);
@@ -55,13 +54,13 @@ export class MetadataSettingsComponent implements OnInit {
 
   readonly appSettings$: Observable<AppSettings | null> = this.appSettingsService.appSettings$;
 
-  get libraryOptions(): {label: string; value: number | null}[] {
-    return this.libraries.map(lib => ({label: lib.name, value: lib.id ?? null}));
+  get libraryOptions(): {label: string; value: string}[] {
+    return this.libraries.map(lib => ({label: lib.name, value: String(lib.id ?? '')}));
   }
 
-  get selectedLibraryPaths(): {label: string; value: number | null}[] {
-    const lib = this.libraries.find(l => l.id != null && l.id === this.bookdropAutoImportLibraryId);
-    return lib?.paths.map(p => ({label: p.path, value: p.id ?? null})) ?? [];
+  get selectedLibraryPaths(): {label: string; value: string}[] {
+    const lib = this.libraries.find(l => l.id != null && String(l.id) === this.bookdropAutoImportLibraryId);
+    return lib?.paths.map(p => ({label: p.path, value: String(p.id ?? '')})) ?? [];
   }
 
   ngOnInit(): void {
@@ -81,22 +80,22 @@ export class MetadataSettingsComponent implements OnInit {
     this.settingsHelper.saveSetting(AppSettingKey.BOOKDROP_AUTO_IMPORT_ENABLED, checked);
   }
 
-  // InputNumber onChange emits InputNumberChangeEvent { value: number | null }
-  onBookdropAutoImportMinScoreChange(value: number | null): void {
-    this.bookdropAutoImportMinScore = value;
-    this.settingsHelper.saveSetting(AppSettingKey.BOOKDROP_AUTO_IMPORT_MIN_SCORE, value ?? 50);
+  // Called from (change) on native <input type="number"> — reads current model value
+  onBookdropAutoImportMinScoreChange(): void {
+    this.settingsHelper.saveSetting(AppSettingKey.BOOKDROP_AUTO_IMPORT_MIN_SCORE, this.bookdropAutoImportMinScore ?? 50);
   }
 
-  onBookdropAutoImportLibraryChange(libraryId: number | null): void {
+  // Called from (ngModelChange) — $event is typed as the model type (string | null)
+  onBookdropAutoImportLibraryChange(libraryId: string | null): void {
     this.bookdropAutoImportLibraryId = libraryId;
     this.bookdropAutoImportPathId = null;
-    this.settingsHelper.saveSetting(AppSettingKey.BOOKDROP_AUTO_IMPORT_LIBRARY_ID, libraryId ?? '');
+    this.settingsHelper.saveSetting(AppSettingKey.BOOKDROP_AUTO_IMPORT_LIBRARY_ID, libraryId ? Number(libraryId) : '');
     this.settingsHelper.saveSetting(AppSettingKey.BOOKDROP_AUTO_IMPORT_PATH_ID, '');
   }
 
-  onBookdropAutoImportPathChange(pathId: number | null): void {
+  onBookdropAutoImportPathChange(pathId: string | null): void {
     this.bookdropAutoImportPathId = pathId;
-    this.settingsHelper.saveSetting(AppSettingKey.BOOKDROP_AUTO_IMPORT_PATH_ID, pathId ?? '');
+    this.settingsHelper.saveSetting(AppSettingKey.BOOKDROP_AUTO_IMPORT_PATH_ID, pathId ? Number(pathId) : '');
   }
 
   onMetadataSubmit(metadataRefreshOptions: MetadataRefreshOptions): void {
@@ -125,7 +124,7 @@ export class MetadataSettingsComponent implements OnInit {
     this.metadataDownloadOnBookdrop = settings.metadataDownloadOnBookdrop ?? true;
     this.bookdropAutoImportEnabled = settings.bookdropAutoImportEnabled ?? false;
     this.bookdropAutoImportMinScore = settings.bookdropAutoImportMinScore ?? 50;
-    this.bookdropAutoImportLibraryId = settings.bookdropAutoImportLibraryId ?? null;
-    this.bookdropAutoImportPathId = settings.bookdropAutoImportPathId ?? null;
+    this.bookdropAutoImportLibraryId = settings.bookdropAutoImportLibraryId?.toString() ?? null;
+    this.bookdropAutoImportPathId = settings.bookdropAutoImportPathId?.toString() ?? null;
   }
 }
