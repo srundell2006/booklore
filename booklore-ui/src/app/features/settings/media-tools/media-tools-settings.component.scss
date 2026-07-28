@@ -1,12 +1,15 @@
+@use '../../../shared/styles/settings-shared' as settings;
+
 .media-tools {
-  padding: 1rem 0.25rem;
+  // Every other settings tab uses this mixin; it supplies the scroll container
+  // (height: calc(100dvh - ...) + overflow-y: auto) that the tab panel needs.
+  @include settings.settings-page-container;
   max-width: 1000px;
 
   .tool-section {
     border: 1px solid var(--p-content-border-color, #444);
     border-radius: 8px;
     padding: 1rem 1.25rem;
-    margin-bottom: 1.25rem;
 
     .section-header {
       margin-bottom: 0.75rem;
@@ -64,5 +67,9 @@
   .save-row {
     display: flex;
     justify-content: flex-end;
+    flex-shrink: 0;
+    padding-bottom: 1rem;
   }
+
+  .tool-section { flex-shrink: 0; }
 }
