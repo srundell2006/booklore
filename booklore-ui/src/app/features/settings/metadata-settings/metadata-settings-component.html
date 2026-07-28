@@ -53,13 +53,13 @@
                   <label class="setting-label">Minimum match score (0–100)</label>
                 </div>
                 <div class="setting-control">
-                  <p-inputnumber
+                  <input
+                    type="number"
+                    class="p-inputtext"
                     [(ngModel)]="bookdropAutoImportMinScore"
-                    [min]="0"
-                    [max]="100"
-                    [showButtons]="true"
-                    (onChange)="onBookdropAutoImportMinScoreChange($event.value)">
-                  </p-inputnumber>
+                    min="0"
+                    max="100"
+                    (change)="onBookdropAutoImportMinScoreChange()">
                 </div>
               </div>
 
@@ -71,7 +71,7 @@
                   <p-select
                     [options]="libraryOptions"
                     [(ngModel)]="bookdropAutoImportLibraryId"
-                    (onChange)="onBookdropAutoImportLibraryChange($event.value)"
+                    (ngModelChange)="onBookdropAutoImportLibraryChange($event)"
                     placeholder="Select library"
                     [showClear]="true"
                     styleClass="w-full">
@@ -88,7 +88,7 @@
                     <p-select
                       [options]="selectedLibraryPaths"
                       [(ngModel)]="bookdropAutoImportPathId"
-                      (onChange)="onBookdropAutoImportPathChange($event.value)"
+                      (ngModelChange)="onBookdropAutoImportPathChange($event)"
                       placeholder="Select path"
                       [showClear]="true"
                       styleClass="w-full">
