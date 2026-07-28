@@ -5,10 +5,6 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.booklore.exception.ApiError;
 import org.booklore.model.dto.settings.AudiobookMergeSettings;
-import org.booklore.model.entity.BookEntity;
-import org.booklore.model.entity.BookFileEntity;
-import org.booklore.model.entity.BookMetadataEntity;
-import org.booklore.repository.BookRepository;
 import org.booklore.service.appsettings.AppSettingService;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
@@ -43,7 +39,7 @@ public class AudiobookMergeService {
     private static final String MANIFEST_NAME = "booklore-merge.json";
     private static final long POLL_INTERVAL_MS = 5000;
 
-    private final BookRepository bookRepository;
+    private final MergeContextLoader contextLoader;
     private final AppSettingService appSettingService;
     private final M4bMergeClient mergeClient;
     private final ObjectMapper objectMapper;
@@ -106,15 +102,13 @@ public class AudiobookMergeService {
             throw ApiError.GENERIC_BAD_REQUEST.createException("Audiobook merging is not enabled");
         }
 
-        BookEntity book = bookRepository.findById(bookId)
-                .orElseThrow(() -> ApiError.BOOK_NOT_FOUND.createException(bookId));
-        BookFileEntity primaryFile = book.getPrimaryBookFile();
-        if (primaryFile == null) {
-            throw ApiError.GENERIC_BAD_REQUEST.createException("Book has no file to merge");
-        }
+        // Read everything we need inside a short transaction. The merge itself runs
+        // for minutes to hours, long after the JPA session is gone, so no entity may
+        // be touched past this point.
+        MergeContext context = contextLoader.load(bookId);
 
-        Path sourcePath = book.getFullFilePath();
-        if (sourcePath == null || !Files.exists(sourcePath)) {
+        Path sourcePath = Path.of(context.sourcePath());
+        if (!Files.exists(sourcePath)) {
             throw ApiError.GENERIC_BAD_REQUEST.createException("Source path does not exist: " + sourcePath);
         }
 
@@ -132,8 +126,8 @@ public class AudiobookMergeService {
         Path stagedSource = jobDir.resolve("source");
         Path stagedOut = jobDir.resolve("out");
 
-        String targetName = buildOutputName(book);
-        Path destination = resolveDestination(sourcePath, primaryFile.isFolderBased(), targetName);
+        String targetName = buildOutputName(context, sourcePath);
+        Path destination = resolveDestination(sourcePath, context.folderBased(), targetName);
 
         boolean sourceMoved = false;
         try {
@@ -141,23 +135,23 @@ public class AudiobookMergeService {
             writeManifest(jobDir, MergeStagingManifest.builder()
                     .bookId(bookId)
                     .originalPath(sourcePath.toString())
-                    .folderBased(primaryFile.isFolderBased())
+                    .folderBased(context.folderBased())
                     .destinationPath(destination.toString())
                     .createdAtEpochMs(System.currentTimeMillis())
                     .build());
 
             listener.onProgress(2, "Staging source files");
-            stageSource(sourcePath, stagedSource, primaryFile.isFolderBased());
+            stageSource(sourcePath, stagedSource, context.folderBased());
             sourceMoved = true;
 
-            writeSidecarAssets(book, stagedSource);
+            writeSidecarAssets(context, stagedSource);
 
             String serviceInput = toServicePath(settings, jobDir.resolve("source"));
             String serviceOutput = toServicePath(settings, stagedOut.resolve(targetName));
 
             listener.onProgress(5, "Submitting merge job");
             MergeJobStatus job = mergeClient.submit(settings, serviceInput, serviceOutput,
-                    buildOptions(settings, book, stagedSource));
+                    buildOptions(settings, context));
             log.info("Merge job {} submitted for book {} ({} source file(s), lossless={})",
                     job.getJobId(), bookId, job.getSourceFileCount(), job.isLossless());
 
@@ -269,20 +263,20 @@ public class AudiobookMergeService {
      * m4b-tool automatically embeds cover.jpg and description.txt found next to
      * the input, so write BookLore's metadata into the staging folder.
      */
-    private void writeSidecarAssets(BookEntity book, Path stagedSource) {
-        BookMetadataEntity metadata = book.getMetadata();
-        if (metadata == null) return;
+    private void writeSidecarAssets(MergeContext context, Path stagedSource) {
+        String description = context.description();
+        if (description == null || description.isBlank()) return;
         try {
-            String description = metadata.getDescription();
-            if (description != null && !description.isBlank() && !Files.exists(stagedSource.resolve("description.txt"))) {
-                Files.writeString(stagedSource.resolve("description.txt"), description, StandardCharsets.UTF_8);
+            Path target = stagedSource.resolve("description.txt");
+            if (!Files.exists(target)) {
+                Files.writeString(target, description, StandardCharsets.UTF_8);
             }
         } catch (Exception e) {
             log.debug("Could not write description.txt into staging: {}", e.getMessage());
         }
     }
 
-    private Map<String, Object> buildOptions(AudiobookMergeSettings settings, BookEntity book, Path stagedSource) {
+    private Map<String, Object> buildOptions(AudiobookMergeSettings settings, MergeContext context) {
         Map<String, Object> options = new HashMap<>();
         options.put("preferLossless", settings.isPreferLossless());
         options.put("audioCodec", settings.getAudioCodec());
@@ -297,22 +291,27 @@ public class AudiobookMergeService {
             options.put("useFilenamesAsChapters", true);
         }
 
-        BookMetadataEntity metadata = book.getMetadata();
-        if (metadata != null) {
-            putIfPresent(options, "name", metadata.getTitle());
-            putIfPresent(options, "album", metadata.getTitle());
-            putIfPresent(options, "publisher", metadata.getPublisher());
-            // --series / --series-part drive m4b-tool's sort-order generation
-            putIfPresent(options, "series", metadata.getSeriesName());
-            if (metadata.getSeriesNumber() != null) {
-                options.put("seriesPart", String.valueOf(metadata.getSeriesNumber()));
-            }
-            if (metadata.getPublishedDate() != null) {
-                options.put("year", String.valueOf(metadata.getPublishedDate().getYear()));
-            }
-            putIfPresent(options, "description", metadata.getDescription());
+        putIfPresent(options, "name", context.title());
+        putIfPresent(options, "album", context.title());
+        putIfPresent(options, "publisher", context.publisher());
+        // --series / --series-part drive m4b-tool's sort-order generation
+        putIfPresent(options, "series", context.seriesName());
+        if (context.seriesNumber() != null) {
+            options.put("seriesPart", trimTrailingZero(context.seriesNumber()));
         }
+        if (context.publishedYear() != null) {
+            options.put("year", String.valueOf(context.publishedYear()));
+        }
+        putIfPresent(options, "description", context.description());
         return options;
+    }
+
+    /** m4b-tool expects "2", not "2.0", for whole-numbered series parts. */
+    private String trimTrailingZero(Float value) {
+        if (value == value.intValue()) {
+            return String.valueOf(value.intValue());
+        }
+        return String.valueOf(value);
     }
 
     private void putIfPresent(Map<String, Object> options, String key, String value) {
@@ -355,15 +354,10 @@ public class AudiobookMergeService {
         return parent.resolve(targetName);
     }
 
-    private String buildOutputName(BookEntity book) {
-        String base = null;
-        if (book.getMetadata() != null && book.getMetadata().getTitle() != null
-                && !book.getMetadata().getTitle().isBlank()) {
-            base = book.getMetadata().getTitle();
-        }
-        if (base == null) {
-            Path path = book.getFullFilePath();
-            base = path != null ? path.getFileName().toString() : "audiobook";
+    private String buildOutputName(MergeContext context, Path sourcePath) {
+        String base = context.title();
+        if (base == null || base.isBlank()) {
+            base = sourcePath.getFileName().toString();
             int dot = base.lastIndexOf('.');
             if (dot > 0) base = base.substring(0, dot);
         }

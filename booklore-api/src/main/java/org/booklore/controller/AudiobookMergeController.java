@@ -10,6 +10,8 @@ import org.booklore.service.audiobook.AudiobookMergeService;
 import org.booklore.service.audiobook.M4bMergeClient;
 import org.booklore.service.NotificationService;
 import org.booklore.model.websocket.Topic;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -44,7 +46,12 @@ public class AudiobookMergeController {
                     "error", "A merge is already running for this book", "bookId", bookId));
         }
 
+        // Virtual threads start with an empty ThreadLocal, so without this the
+        // SecurityContext is missing and every progress notification is silently
+        // dropped by NotificationService.
+        SecurityContext securityContext = SecurityContextHolder.getContext();
         Thread.startVirtualThread(() -> {
+            SecurityContextHolder.setContext(securityContext);
             AtomicBoolean cancelFlag = running.get(bookId);
             try {
                 Path result = mergeService.mergeBook(bookId, new AudiobookMergeService.ProgressListener() {
@@ -67,6 +74,7 @@ public class AudiobookMergeController {
                         "Audiobook merge failed for book " + bookId + ": " + e.getMessage());
             } finally {
                 running.remove(bookId);
+                SecurityContextHolder.clearContext();
             }
         });
 

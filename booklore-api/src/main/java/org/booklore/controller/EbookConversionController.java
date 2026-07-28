@@ -9,6 +9,8 @@ import org.booklore.model.dto.settings.EbookConversionSettings;
 import org.booklore.model.websocket.Topic;
 import org.booklore.service.NotificationService;
 import org.booklore.service.conversion.EbookConversionService;
+import org.springframework.security.core.context.SecurityContext;
+import org.springframework.security.core.context.SecurityContextHolder;
 import org.springframework.http.ResponseEntity;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.web.bind.annotation.*;
@@ -33,7 +35,9 @@ public class EbookConversionController {
             @Parameter(description = "ID of the book") @PathVariable Long bookId,
             @Parameter(description = "Target format, e.g. epub") @RequestParam(required = false) String target) {
 
+        SecurityContext securityContext = SecurityContextHolder.getContext();
         Thread.startVirtualThread(() -> {
+            SecurityContextHolder.setContext(securityContext);
             try {
                 notificationService.sendMessage(Topic.LOG, "Converting book " + bookId + "...");
                 Path result = conversionService.convertBook(bookId, target);
@@ -42,6 +46,8 @@ public class EbookConversionController {
                 log.error("Conversion failed for book {}", bookId, e);
                 notificationService.sendMessage(Topic.LOG,
                         "Conversion failed for book " + bookId + ": " + e.getMessage());
+            } finally {
+                SecurityContextHolder.clearContext();
             }
         });
 
