@@ -156,17 +156,17 @@ public class BookdropEventHandlerService {
                             int minScore = settings.getBookdropAutoImportMinScore() != null ? settings.getBookdropAutoImportMinScore() : 50;
                             if (score >= minScore) {
                                 log.info("Auto-importing '{}' with match score {} >= threshold {}", fileName, score, minScore);
-                                BookdropFinalizeRequest.BookdropFinalizeFile fileReq = BookdropFinalizeRequest.BookdropFinalizeFile.builder()
-                                        .fileId(savedId)
-                                        .libraryId(settings.getBookdropAutoImportLibraryId())
-                                        .pathId(settings.getBookdropAutoImportPathId())
-                                        .build();
-                                BookdropFinalizeRequest finalizeRequest = BookdropFinalizeRequest.builder()
-                                        .selectAll(false)
-                                        .defaultLibraryId(settings.getBookdropAutoImportLibraryId())
-                                        .defaultPathId(settings.getBookdropAutoImportPathId())
-                                        .files(List.of(fileReq))
-                                        .build();
+                                BookdropFinalizeRequest.BookdropFinalizeFile fileReq = new BookdropFinalizeRequest.BookdropFinalizeFile();
+                                fileReq.setFileId(savedId);
+                                fileReq.setLibraryId(settings.getBookdropAutoImportLibraryId());
+                                fileReq.setPathId(settings.getBookdropAutoImportPathId());
+
+                                BookdropFinalizeRequest finalizeRequest = new BookdropFinalizeRequest();
+                                finalizeRequest.setSelectAll(false);
+                                finalizeRequest.setDefaultLibraryId(settings.getBookdropAutoImportLibraryId());
+                                finalizeRequest.setDefaultPathId(settings.getBookdropAutoImportPathId());
+                                finalizeRequest.setFiles(List.of(fileReq));
+
                                 try {
                                     bookDropService.finalizeImport(finalizeRequest);
                                     log.info("Auto-import successful for '{}'", fileName);
