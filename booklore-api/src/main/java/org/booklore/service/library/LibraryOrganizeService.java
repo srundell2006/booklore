@@ -7,18 +7,18 @@ import org.booklore.exception.ApiError;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.LibraryEntity;
+import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.repository.BookFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
+import org.booklore.util.PathPatternResolver;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
-import java.util.Arrays;
 import java.util.List;
-import java.util.stream.Collectors;
 
 @Slf4j
 @Service
@@ -56,7 +56,7 @@ public class LibraryOrganizeService {
                     if (wasOrganized) moved++;
                     else skipped++;
                 } catch (Exception e) {
-                    log.error("Failed to organize file '{}': {}", bookFile.getFullFilePath(), e.getMessage(), e);
+                    log.error("Failed to organize file '{}': {}", bookFile.getFileName(), e.getMessage(), e);
                     errors++;
                 }
             }
@@ -67,7 +67,7 @@ public class LibraryOrganizeService {
     }
 
     private boolean organizeFile(BookEntity book, BookFileEntity bookFile, String pattern) throws IOException {
-        String libraryRootPath = book.getLibraryPath().getPath();
+        LibraryPathEntity libraryPath = book.getLibraryPath();
         Path currentPath = bookFile.getFullFilePath();
 
         if (!Files.exists(currentPath)) {
@@ -75,39 +75,18 @@ public class LibraryOrganizeService {
             return false;
         }
 
-        // Preserve the original file extension
-        String originalFileName = bookFile.getFileName();
-        int dotIdx = originalFileName.lastIndexOf('.');
-        String extension = dotIdx >= 0 ? originalFileName.substring(dotIdx) : "";
-
-        // Resolve pattern tokens into a relative path string (no extension)
-        String resolved = resolvePattern(pattern, book, originalFileName);
-
-        // Split by any path separator, sanitize each segment, drop blanks
-        String[] segments = Arrays.stream(resolved.split("[/\\\\]+"))
-                .map(this::sanitizeSegment)
-                .filter(s -> !s.isBlank())
-                .toArray(String[]::new);
-
-        if (segments.length == 0) {
-            log.warn("Pattern resolved to empty path for book id={}; skipping.", book.getId());
-            return false;
+        // Delegate to the canonical resolver — same engine used by the metadata-update rename.
+        // It handles all tokens, modifiers ({authors:initial}, {authors:sort}, etc.),
+        // optional <> blocks, and auto-appends the file extension.
+        String newRelativePathStr = PathPatternResolver.resolvePattern(book, bookFile, pattern, bookFile.isFolderBased());
+        if (newRelativePathStr.startsWith("/") || newRelativePathStr.startsWith("\\")) {
+            newRelativePathStr = newRelativePathStr.substring(1);
         }
 
-        // Last segment = base filename; preceding segments = subdirectory components
-        String targetBaseName = segments[segments.length - 1];
-        Path targetSubDir;
-        if (segments.length == 1) {
-            targetSubDir = Paths.get("");
-        } else {
-            String first = segments[0];
-            String[] rest = Arrays.copyOfRange(segments, 1, segments.length - 1);
-            targetSubDir = rest.length > 0 ? Paths.get(first, rest) : Paths.get(first);
-        }
+        Path targetPath = Paths.get(libraryPath.getPath(), newRelativePathStr);
 
-        Path targetDir = Paths.get(libraryRootPath).resolve(targetSubDir);
-        String targetFileName = targetBaseName + extension;
-        Path targetPath = resolveConflict(targetDir, targetFileName, currentPath);
+        // Resolve name conflicts: if target exists and isn't the current file, suffix (1), (2), …
+        targetPath = resolveConflict(targetPath, currentPath);
 
         // Already in the right place?
         if (currentPath.toAbsolutePath().normalize().equals(targetPath.toAbsolutePath().normalize())) {
@@ -115,12 +94,16 @@ public class LibraryOrganizeService {
         }
 
         // Move the file
-        Files.createDirectories(targetDir);
+        Files.createDirectories(targetPath.getParent());
         Files.move(currentPath, targetPath);
         log.debug("Moved '{}' -> '{}'", currentPath, targetPath);
 
-        // Update DB record
-        bookFile.setFileSubPath(targetSubDir.toString());
+        // Update DB: subPath = library-root-relative dir; fileName = bare filename
+        Path libraryRoot = Paths.get(libraryPath.getPath()).toAbsolutePath().normalize();
+        Path targetParent = targetPath.getParent().toAbsolutePath().normalize();
+        String newSubPath = libraryRoot.relativize(targetParent).toString().replace('\\', '/');
+
+        bookFile.setFileSubPath(newSubPath);
         bookFile.setFileName(targetPath.getFileName().toString());
         bookFileRepository.save(bookFile);
 
@@ -128,113 +111,23 @@ public class LibraryOrganizeService {
     }
 
     /**
-     * Replaces pattern tokens with values derived from the book's metadata.
-     *
-     * <p>Supported tokens:
-     * <ul>
-     *   <li>{title}          — book title</li>
-     *   <li>{author}         — primary author full name</li>
-     *   <li>{authors}        — all authors, comma-separated</li>
-     *   <li>{authors_initial}— first letter of primary author's last name (e.g. "S" for "Brandon Sanderson")</li>
-     *   <li>{series}         — series name</li>
-     *   <li>{series_number}  — series position as a plain number (e.g. "1")</li>
-     *   <li>{series_index}   — series position zero-padded to 3 digits (e.g. "001")</li>
-     * </ul>
-     * Unrecognised tokens are left as-is in the resolved string.
-     */
-    private String resolvePattern(String pattern, BookEntity book, String originalFileName) {
-        var metadata = book.getMetadata();
-
-        String title = (metadata != null && metadata.getTitle() != null)
-                ? metadata.getTitle()
-                : stripExtension(originalFileName);
-
-        String author = "";
-        String authors = "";
-        if (metadata != null && metadata.getAuthors() != null && !metadata.getAuthors().isEmpty()) {
-            author = metadata.getAuthors().get(0).getName();
-            authors = metadata.getAuthors().stream()
-                    .map(a -> a.getName())
-                    .collect(Collectors.joining(", "));
-        }
-
-        // First letter of primary author's last name.
-        // Handles "First Last" → last word, and "Last, First" → word before comma.
-        String authorsInitial = "";
-        if (!author.isEmpty()) {
-            String lastName;
-            if (author.contains(",")) {
-                lastName = author.substring(0, author.indexOf(',')).trim();
-            } else {
-                String[] parts = author.split("\\s+");
-                lastName = parts[parts.length - 1];
-            }
-            if (!lastName.isEmpty()) {
-                authorsInitial = String.valueOf(Character.toUpperCase(lastName.charAt(0)));
-            }
-        }
-
-        String series = "";
-        String seriesNumber = "";
-        String seriesIndex = "";
-        if (metadata != null) {
-            if (metadata.getSeriesName() != null && !metadata.getSeriesName().isBlank()) {
-                series = metadata.getSeriesName();
-            }
-            if (metadata.getSeriesNumber() != null) {
-                float num = metadata.getSeriesNumber();
-                if (num == Math.floor(num)) {
-                    seriesNumber = String.valueOf((int) num);
-                    seriesIndex = String.format("%03d", (int) num);
-                } else {
-                    seriesNumber = String.valueOf(num);
-                    seriesIndex = seriesNumber;
-                }
-            }
-        }
-
-        return pattern
-                .replace("{title}", title)
-                .replace("{author}", author)
-                .replace("{authors}", authors)
-                .replace("{authors_initial}", authorsInitial)
-                .replace("{series}", series)
-                .replace("{series_number}", seriesNumber)
-                .replace("{series_index}", seriesIndex);
-    }
-
-    /**
-     * Removes filesystem-unsafe characters from a single path segment and trims
-     * trailing whitespace/dots (for Windows compatibility).
-     */
-    private String sanitizeSegment(String segment) {
-        return segment
-                .replaceAll("[\\\\/:*?\"<>|]", "_")
-                .replaceAll("[\\s.]+$", "")
-                .trim();
-    }
-
-    private String stripExtension(String fileName) {
-        int idx = fileName.lastIndexOf('.');
-        return idx >= 0 ? fileName.substring(0, idx) : fileName;
-    }
-
-    /**
-     * If targetDir/targetFileName already exists and is not the source file,
+     * If {@code targetPath} already exists and is not the source file,
      * appends (1), (2), … to the base name until a free slot is found.
      */
-    private Path resolveConflict(Path targetDir, String targetFileName, Path sourcePath) {
-        Path candidate = targetDir.resolve(targetFileName);
-        if (!Files.exists(candidate)
-                || candidate.toAbsolutePath().normalize().equals(sourcePath.toAbsolutePath().normalize())) {
-            return candidate;
+    private Path resolveConflict(Path targetPath, Path sourcePath) {
+        if (!Files.exists(targetPath)
+                || targetPath.toAbsolutePath().normalize().equals(sourcePath.toAbsolutePath().normalize())) {
+            return targetPath;
         }
 
-        int dotIdx = targetFileName.lastIndexOf('.');
-        String base = dotIdx >= 0 ? targetFileName.substring(0, dotIdx) : targetFileName;
-        String ext = dotIdx >= 0 ? targetFileName.substring(dotIdx) : "";
+        String fileName = targetPath.getFileName().toString();
+        Path targetDir = targetPath.getParent();
+        int dotIdx = fileName.lastIndexOf('.');
+        String base = dotIdx >= 0 ? fileName.substring(0, dotIdx) : fileName;
+        String ext = dotIdx >= 0 ? fileName.substring(dotIdx) : "";
 
         int counter = 1;
+        Path candidate;
         do {
             candidate = targetDir.resolve(base + " (" + counter + ")" + ext);
             counter++;
