@@ -129,7 +129,18 @@ public class LibraryOrganizeService {
 
     /**
      * Replaces pattern tokens with values derived from the book's metadata.
-     * Supported tokens: {title}, {author}, {authors}, {series}, {series_number}, {series_index}
+     *
+     * <p>Supported tokens:
+     * <ul>
+     *   <li>{title}          — book title</li>
+     *   <li>{author}         — primary author full name</li>
+     *   <li>{authors}        — all authors, comma-separated</li>
+     *   <li>{authors_initial}— first letter of primary author's last name (e.g. "S" for "Brandon Sanderson")</li>
+     *   <li>{series}         — series name</li>
+     *   <li>{series_number}  — series position as a plain number (e.g. "1")</li>
+     *   <li>{series_index}   — series position zero-padded to 3 digits (e.g. "001")</li>
+     * </ul>
+     * Unrecognised tokens are left as-is in the resolved string.
      */
     private String resolvePattern(String pattern, BookEntity book, String originalFileName) {
         var metadata = book.getMetadata();
@@ -145,6 +156,22 @@ public class LibraryOrganizeService {
             authors = metadata.getAuthors().stream()
                     .map(a -> a.getName())
                     .collect(Collectors.joining(", "));
+        }
+
+        // First letter of primary author's last name.
+        // Handles "First Last" → last word, and "Last, First" → word before comma.
+        String authorsInitial = "";
+        if (!author.isEmpty()) {
+            String lastName;
+            if (author.contains(",")) {
+                lastName = author.substring(0, author.indexOf(',')).trim();
+            } else {
+                String[] parts = author.split("\\s+");
+                lastName = parts[parts.length - 1];
+            }
+            if (!lastName.isEmpty()) {
+                authorsInitial = String.valueOf(Character.toUpperCase(lastName.charAt(0)));
+            }
         }
 
         String series = "";
@@ -170,6 +197,7 @@ public class LibraryOrganizeService {
                 .replace("{title}", title)
                 .replace("{author}", author)
                 .replace("{authors}", authors)
+                .replace("{authors_initial}", authorsInitial)
                 .replace("{series}", series)
                 .replace("{series_number}", seriesNumber)
                 .replace("{series_index}", seriesIndex);
