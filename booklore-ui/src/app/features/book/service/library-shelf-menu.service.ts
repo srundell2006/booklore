@@ -7,9 +7,9 @@ import {Library} from '../model/library.model';
 import {Shelf} from '../model/shelf.model';
 import {MetadataRefreshType} from '../../metadata/model/request/metadata-refresh-type.enum';
 import {MagicShelf, MagicShelfService} from '../../magic-shelf/service/magic-shelf.service';
-import {IsbnScanRequest} from '../../settings/task-management/task.service';
+import {IsbnScanRequest, OrganizeLibraryRequest} from '../../settings/task-management/task.service';
 import {TaskHelperService} from '../../settings/task-management/task-helper.service';
-import {UserService} from "../../settings/user-management/user.service";
+import {UserService} from "../../../features/settings/user-management/user.service";
 import {LoadingService} from '../../../core/services/loading.service';
 import {finalize} from 'rxjs';
 import {DialogLauncherService} from '../../../shared/services/dialog-launcher.service';
@@ -165,6 +165,15 @@ export class LibraryShelfMenuService {
             icon: 'pi pi-copy',
             command: () => {
               this.bookDialogHelperService.openDuplicateMergerDialog(entity?.id as number);
+            }
+          },
+          {
+            label: this.t.translate('book.shelfMenuService.library.organizeLibrary', {default: 'Organize Library'}),
+            icon: 'pi pi-sort-alpha-down',
+            command: () => {
+              this.taskHelperService.organizeLibraryTask({
+                libraryId: entity?.id ?? undefined
+              } as OrganizeLibraryRequest).subscribe();
             }
           },
           {
