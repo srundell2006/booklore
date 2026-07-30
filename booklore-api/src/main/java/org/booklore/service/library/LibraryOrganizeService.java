@@ -36,8 +36,10 @@ public class LibraryOrganizeService {
 
         String pattern = library.getFileNamingPattern();
         if (pattern == null || pattern.isBlank()) {
-            log.warn("Library {} has no file naming pattern configured; skipping organize.", libraryId);
-            return;
+            throw new IllegalStateException(
+                "Library '" + library.getName() + "' has no file naming pattern configured. " +
+                "Please go to Settings → File Naming Pattern and set a per-library pattern first."
+            );
         }
 
         List<BookEntity> books = bookRepository.findAllWithMetadataByLibraryId(libraryId);
