@@ -90,6 +90,14 @@ public enum TaskType {
             false,
             "Wanted Book Search",
             "Searches your configured indexers (via Prowlarr) for books on the wanted list and automatically sends the best matching release to your download client."
+    ),
+    ORGANIZE_LIBRARY(
+            false,
+            true,
+            false,
+            false,
+            "Organize Library",
+            "Renames and moves book files into subfolders according to the naming convention defined on the library."
     );
 
     @Getter
