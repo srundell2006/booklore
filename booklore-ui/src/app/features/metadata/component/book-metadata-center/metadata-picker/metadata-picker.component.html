@@ -67,7 +67,6 @@
                       [src]="metadataForm.get('thumbnailUrl')?.value"
                       [alt]="t('currentCoverAlt')"
                       appendTo="body"
-                      lazyLoad
                       [preview]="true"
                     />
                     <button
@@ -104,7 +103,6 @@
                       [src]="fetchedMetadata.thumbnailUrl!"
                       [alt]="t('fetchedCoverAlt')"
                       appendTo="body"
-                      lazyLoad
                       [preview]="true"
                     />
                   </div>
@@ -128,7 +126,6 @@
                       [src]="metadataForm.get('audiobookThumbnailUrl')?.value"
                       [alt]="t('currentAudiobookCoverAlt')"
                       appendTo="body"
-                      lazyLoad
                       [preview]="true"
                     />
                     <button
@@ -170,7 +167,6 @@
                         [src]="fetchedMetadata.thumbnailUrl!"
                         [alt]="t('fetchedAudiobookCoverAlt')"
                         appendTo="body"
-                        lazyLoad
                         [preview]="true"
                       />
                     } @else {
