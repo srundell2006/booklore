@@ -15,6 +15,7 @@ import org.booklore.service.file.FileFingerprint;
 import org.booklore.task.options.RescanLibraryContext;
 import org.booklore.util.FileUtils;
 import jakarta.persistence.EntityManager;
+import jakarta.persistence.FlushModeType;
 import jakarta.persistence.PersistenceContext;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
@@ -92,20 +93,42 @@ public class LibraryProcessingService {
         if (!additionalFileIds.isEmpty()) {
             log.info("Detected {} removed additional files in library: {}", additionalFileIds.size(), libraryEntity.getName());
             bookDeletionService.deleteRemovedAdditionalFiles(additionalFileIds);
+            // Push the deletes to the database and drop the now-stale managed
+            // entities before anything else reads. Without this, later queries
+            // auto-flush entities whose rows are already gone and the whole
+            // rescan aborts with StaleObjectStateException.
+            entityManager.flush();
+            entityManager.clear();
+            libraryEntity = reloadLibrary(context.getLibraryId());
         }
         List<Long> bookIds = detectDeletedBookIds(allLibraryFiles, libraryEntity);
         if (!bookIds.isEmpty()) {
             log.info("Detected {} removed books in library: {}", bookIds.size(), libraryEntity.getName());
             bookDeletionService.processDeletedLibraryFiles(bookIds, allLibraryFiles);
+            entityManager.flush();
+            entityManager.clear();
+            libraryEntity = reloadLibrary(context.getLibraryId());
         }
         bookRestorationService.restoreDeletedBooks(allLibraryFiles);
         bookDeletionService.purgeDisallowedFormats(libraryEntity);
+        entityManager.flush();
         entityManager.clear();
         // Re-fetch library entity to get fresh state after entity manager was cleared
-        libraryEntity = libraryRepository.findById(context.getLibraryId())
-                .orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(context.getLibraryId()));
+        libraryEntity = reloadLibrary(context.getLibraryId());
 
-        List<LibraryFile> newFiles = detectNewBookPaths(filteredFiles, libraryEntity);
+        // BookFileEntity stores chapters through a JSON AttributeConverter, which
+        // makes Hibernate consider freshly-read rows dirty (the re-serialized JSON
+        // rarely matches the stored text byte for byte). During the read-only
+        // detection phase that would trigger pointless UPDATEs on every audiobook
+        // file row. Suppress auto-flush so reads stay reads.
+        FlushModeType previousFlushMode = entityManager.getFlushMode();
+        List<LibraryFile> newFiles;
+        try {
+            entityManager.setFlushMode(FlushModeType.COMMIT);
+            newFiles = detectNewBookPaths(filteredFiles, libraryEntity);
+        } finally {
+            entityManager.setFlushMode(previousFlushMode);
+        }
 
         // Use BookGroupingService to determine what to attach vs create new
         BookGroupingService.GroupingResult groupingResult = bookGroupingService.groupForRescan(newFiles, libraryEntity);
@@ -121,6 +144,11 @@ public class LibraryProcessingService {
         fileAsBookProcessor.processLibraryFilesGrouped(groupingResult.newBookGroups(), libraryEntity);
 
         notificationService.sendMessage(Topic.LOG, LogNotification.info("Finished refreshing library: " + libraryEntity.getName()));
+    }
+
+    private LibraryEntity reloadLibrary(Long libraryId) {
+        return libraryRepository.findById(libraryId)
+                .orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(libraryId));
     }
 
     public void processLibraryFiles(List<LibraryFile> libraryFiles, LibraryEntity libraryEntity) {
