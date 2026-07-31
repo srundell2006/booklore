@@ -39,6 +39,7 @@ public class AppSettings {
     private KoboSettings koboSettings;
     private BookAcquisitionSettings bookAcquisitionSettings;
     private AudiobookMergeSettings audiobookMergeSettings;
+    private AudiobookVerificationSettings audiobookVerificationSettings;
     private EbookConversionSettings ebookConversionSettings;
     private CoverCroppingSettings coverCroppingSettings;
     private MetadataProviderSpecificFields metadataProviderSpecificFields;

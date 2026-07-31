@@ -1,16 +1,20 @@
 package org.booklore.service.bookdrop;
 
 import org.booklore.model.BookDropFileEvent;
+import org.booklore.model.dto.request.AudiobookVerificationRequest;
 import org.booklore.model.dto.request.BookdropFinalizeRequest;
 import org.booklore.model.dto.settings.AppSettings;
+import org.booklore.model.dto.settings.AudiobookVerificationSettings;
 import org.booklore.model.entity.BookdropFileEntity;
 import org.booklore.model.enums.BookFileExtension;
+import org.booklore.model.enums.BookFileType;
 import org.booklore.model.enums.PermissionType;
 import org.booklore.model.websocket.LogNotification;
 import org.booklore.model.websocket.Topic;
 import org.booklore.repository.BookdropFileRepository;
 import org.booklore.service.NotificationService;
 import org.booklore.service.appsettings.AppSettingService;
+import org.booklore.service.audiobook.AudiobookVerificationService;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
@@ -46,6 +50,11 @@ public class BookdropEventHandlerService {
     @Lazy
     @Autowired
     private BookDropService bookDropService;
+
+    // Field-injected with @Lazy to avoid potential startup ordering issues.
+    @Lazy
+    @Autowired
+    private AudiobookVerificationService audiobookVerificationService;
 
     private static final long STABILITY_CHECK_INTERVAL_MS = 500;
     private static final int STABILITY_REQUIRED_CHECKS = 3;
@@ -170,6 +179,7 @@ public class BookdropEventHandlerService {
                                 try {
                                     bookDropService.finalizeImport(finalizeRequest);
                                     log.info("Auto-import successful for '{}'", fileName);
+                                    triggerVerificationIfAudiobook(fileName);
                                 } catch (Exception e) {
                                     log.error("Auto-import failed for '{}': {}", fileName, e.getMessage(), e);
                                 }
@@ -211,6 +221,36 @@ public class BookdropEventHandlerService {
             log.info("Deleted {} BookdropFile record(s) from database matching path: {}", deletedCount, deletedPath);
 
             bookdropNotificationService.sendBookdropFileSummaryNotification();
+        }
+    }
+
+    /**
+     * If the imported file is an audiobook and verification is enabled,
+     * spawns a virtual thread to run ALL_UNVERIFIED verification in the background.
+     * This picks up the just-imported audiobook (its verification_status is NULL).
+     */
+    private void triggerVerificationIfAudiobook(String fileName) {
+        try {
+            AudiobookVerificationSettings verifySettings =
+                    appSettingService.getAppSettings().getAudiobookVerificationSettings();
+            if (verifySettings == null || !verifySettings.isEnabled()) return;
+
+            boolean isAudiobook = BookFileExtension.fromFileName(fileName)
+                    .map(BookFileExtension::getType)
+                    .filter(t -> t == BookFileType.AUDIOBOOK)
+                    .isPresent();
+
+            if (isAudiobook) {
+                log.info("Scheduling audiobook content verification for '{}'", fileName);
+                Thread.ofVirtual().start(() -> {
+                    AudiobookVerificationRequest verifyReq = new AudiobookVerificationRequest();
+                    verifyReq.setScanType(AudiobookVerificationRequest.ScanType.ALL_UNVERIFIED);
+                    audiobookVerificationService.runVerification(
+                            verifyReq, "auto-verify-" + System.currentTimeMillis());
+                });
+            }
+        } catch (Exception e) {
+            log.warn("Failed to trigger audiobook verification for '{}': {}", fileName, e.getMessage());
         }
     }
 

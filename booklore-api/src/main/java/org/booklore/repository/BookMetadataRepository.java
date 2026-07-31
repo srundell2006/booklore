@@ -43,4 +43,36 @@ public interface BookMetadataRepository extends JpaRepository<BookMetadataEntity
     @Transactional
     @Query("UPDATE BookMetadataEntity m SET m.titleChangedByAutoFetch = false, m.previousTitle = null WHERE m.bookId IN :bookIds")
     void clearTitleChangedFlag(@Param("bookIds") List<Long> bookIds);
+
+    /**
+     * Returns IDs of books that are audiobooks (have at least one AUDIOBOOK-type book file)
+     * and have never been verified (verification_status IS NULL).
+     */
+    @Query("SELECT DISTINCT m.bookId FROM BookMetadataEntity m " +
+           "WHERE m.verificationStatus IS NULL " +
+           "AND m.bookId IN (" +
+           "  SELECT DISTINCT f.book.id FROM BookFileEntity f " +
+           "  WHERE f.bookType = org.booklore.model.enums.BookFileType.AUDIOBOOK" +
+           ")")
+    List<Long> findUnverifiedAudiobookIds();
+
+    /**
+     * Writes the result of a single audiobook verification check.
+     */
+    @Modifying
+    @Transactional
+    @Query("UPDATE BookMetadataEntity m SET " +
+           "m.verificationStatus = :status, " +
+           "m.verificationDetectedTitle = :detectedTitle, " +
+           "m.verificationDetectedAuthors = :detectedAuthors, " +
+           "m.verificationCheckedAt = :checkedAt, " +
+           "m.verificationMismatchReason = :mismatchReason " +
+           "WHERE m.bookId = :bookId")
+    void updateVerificationResult(
+            @Param("bookId") Long bookId,
+            @Param("status") String status,
+            @Param("detectedTitle") String detectedTitle,
+            @Param("detectedAuthors") String detectedAuthors,
+            @Param("checkedAt") Instant checkedAt,
+            @Param("mismatchReason") String mismatchReason);
 }

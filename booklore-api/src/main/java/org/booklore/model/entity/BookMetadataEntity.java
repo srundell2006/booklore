@@ -321,6 +321,32 @@ public class BookMetadataEntity {
     @Builder.Default
     private Boolean contentRatingLocked = Boolean.FALSE;
 
+    // -----------------------------------------------------------------------
+    // Audiobook content verification
+    // -----------------------------------------------------------------------
+
+    /** VERIFIED | MISMATCH | SKIPPED | ERROR — null means never checked. */
+    @Column(name = "verification_status", length = 20)
+    private String verificationStatus;
+
+    /** Title extracted from the audio transcript by the LLM. */
+    @Column(name = "verification_detected_title", length = 500)
+    private String verificationDetectedTitle;
+
+    /** Author(s) extracted from the audio transcript by the LLM (comma-separated). */
+    @Column(name = "verification_detected_authors", length = 1000)
+    private String verificationDetectedAuthors;
+
+    /** When the last verification check was performed. */
+    @Column(name = "verification_checked_at")
+    private Instant verificationCheckedAt;
+
+    /** Human-readable description of the mismatch (populated when status == MISMATCH). */
+    @Column(name = "verification_mismatch_reason", columnDefinition = "TEXT")
+    private String verificationMismatchReason;
+
+    // -----------------------------------------------------------------------
+
     @PrePersist
     @PreUpdate
     public void updateSearchText() {

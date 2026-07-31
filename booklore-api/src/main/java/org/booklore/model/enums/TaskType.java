@@ -98,6 +98,14 @@ public enum TaskType {
             false,
             "Organize Library",
             "Renames and moves book files into subfolders according to the naming convention defined on the library."
+    ),
+    AUDIOBOOK_VERIFICATION(
+            false,
+            true,
+            false,
+            false,
+            "Verify Audiobook Content",
+            "Transcribes a sample of audiobook audio via Whisper and uses an LLM to extract and verify the title and author against stored metadata."
     );
 
     @Getter
