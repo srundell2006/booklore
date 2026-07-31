@@ -230,7 +230,7 @@
                       <span class="file-type-badge" [style.background-color]="getFileTypeBgColor(book.primaryFile.extension)">
                         {{ book.primaryFile.extension | uppercase }}
                       </span>
-                      <span class="file-name" [pTooltip]="book.primaryFile.filePath" tooltipPosition="top">{{ book.primaryFile.fileName }}</span>
+                      <span class="file-name">{{ book.primaryFile.filePath }}</span>
                       <span class="file-size">{{ getFileSizeInMB(book.primaryFile) }}</span>
                     </div>
                     <div class="file-actions">
@@ -318,7 +318,7 @@
                         <span class="file-type-badge" [style.background-color]="getFileTypeBgColor(format.extension)">
                           {{ format.extension | uppercase }}
                         </span>
-                        <span class="file-name" [pTooltip]="format.filePath" tooltipPosition="top">{{ format.fileName }}</span>
+                        <span class="file-name">{{ format.filePath }}</span>
                         <span class="file-size">{{ getFileSizeInMB(format) }}</span>
                       </div>
                       <div class="file-actions">
@@ -405,7 +405,7 @@
                     <div class="file-item">
                       <div class="file-info">
                         <i [class]="getFileIcon(getFileExtension(file.filePath))" class="file-icon"></i>
-                        <span class="file-name" [pTooltip]="file.filePath" tooltipPosition="top">{{ file.fileName }}</span>
+                        <span class="file-name">{{ file.filePath }}</span>
                         <span class="file-size">{{ getFileSizeInMB(file) }}</span>
                       </div>
                       <div class="file-actions">
