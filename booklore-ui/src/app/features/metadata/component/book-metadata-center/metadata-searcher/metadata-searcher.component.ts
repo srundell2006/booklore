@@ -387,7 +387,10 @@ export class MetadataSearcherComponent implements OnInit, OnDestroy, OnChanges {
             const current = this.selectedFetchedMetadata$.value;
             const currentId = current && this.getProviderItemId(current, enrichment.provider);
             if (currentId === enrichment.id) {
-              this.selectedFetchedMetadata$.next(enriched);
+              this.selectedFetchedMetadata$.next({
+                ...enriched,
+                thumbnailUrl: enriched.thumbnailUrl || fetchedMetadata.thumbnailUrl
+              });
             }
             this.detailLoading = false;
           },
