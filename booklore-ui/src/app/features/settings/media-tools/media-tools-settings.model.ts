@@ -22,3 +22,11 @@ export interface AudiobookMergeSettings {
   deleteSourcesAfterMerge: boolean;
   jobTimeoutMinutes: number;
 }
+
+export interface AudiobookVerificationSettings {
+  enabled: boolean;
+  whisperUrl?: string;
+  excerptSeconds: number;
+  ollamaModel: string;
+  ollamaUrl?: string;
+}

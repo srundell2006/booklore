@@ -15,7 +15,8 @@ export enum TaskType {
   REFRESH_METADATA_MANUAL = 'REFRESH_METADATA_MANUAL',
   EPUB_ISBN_SCAN = 'EPUB_ISBN_SCAN',
   LOW_SCORE_METADATA_REFRESH = 'LOW_SCORE_METADATA_REFRESH',
-  ORGANIZE_LIBRARY = 'ORGANIZE_LIBRARY'
+  ORGANIZE_LIBRARY = 'ORGANIZE_LIBRARY',
+  AUDIOBOOK_VERIFICATION = 'AUDIOBOOK_VERIFICATION'
 }
 
 export const TASK_TYPE_CONFIG: Record<TaskType, { parallel: boolean; async: boolean; displayOrder: number }> = {
@@ -30,6 +31,7 @@ export const TASK_TYPE_CONFIG: Record<TaskType, { parallel: boolean; async: bool
   [TaskType.LOW_SCORE_METADATA_REFRESH]: {parallel: false, async: true, displayOrder: 9},
   [TaskType.CLEAR_PDF_CACHE]: {parallel: false, async: false, displayOrder: 10},
   [TaskType.ORGANIZE_LIBRARY]: {parallel: false, async: true, displayOrder: 11},
+  [TaskType.AUDIOBOOK_VERIFICATION]: {parallel: false, async: true, displayOrder: 12},
 };
 
 export enum MetadataReplaceMode {
@@ -53,10 +55,15 @@ export interface OrganizeLibraryRequest {
   libraryId?: number;
 }
 
+export interface AudiobookVerificationRequest {
+  scanType: 'ALL_UNVERIFIED' | 'BOOKS';
+  bookIds?: number[];
+}
+
 export interface TaskCreateRequest {
   taskType: TaskType;
   triggeredByCron?: boolean;
-  options?: LibraryRescanOptions | MetadataRefreshRequest | IsbnScanRequest | OrganizeLibraryRequest | null;
+  options?: LibraryRescanOptions | MetadataRefreshRequest | IsbnScanRequest | OrganizeLibraryRequest | AudiobookVerificationRequest | null;
 }
 
 export interface TaskCreateResponse {

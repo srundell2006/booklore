@@ -254,6 +254,12 @@ export interface BookMetadata {
   titleChangedByAutoFetch?: boolean | null;
   previousTitle?: string | null;
 
+  verificationStatus?: string | null;
+  verificationDetectedTitle?: string | null;
+  verificationDetectedAuthors?: string | null;
+  verificationCheckedAt?: string | null;
+  verificationMismatchReason?: string | null;
+
   [key: string]: unknown;
 }
 
