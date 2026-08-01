@@ -29,6 +29,13 @@
           <i class="pi pi-book series-items-count-icon"></i>{{ book.seriesCount }}
         </div>
       }
+      @if (_isAudiobook && book.metadata?.verificationStatus === 'MISMATCH') {
+        <div class="verification-mismatch-overlay"
+             pTooltip="Audio content mismatch detected"
+             tooltipPosition="bottom">
+          <i class="pi pi-exclamation-triangle"></i>
+        </div>
+      }
     </div>
 
     @if (_isSeriesViewActive) {
