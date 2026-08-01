@@ -10,7 +10,7 @@ import {MessageService} from 'primeng/api';
 import {filter, take} from 'rxjs/operators';
 import {AppSettingsService} from '../../../shared/service/app-settings.service';
 import {MediaToolsService} from './media-tools.service';
-import {AudiobookMergeSettings, EbookConversionSettings} from './media-tools-settings.model';
+import {AudiobookMergeSettings, AudiobookVerificationSettings, EbookConversionSettings} from './media-tools-settings.model';
 
 @Component({
   selector: 'app-media-tools-settings',
@@ -26,11 +26,14 @@ export class MediaToolsSettingsComponent implements OnInit {
 
   conversion: EbookConversionSettings = this.defaultConversion();
   merge: AudiobookMergeSettings = this.defaultMerge();
+  verification: AudiobookVerificationSettings = this.defaultVerification();
 
   testingConverter = false;
   testingMerge = false;
+  testingWhisper = false;
   converterResult?: boolean;
   mergeResult?: boolean;
+  whisperResult?: boolean;
   saving = false;
 
   ngOnInit(): void {
@@ -40,11 +43,15 @@ export class MediaToolsSettingsComponent implements OnInit {
     ).subscribe(settings => {
       const loadedConversion = (settings as any)?.ebookConversionSettings;
       const loadedMerge = (settings as any)?.audiobookMergeSettings;
+      const loadedVerification = (settings as any)?.audiobookVerificationSettings;
       if (loadedConversion) {
         this.conversion = {...this.defaultConversion(), ...loadedConversion};
       }
       if (loadedMerge) {
         this.merge = {...this.defaultMerge(), ...loadedMerge};
+      }
+      if (loadedVerification) {
+        this.verification = {...this.defaultVerification(), ...loadedVerification};
       }
     });
   }
@@ -79,11 +86,27 @@ export class MediaToolsSettingsComponent implements OnInit {
     });
   }
 
+  testWhisper(): void {
+    this.testingWhisper = true;
+    this.whisperResult = undefined;
+    this.mediaToolsService.testWhisper(this.verification).subscribe({
+      next: result => {
+        this.whisperResult = result.whisper;
+        this.testingWhisper = false;
+      },
+      error: () => {
+        this.whisperResult = false;
+        this.testingWhisper = false;
+      }
+    });
+  }
+
   save(): void {
     this.saving = true;
     this.appSettingsService.saveSettings([
       {key: 'EBOOK_CONVERSION_SETTINGS', newValue: this.conversion},
-      {key: 'AUDIOBOOK_MERGE_SETTINGS', newValue: this.merge}
+      {key: 'AUDIOBOOK_MERGE_SETTINGS', newValue: this.merge},
+      {key: 'AUDIOBOOK_VERIFICATION_SETTINGS', newValue: this.verification}
     ]).subscribe({
       next: () => {
         this.saving = false;
@@ -128,6 +151,16 @@ export class MediaToolsSettingsComponent implements OnInit {
       jobs: 2,
       deleteSourcesAfterMerge: false,
       jobTimeoutMinutes: 360
+    };
+  }
+
+  private defaultVerification(): AudiobookVerificationSettings {
+    return {
+      enabled: false,
+      whisperUrl: 'http://whisper:8000',
+      excerptSeconds: 90,
+      ollamaModel: 'llama3.1:8b',
+      ollamaUrl: 'http://ollama:11434'
     };
   }
 }

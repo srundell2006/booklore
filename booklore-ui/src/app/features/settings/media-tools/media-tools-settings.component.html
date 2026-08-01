@@ -110,6 +110,41 @@
     </p>
   </section>
 
+  <section class="tool-section">
+    <div class="section-header">
+      <h3>Audiobook Content Verification</h3>
+      <p class="hint">Transcribes the first N seconds of each audiobook with Whisper and uses Ollama to verify title/author match.</p>
+    </div>
+    <div class="field-row">
+      <label><p-checkbox [(ngModel)]="verification.enabled" [binary]="true"></p-checkbox> Enable audiobook verification</label>
+    </div>
+    <div class="field-row">
+      <label>Whisper URL</label>
+      <input pInputText [(ngModel)]="verification.whisperUrl" placeholder="http://whisper:8000"/>
+    </div>
+    <div class="field-row">
+      <label>Excerpt (seconds)</label>
+      <input pInputText type="number" [(ngModel)]="verification.excerptSeconds" class="narrow"/>
+      <span class="inline-hint">How many seconds of audio to transcribe (default: 90)</span>
+    </div>
+    <div class="field-row">
+      <label>Ollama URL</label>
+      <input pInputText [(ngModel)]="verification.ollamaUrl" placeholder="http://ollama:11434"/>
+    </div>
+    <div class="field-row">
+      <label>Ollama model</label>
+      <input pInputText [(ngModel)]="verification.ollamaModel" class="medium"/>
+    </div>
+    <div class="actions">
+      <p-button label="Test Whisper" icon="pi pi-bolt" size="small" severity="secondary" outlined="true"
+                [loading]="testingWhisper" (onClick)="testWhisper()"></p-button>
+      @if (whisperResult !== undefined) {
+        <p-tag [severity]="whisperResult ? 'success' : 'danger'"
+               [value]="whisperResult ? 'Whisper reachable' : 'Whisper unreachable'"></p-tag>
+      }
+    </div>
+  </section>
+
   <div class="save-row">
     <p-button label="Save Settings" icon="pi pi-save" severity="success" [loading]="saving"
               (onClick)="save()"></p-button>
