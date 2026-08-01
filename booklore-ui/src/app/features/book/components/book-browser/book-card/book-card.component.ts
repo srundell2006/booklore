@@ -442,6 +442,16 @@ export class BookCardComponent implements OnInit, OnChanges, OnDestroy {
             }
           });
         }
+        items.push({
+          label: 'Verify Content',
+          icon: 'pi pi-headphones',
+          command: () => {
+            this.taskHelperService.verifyAudiobookTask({
+              scanType: 'BOOKS',
+              bookIds: [this.book.id]
+            }).subscribe();
+          }
+        });
       } else if (extension && extension !== 'epub') {
         items.push({
           label: 'Convert to EPUB',
