@@ -51,3 +51,56 @@
 ::ng-deep .book-details-dialog .p-dialog-content {
   padding: 0;
 }
+
+.audiobook-verification-banner {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 0.75rem;
+  padding: 0.65rem 0.85rem;
+  border-radius: 0.5rem;
+  margin: 0.5rem 0.75rem;
+  font-size: 0.875rem;
+  flex-shrink: 0;
+
+  &.verification-verified {
+    background: rgba(34, 197, 94, 0.12);
+    border-left: 3px solid #22c55e;
+    color: #16a34a;
+  }
+  &.verification-mismatch {
+    background: rgba(251, 146, 60, 0.12);
+    border-left: 3px solid #fb923c;
+    color: #c2410c;
+  }
+  &.verification-error {
+    background: rgba(239, 68, 68, 0.12);
+    border-left: 3px solid #ef4444;
+    color: #b91c1c;
+  }
+  &.verification-skipped, &.verification-unverified {
+    background: rgba(148, 163, 184, 0.08);
+    border-left: 3px solid #94a3b8;
+    color: var(--text-color-secondary);
+  }
+}
+
+.verification-info {
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+  flex: 1;
+  min-width: 0;
+  i { margin-right: 0.35rem; }
+}
+
+.mismatch-details {
+  margin-top: 0.25rem;
+  font-size: 0.8rem;
+  opacity: 0.9;
+  display: flex;
+  flex-direction: column;
+  gap: 0.15rem;
+}
+
+.detail-key { font-weight: 600; }

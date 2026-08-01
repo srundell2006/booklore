@@ -1,3 +1,4 @@
+import {AsyncPipe, NgClass} from '@angular/common';
 import {Component, inject, OnDestroy, OnInit, Optional} from '@angular/core';
 import {ActivatedRoute, Router} from '@angular/router';
 import {UserService} from '../../../settings/user-management/user.service';
@@ -15,6 +16,7 @@ import {MetadataViewerComponent} from './metadata-viewer/metadata-viewer.compone
 import {MetadataEditorComponent} from './metadata-editor/metadata-editor.component';
 import {MetadataSearcherComponent} from './metadata-searcher/metadata-searcher.component';
 import {SidecarViewerComponent} from './sidecar-viewer/sidecar-viewer.component';
+import {TaskHelperService} from '../../../settings/task-management/task-helper.service';
 
 @Component({
   selector: 'app-book-metadata-center',
@@ -31,7 +33,9 @@ import {SidecarViewerComponent} from './sidecar-viewer/sidecar-viewer.component'
     MetadataSearcherComponent,
     SidecarViewerComponent,
     Button,
-    TranslocoDirective
+    TranslocoDirective,
+    AsyncPipe,
+    NgClass
   ],
   styleUrls: ['./book-metadata-center.component.scss'],
 })
@@ -42,6 +46,7 @@ export class BookMetadataCenterComponent implements OnInit, OnDestroy {
   private userService = inject(UserService);
   private appSettingsService = inject(AppSettingsService);
   private metadataHostService = inject(BookMetadataHostService);
+  private taskHelperService = inject(TaskHelperService);
   private destroy$ = new Subject<void>();
 
   book$!: Observable<Book>;
@@ -51,6 +56,7 @@ export class BookMetadataCenterComponent implements OnInit, OnDestroy {
   admin: boolean = false;
   isPhysical: boolean = false;
   isLocalStorage: boolean = true;
+  verifyingContent = false;
 
   private appSettings$ = this.appSettingsService.appSettings$;
   private currentBookId$ = new BehaviorSubject<number | null>(null);
@@ -156,6 +162,47 @@ export class BookMetadataCenterComponent implements OnInit, OnDestroy {
       .subscribe(settings => {
         this.isLocalStorage = settings!.diskType === 'LOCAL';
       });
+  }
+
+  verifyContent(bookId: number): void {
+    this.verifyingContent = true;
+    this.taskHelperService.verifyAudiobookTask({
+      scanType: 'BOOKS',
+      bookIds: [bookId]
+    }).pipe(take(1)).subscribe({
+      next: () => { this.verifyingContent = false; },
+      error: () => { this.verifyingContent = false; }
+    });
+  }
+
+  getVerificationClass(status?: string | null): Record<string, boolean> {
+    return {
+      'verification-verified': status === 'VERIFIED',
+      'verification-mismatch': status === 'MISMATCH',
+      'verification-error': status === 'ERROR',
+      'verification-skipped': status === 'SKIPPED',
+      'verification-unverified': !status
+    };
+  }
+
+  getVerificationIcon(status?: string | null): string {
+    switch (status) {
+      case 'VERIFIED': return 'pi pi-check-circle';
+      case 'MISMATCH': return 'pi pi-exclamation-triangle';
+      case 'ERROR': return 'pi pi-times-circle';
+      case 'SKIPPED': return 'pi pi-minus-circle';
+      default: return 'pi pi-question-circle';
+    }
+  }
+
+  getVerificationLabel(status?: string | null): string {
+    switch (status) {
+      case 'VERIFIED': return 'Content verified';
+      case 'MISMATCH': return 'Content mismatch detected';
+      case 'ERROR': return 'Verification error';
+      case 'SKIPPED': return 'Verification skipped';
+      default: return 'Not yet verified';
+    }
   }
 
   private fetchBookRecommendationsIfNeeded(bookId: number): void {
