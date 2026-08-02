@@ -4,7 +4,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.booklore.mapper.BookMapper;
 import org.booklore.model.dto.request.AudiobookVerificationRequest;
 import org.booklore.model.dto.settings.AudiobookVerificationSettings;
-import org.booklore.model.entity.BookEntity;
 import org.booklore.model.websocket.Topic;
 import org.booklore.repository.BookMetadataRepository;
 import org.booklore.repository.BookRepository;
@@ -12,6 +11,7 @@ import org.booklore.service.NotificationService;
 import org.booklore.service.appsettings.AppSettingService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.support.TransactionTemplate;
 import org.springframework.web.client.RestClient;
 import tools.jackson.databind.JsonNode;
 import tools.jackson.databind.ObjectMapper;
@@ -47,6 +47,7 @@ public class AudiobookVerificationService {
     private final BookRepository bookRepository;
     private final BookMapper bookMapper;
     private final NotificationService notificationService;
+    private final TransactionTemplate transactionTemplate;
 
     @Value("${ollama.base-url:http://ollama:11434}")
     private String defaultOllamaUrl;
@@ -62,7 +63,8 @@ public class AudiobookVerificationService {
                                         ObjectMapper objectMapper,
                                         BookRepository bookRepository,
                                         BookMapper bookMapper,
-                                        NotificationService notificationService) {
+                                        NotificationService notificationService,
+                                        TransactionTemplate transactionTemplate) {
         this.appSettingService = appSettingService;
         this.contextLoader = contextLoader;
         this.bookMetadataRepository = bookMetadataRepository;
@@ -70,6 +72,7 @@ public class AudiobookVerificationService {
         this.bookRepository = bookRepository;
         this.bookMapper = bookMapper;
         this.notificationService = notificationService;
+        this.transactionTemplate = transactionTemplate;
         this.restClient = RestClient.create();
     }
 
@@ -304,11 +307,13 @@ public class AudiobookVerificationService {
                                 String detectedAuthors, String mismatchReason) {
         bookMetadataRepository.updateVerificationResult(
                 bookId, status, detectedTitle, detectedAuthors, Instant.now(), mismatchReason);
-        // Notify the frontend so it refreshes the book card / detail view immediately.
+        // Reload and notify inside a transaction so the Hibernate session stays open
+        // when the mapper accesses lazy collections (e.g. BookMetadataEntity.authors).
         try {
-            bookRepository.findByIdWithBookFiles(bookId).ifPresent(book ->
-                    notificationService.sendMessage(Topic.BOOK_UPDATE,
-                            bookMapper.toBookWithDescription(book, true)));
+            transactionTemplate.executeWithoutResult(tx ->
+                    bookRepository.findByIdWithBookFiles(bookId).ifPresent(book ->
+                            notificationService.sendMessage(Topic.BOOK_UPDATE,
+                                    bookMapper.toBookWithDescription(book, true))));
         } catch (Exception e) {
             log.warn("Failed to send BOOK_UPDATE for book {}: {}", bookId, e.getMessage());
         }
