@@ -31,6 +31,7 @@ public class TaskCreateRequest {
             @JsonSubTypes.Type(value = IsbnScanRequest.class, name = "EPUB_ISBN_SCAN"),
             @JsonSubTypes.Type(value = LowScoreMetadataRefreshOptions.class, name = "LOW_SCORE_METADATA_REFRESH"),
             @JsonSubTypes.Type(value = OrganizeLibraryRequest.class, name = "ORGANIZE_LIBRARY"),
+            @JsonSubTypes.Type(value = AudiobookVerificationRequest.class, name = "AUDIOBOOK_VERIFICATION"),
     })
     private Object options;
 
