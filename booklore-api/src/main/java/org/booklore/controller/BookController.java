@@ -18,6 +18,7 @@ import org.booklore.model.dto.response.BookStatusUpdateResponse;
 import org.booklore.model.dto.response.DuplicateGroup;
 import org.booklore.model.dto.response.PersonalRatingUpdateResponse;
 import org.booklore.model.enums.ResetProgressType;
+import org.booklore.service.audiobook.AudiobookVerificationService;
 import org.booklore.service.book.BookFileAttachmentService;
 import org.booklore.service.book.BookService;
 import org.booklore.service.book.BookUpdateService;
@@ -62,6 +63,7 @@ public class BookController {
     private final ReadingProgressService readingProgressService;
     private final PhysicalBookService physicalBookService;
     private final DuplicateDetectionService duplicateDetectionService;
+    private final AudiobookVerificationService audiobookVerificationService;
 
     @Operation(summary = "Get all books", description = "Retrieve a list of all books. Optionally include descriptions.")
     @ApiResponse(responseCode = "200", description = "List of books returned successfully")
@@ -321,5 +323,20 @@ public class BookController {
             @Parameter(description = "ID of the target book to attach the files to") @PathVariable Long targetBookId,
             @Parameter(description = "Request containing source book IDs and delete option") @RequestBody @Valid AttachBookFileRequest request) {
         return ResponseEntity.ok(bookFileAttachmentService.attachBookFiles(targetBookId, request.getSourceBookIds(), request.isMoveFiles()));
+    }
+
+    @Operation(summary = "Apply detected audiobook metadata", description = "Applies the Whisper/Ollama-detected title and authors from a verification mismatch to the book's actual metadata, and sets verification status to VERIFIED.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Detected metadata applied successfully"),
+            @ApiResponse(responseCode = "400", description = "No detected metadata to apply"),
+            @ApiResponse(responseCode = "403", description = "Forbidden"),
+            @ApiResponse(responseCode = "404", description = "Book not found")
+    })
+    @PostMapping("/{bookId}/apply-verification-metadata")
+    @CheckBookAccess(bookIdParam = "bookId")
+    @PreAuthorize("@securityUtil.canEditMetadata() or @securityUtil.isAdmin()")
+    public ResponseEntity<Book> applyVerificationMetadata(
+            @Parameter(description = "ID of the book") @PathVariable long bookId) {
+        return ResponseEntity.ok(audiobookVerificationService.applyDetectedMetadata(bookId));
     }
 }

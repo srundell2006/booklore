@@ -1,12 +1,16 @@
 package org.booklore.service.audiobook;
 
 import lombok.extern.slf4j.Slf4j;
+import org.booklore.exception.ApiError;
 import org.booklore.mapper.BookMapper;
 import org.booklore.model.dto.Book;
 import org.booklore.model.dto.request.AudiobookVerificationRequest;
 import org.booklore.model.dto.settings.AudiobookVerificationSettings;
+import org.booklore.model.entity.AuthorEntity;
+import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.enums.PermissionType;
 import org.booklore.model.websocket.Topic;
+import org.booklore.repository.AuthorRepository;
 import org.booklore.repository.BookMetadataRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.service.NotificationService;
@@ -21,6 +25,7 @@ import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
 import java.time.Instant;
+import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.HashSet;
 import java.util.List;
@@ -50,6 +55,7 @@ public class AudiobookVerificationService {
     private final BookMapper bookMapper;
     private final NotificationService notificationService;
     private final TransactionTemplate transactionTemplate;
+    private final AuthorRepository authorRepository;
 
     @Value("${ollama.base-url:http://ollama:11434}")
     private String defaultOllamaUrl;
@@ -66,7 +72,8 @@ public class AudiobookVerificationService {
                                         BookRepository bookRepository,
                                         BookMapper bookMapper,
                                         NotificationService notificationService,
-                                        TransactionTemplate transactionTemplate) {
+                                        TransactionTemplate transactionTemplate,
+                                        AuthorRepository authorRepository) {
         this.appSettingService = appSettingService;
         this.contextLoader = contextLoader;
         this.bookMetadataRepository = bookMetadataRepository;
@@ -75,6 +82,7 @@ public class AudiobookVerificationService {
         this.bookMapper = bookMapper;
         this.notificationService = notificationService;
         this.transactionTemplate = transactionTemplate;
+        this.authorRepository = authorRepository;
         this.restClient = RestClient.create();
     }
 
@@ -115,6 +123,79 @@ public class AudiobookVerificationService {
             log.error("Auto-verify failed for book {}: {}", bookId, e.getMessage(), e);
             persistResult(bookId, "ERROR", null, null, "Exception: " + e.getMessage());
         }
+    }
+
+    /**
+     * Applies the Whisper/Ollama-detected title and authors to the book's actual metadata,
+     * then flips verification_status to VERIFIED (the user is accepting the detected values).
+     *
+     * @param bookId the book whose detected metadata should be applied
+     * @return the refreshed Book DTO after the update
+     */
+    public Book applyDetectedMetadata(long bookId) {
+        Book bookDto = transactionTemplate.execute(tx -> {
+            BookMetadataEntity metadata = bookMetadataRepository.findById(bookId)
+                    .orElseThrow(() -> ApiError.NOT_FOUND.createException("Book not found: " + bookId));
+
+            String detectedTitle   = metadata.getVerificationDetectedTitle();
+            String detectedAuthors = metadata.getVerificationDetectedAuthors();
+
+            if ((detectedTitle == null || detectedTitle.isBlank()) &&
+                (detectedAuthors == null || detectedAuthors.isBlank())) {
+                throw ApiError.GENERIC_BAD_REQUEST.createException(
+                        "No detected metadata to apply for book " + bookId);
+            }
+
+            // Apply detected title
+            if (detectedTitle != null && !detectedTitle.isBlank()) {
+                metadata.setTitle(detectedTitle.trim());
+            }
+
+            // Apply detected authors — split on comma, find-or-create AuthorEntity for each
+            if (detectedAuthors != null && !detectedAuthors.isBlank()) {
+                List<AuthorEntity> resolvedAuthors = Arrays.stream(detectedAuthors.split(","))
+                        .map(String::trim)
+                        .filter(name -> !name.isEmpty())
+                        .map(name -> authorRepository.findByNameIgnoreCase(name)
+                                .orElseGet(() -> {
+                                    AuthorEntity a = new AuthorEntity();
+                                    a.setName(name);
+                                    return authorRepository.save(a);
+                                }))
+                        .toList();
+
+                if (metadata.getAuthors() == null) {
+                    metadata.setAuthors(new ArrayList<>(resolvedAuthors));
+                } else {
+                    metadata.getAuthors().clear();
+                    metadata.getAuthors().addAll(resolvedAuthors);
+                }
+            }
+
+            // Accepting the detected values — flip status to VERIFIED, clear mismatch reason
+            metadata.setVerificationStatus("VERIFIED");
+            metadata.setVerificationMismatchReason(null);
+
+            bookMetadataRepository.save(metadata);
+
+            // Build the DTO within the transaction so lazy associations can be loaded
+            return bookRepository.findByIdWithBookFiles(bookId)
+                    .map(book -> bookMapper.toBookWithDescription(book, true))
+                    .orElse(null);
+        });
+
+        // Send BOOK_UPDATE notification outside the transaction (same pattern as persistResult)
+        if (bookDto != null) {
+            try {
+                notificationService.sendMessageToPermissions(
+                        Topic.BOOK_UPDATE, bookDto, Set.of(PermissionType.DOWNLOAD));
+            } catch (Exception e) {
+                log.warn("Failed to send BOOK_UPDATE after applying detected metadata for book {}: {}",
+                        bookId, e.getMessage());
+            }
+        }
+
+        return bookDto;
     }
 
     // -----------------------------------------------------------------------
