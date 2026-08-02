@@ -123,4 +123,11 @@ public class BookMetadata {
 
     private Boolean titleChangedByAutoFetch;
     private String previousTitle;
+
+    // Audiobook content verification
+    private String verificationStatus;
+    private String verificationDetectedTitle;
+    private String verificationDetectedAuthors;
+    private Instant verificationCheckedAt;
+    private String verificationMismatchReason;
 }
