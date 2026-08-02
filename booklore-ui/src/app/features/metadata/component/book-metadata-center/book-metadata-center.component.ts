@@ -57,6 +57,7 @@ export class BookMetadataCenterComponent implements OnInit, OnDestroy {
   isPhysical: boolean = false;
   isLocalStorage: boolean = true;
   verifyingContent = false;
+  applyingDetectedMetadata = false;
 
   private appSettings$ = this.appSettingsService.appSettings$;
   private currentBookId$ = new BehaviorSubject<number | null>(null);
@@ -172,6 +173,14 @@ export class BookMetadataCenterComponent implements OnInit, OnDestroy {
     }).pipe(take(1)).subscribe({
       next: () => { this.verifyingContent = false; },
       error: () => { this.verifyingContent = false; }
+    });
+  }
+
+  applyDetectedMetadata(bookId: number): void {
+    this.applyingDetectedMetadata = true;
+    this.bookService.applyVerificationMetadata(bookId).pipe(take(1)).subscribe({
+      next: () => { this.applyingDetectedMetadata = false; },
+      error: () => { this.applyingDetectedMetadata = false; }
     });
   }
 

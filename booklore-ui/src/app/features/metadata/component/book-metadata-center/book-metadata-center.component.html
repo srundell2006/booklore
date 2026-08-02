@@ -38,6 +38,17 @@
             </div>
           }
         </div>
+        @if (book.metadata?.verificationStatus === 'MISMATCH' && (admin || canEditMetadata)) {
+          <p-button
+            label="Apply Detected"
+            icon="pi pi-check"
+            size="small"
+            severity="warning"
+            [outlined]="true"
+            [loading]="applyingDetectedMetadata"
+            (onClick)="applyDetectedMetadata(book.id)">
+          </p-button>
+        }
         @if (admin) {
           <p-button
             label="Verify Content"

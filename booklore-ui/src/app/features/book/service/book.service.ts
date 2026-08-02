@@ -277,6 +277,10 @@ export class BookService {
     );
   }
 
+  applyVerificationMetadata(bookId: number): Observable<Book> {
+    return this.http.post<Book>(`${this.url}/${bookId}/apply-verification-metadata`, {});
+  }
+
   /*------------------ Reading & Viewer Settings ------------------*/
 
   readBook(bookId: number, reader?: 'epub-streaming', explicitBookType?: BookType): void {
