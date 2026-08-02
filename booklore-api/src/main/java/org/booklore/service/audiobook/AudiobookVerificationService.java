@@ -135,7 +135,8 @@ public class AudiobookVerificationService {
     public Book applyDetectedMetadata(long bookId) {
         Book bookDto = transactionTemplate.execute(tx -> {
             BookMetadataEntity metadata = bookMetadataRepository.findById(bookId)
-                    .orElseThrow(() -> ApiError.NOT_FOUND.createException("Book not found: " + bookId));
+                    .orElseThrow(() -> ApiError.GENERIC_NOT_FOUND.createException(
+                            "Book not found: " + bookId));
 
             String detectedTitle   = metadata.getVerificationDetectedTitle();
             String detectedAuthors = metadata.getVerificationDetectedAuthors();
