@@ -1,4 +1,4 @@
-FROM nvidia/cuda:12.1.0-cudnn8-runtime-ubuntu22.04
+FROM nvidia/cuda:12.2.0-cudnn8-runtime-ubuntu22.04
 
 ENV DEBIAN_FRONTEND=noninteractive
 
@@ -15,7 +15,5 @@ RUN pip3 install --no-cache-dir -r requirements.txt
 
 COPY main.py .
 
-# Expose the transcription API
-EXPOSE 8080
-
-CMD ["python3", "-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8080"]
+EXPOSE 8000
+CMD ["python3", "main.py"]
