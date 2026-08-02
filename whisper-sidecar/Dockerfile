@@ -1,19 +1,15 @@
-FROM nvidia/cuda:12.2.0-cudnn8-runtime-ubuntu22.04
+FROM fedirz/faster-whisper-server:latest-cuda
 
-ENV DEBIAN_FRONTEND=noninteractive
+USER root
 
-RUN apt-get update && apt-get install -y \
-    python3 \
-    python3-pip \
-    ffmpeg \
+# Add FFmpeg for audio extraction and ensure FastAPI/uvicorn are present
+RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
 
-WORKDIR /app
+RUN pip install --no-cache-dir fastapi==0.115.0 "uvicorn[standard]==0.30.6"
 
-COPY requirements.txt .
-RUN pip3 install --no-cache-dir -r requirements.txt
-
+WORKDIR /sidecar
 COPY main.py .
 
 EXPOSE 8000
-CMD ["python3", "main.py"]
+CMD ["python3", "/sidecar/main.py"]
