@@ -2,11 +2,9 @@ FROM fedirz/faster-whisper-server:latest-cuda
 
 USER root
 
-# Add FFmpeg for audio extraction and ensure FastAPI/uvicorn are present
+# Add FFmpeg for audio extraction (everything else is already in the base image)
 RUN apt-get update && apt-get install -y --no-install-recommends ffmpeg \
     && rm -rf /var/lib/apt/lists/*
-
-RUN pip install --no-cache-dir fastapi==0.115.0 "uvicorn[standard]==0.30.6"
 
 WORKDIR /sidecar
 COPY main.py .
