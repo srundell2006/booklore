@@ -104,3 +104,42 @@
 }
 
 .detail-key { font-weight: 600; }
+
+// Fix: save button not visible in Edit Metadata tab (layout-main/non-dialog mode).
+// form-content has a hardcoded height: 72.5dvh; combined with the form-footer
+// height this overflows the tab panel at common viewport sizes (768-900 px),
+// pushing the Save button below the visible area.
+//
+// Establishing a flex height chain through PrimeNG's p-tabpanel and
+// app-metadata-editor lets form-content fill exactly the remaining space so
+// the footer (Save button) is always pinned at the bottom.
+//
+// The rules below fire ONLY inside .layout-main — dialog mode is unaffected.
+::ng-deep .layout-main .tabpanels-responsive {
+  display: flex;
+  flex-direction: column;
+}
+
+// Target only the edit tab panel (the one containing app-metadata-editor)
+::ng-deep .layout-main .tabpanels-responsive p-tabpanel:has(> app-metadata-editor) {
+  flex: 1;
+  min-height: 0;
+  overflow: hidden;
+  display: flex;
+  flex-direction: column;
+}
+
+::ng-deep .layout-main .tabpanels-responsive app-metadata-editor {
+  display: flex;
+  flex-direction: column;
+  flex: 1;
+  min-height: 0;
+}
+
+// Override the hardcoded height so form-content fills the available flex space
+// rather than a fixed 72.5dvh (specificity 0,3,1 beats component's 0,2,0)
+::ng-deep .layout-main .tabpanels-responsive app-metadata-editor .form-content {
+  height: auto;
+  flex: 1 1 0;
+  min-height: 0;
+}
