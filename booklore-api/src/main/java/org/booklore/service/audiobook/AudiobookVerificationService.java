@@ -2,8 +2,10 @@ package org.booklore.service.audiobook;
 
 import lombok.extern.slf4j.Slf4j;
 import org.booklore.mapper.BookMapper;
+import org.booklore.model.dto.Book;
 import org.booklore.model.dto.request.AudiobookVerificationRequest;
 import org.booklore.model.dto.settings.AudiobookVerificationSettings;
+import org.booklore.model.enums.PermissionType;
 import org.booklore.model.websocket.Topic;
 import org.booklore.repository.BookMetadataRepository;
 import org.booklore.repository.BookRepository;
@@ -307,13 +309,22 @@ public class AudiobookVerificationService {
                                 String detectedAuthors, String mismatchReason) {
         bookMetadataRepository.updateVerificationResult(
                 bookId, status, detectedTitle, detectedAuthors, Instant.now(), mismatchReason);
-        // Reload and notify inside a transaction so the Hibernate session stays open
-        // when the mapper accesses lazy collections (e.g. BookMetadataEntity.authors).
+        // Build the DTO inside a transaction so lazy collections (e.g. authors) can be
+        // loaded by Hibernate. We capture the result and send the notification after the
+        // transaction closes so we are not holding a DB connection during the WS send.
+        //
+        // We use sendMessageToPermissions instead of sendMessage because verification
+        // tasks run in virtual threads with no Spring SecurityContext, which causes
+        // sendMessage to silently no-op (getAuthenticatedUser() returns null).
         try {
-            transactionTemplate.executeWithoutResult(tx ->
-                    bookRepository.findByIdWithBookFiles(bookId).ifPresent(book ->
-                            notificationService.sendMessage(Topic.BOOK_UPDATE,
-                                    bookMapper.toBookWithDescription(book, true))));
+            Book bookDto = transactionTemplate.execute(tx ->
+                    bookRepository.findByIdWithBookFiles(bookId)
+                            .map(book -> bookMapper.toBookWithDescription(book, true))
+                            .orElse(null));
+            if (bookDto != null) {
+                notificationService.sendMessageToPermissions(
+                        Topic.BOOK_UPDATE, bookDto, Set.of(PermissionType.DOWNLOAD));
+            }
         } catch (Exception e) {
             log.warn("Failed to send BOOK_UPDATE for book {}: {}", bookId, e.getMessage());
         }
