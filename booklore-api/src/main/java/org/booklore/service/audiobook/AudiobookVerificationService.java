@@ -1,9 +1,14 @@
 package org.booklore.service.audiobook;
 
 import lombok.extern.slf4j.Slf4j;
+import org.booklore.mapper.BookMapper;
 import org.booklore.model.dto.request.AudiobookVerificationRequest;
 import org.booklore.model.dto.settings.AudiobookVerificationSettings;
+import org.booklore.model.entity.BookEntity;
+import org.booklore.model.websocket.Topic;
 import org.booklore.repository.BookMetadataRepository;
+import org.booklore.repository.BookRepository;
+import org.booklore.service.NotificationService;
 import org.booklore.service.appsettings.AppSettingService;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Service;
@@ -28,6 +33,7 @@ import java.util.stream.Collectors;
  *   2. Ask Ollama to extract title + author(s) from the transcript.
  *   3. Compare extracted values with the stored BookMetadataEntity using token-overlap.
  *   4. Persist the result (VERIFIED | MISMATCH | SKIPPED | ERROR) to book_metadata.
+ *   5. Broadcast Topic.BOOK_UPDATE so the frontend refreshes without a manual reload.
  */
 @Slf4j
 @Service
@@ -38,6 +44,9 @@ public class AudiobookVerificationService {
     private final BookMetadataRepository bookMetadataRepository;
     private final ObjectMapper objectMapper;
     private final RestClient restClient;
+    private final BookRepository bookRepository;
+    private final BookMapper bookMapper;
+    private final NotificationService notificationService;
 
     @Value("${ollama.base-url:http://ollama:11434}")
     private String defaultOllamaUrl;
@@ -50,11 +59,17 @@ public class AudiobookVerificationService {
     public AudiobookVerificationService(AppSettingService appSettingService,
                                         VerificationContextLoader contextLoader,
                                         BookMetadataRepository bookMetadataRepository,
-                                        ObjectMapper objectMapper) {
+                                        ObjectMapper objectMapper,
+                                        BookRepository bookRepository,
+                                        BookMapper bookMapper,
+                                        NotificationService notificationService) {
         this.appSettingService = appSettingService;
         this.contextLoader = contextLoader;
         this.bookMetadataRepository = bookMetadataRepository;
         this.objectMapper = objectMapper;
+        this.bookRepository = bookRepository;
+        this.bookMapper = bookMapper;
+        this.notificationService = notificationService;
         this.restClient = RestClient.create();
     }
 
@@ -282,13 +297,21 @@ public class AudiobookVerificationService {
     }
 
     // -----------------------------------------------------------------------
-    // Persistence
+    // Persistence + notification
     // -----------------------------------------------------------------------
 
     private void persistResult(long bookId, String status, String detectedTitle,
                                 String detectedAuthors, String mismatchReason) {
         bookMetadataRepository.updateVerificationResult(
                 bookId, status, detectedTitle, detectedAuthors, Instant.now(), mismatchReason);
+        // Notify the frontend so it refreshes the book card / detail view immediately.
+        try {
+            bookRepository.findByIdWithBookFiles(bookId).ifPresent(book ->
+                    notificationService.sendMessage(Topic.BOOK_UPDATE,
+                            bookMapper.toBookWithDescription(book, true)));
+        } catch (Exception e) {
+            log.warn("Failed to send BOOK_UPDATE for book {}: {}", bookId, e.getMessage());
+        }
     }
 
     // -----------------------------------------------------------------------
