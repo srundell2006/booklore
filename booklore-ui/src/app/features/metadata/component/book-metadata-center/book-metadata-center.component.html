@@ -27,13 +27,13 @@
           @if (book.metadata?.verificationStatus === 'MISMATCH') {
             <div class="mismatch-details">
               @if (book.metadata?.verificationDetectedTitle) {
-                <div><span class="detail-key">Detected title:</span> {{ book.metadata.verificationDetectedTitle }}</div>
+                <div><span class="detail-key">Detected title:</span> {{ book.metadata?.verificationDetectedTitle }}</div>
               }
               @if (book.metadata?.verificationDetectedAuthors) {
-                <div><span class="detail-key">Detected author(s):</span> {{ book.metadata.verificationDetectedAuthors }}</div>
+                <div><span class="detail-key">Detected author(s):</span> {{ book.metadata?.verificationDetectedAuthors }}</div>
               }
               @if (book.metadata?.verificationMismatchReason) {
-                <div><span class="detail-key">Reason:</span> {{ book.metadata.verificationMismatchReason }}</div>
+                <div><span class="detail-key">Reason:</span> {{ book.metadata?.verificationMismatchReason }}</div>
               }
             </div>
           }
