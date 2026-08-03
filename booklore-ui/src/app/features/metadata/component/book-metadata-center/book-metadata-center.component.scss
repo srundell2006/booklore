@@ -143,3 +143,24 @@
   flex: 1 1 0;
   min-height: 0;
 }
+
+// When the audiobook verification banner is visible it occupies vertical space that the
+// tabpanels-responsive height calculation does not account for.
+// Simple banner (~4rem: padding + margin + one-line text):
+::ng-deep .layout-main .book-metadata-center-container:has(.audiobook-verification-banner) .tabpanels-responsive {
+  height: calc(100dvh - 14rem);
+}
+@media (max-width: 768px) {
+  ::ng-deep .layout-main .book-metadata-center-container:has(.audiobook-verification-banner) .tabpanels-responsive {
+    height: calc(100dvh - 12.8rem);
+  }
+}
+// Mismatch banner is taller — detail lines + action buttons (~8rem):
+::ng-deep .layout-main .book-metadata-center-container:has(.verification-mismatch) .tabpanels-responsive {
+  height: calc(100dvh - 18rem);
+}
+@media (max-width: 768px) {
+  ::ng-deep .layout-main .book-metadata-center-container:has(.verification-mismatch) .tabpanels-responsive {
+    height: calc(100dvh - 16.5rem);
+  }
+}

@@ -210,7 +210,8 @@ export type VisibleFilterType =
   | 'goodreadsRating' | 'hardcoverRating' | 'language' | 'pageCount' | 'mood'
   | 'ageRating' | 'contentRating'
   | 'narrator'
-  | 'comicCharacter' | 'comicTeam' | 'comicLocation' | 'comicCreator';
+  | 'comicCharacter' | 'comicTeam' | 'comicLocation' | 'comicCreator'
+  | 'verificationStatus';
 
 export const DEFAULT_VISIBLE_FILTERS: VisibleFilterType[] = [
   'author', 'category', 'series', 'bookType', 'readStatus',
@@ -225,7 +226,8 @@ export const ALL_FILTER_OPTION_VALUES: VisibleFilterType[] = [
   'matchScore', 'publisher', 'publishedDate', 'fileSize', 'shelf',
   'shelfStatus', 'language', 'pageCount', 'mood', 'amazonRating',
   'goodreadsRating', 'hardcoverRating', 'narrator',
-  'comicCharacter', 'comicTeam', 'comicLocation', 'comicCreator'
+  'comicCharacter', 'comicTeam', 'comicLocation', 'comicCreator',
+  'verificationStatus'
 ];
 
 export const ALL_FILTER_OPTIONS: { label: string; value: VisibleFilterType }[] = [
@@ -255,7 +257,8 @@ export const ALL_FILTER_OPTIONS: { label: string; value: VisibleFilterType }[] =
   {label: 'Comic Character', value: 'comicCharacter'},
   {label: 'Comic Team', value: 'comicTeam'},
   {label: 'Comic Location', value: 'comicLocation'},
-  {label: 'Comic Creator', value: 'comicCreator'}
+  {label: 'Comic Creator', value: 'comicCreator'},
+  {label: 'Verification Status', value: 'verificationStatus'}
 ];
 
 export const DEFAULT_VISIBLE_SORT_FIELDS: string[] = [

@@ -22,7 +22,8 @@ export type FilterType =
   | 'goodreadsRating' | 'hardcoverRating' | 'language' | 'pageCount' | 'mood'
   | 'ageRating' | 'contentRating'
   | 'narrator'
-  | 'comicCharacter' | 'comicTeam' | 'comicLocation' | 'comicCreator';
+  | 'comicCharacter' | 'comicTeam' | 'comicLocation' | 'comicCreator'
+  | 'verificationStatus';
 
 export type SortMode = 'count' | 'sortIndex';
 
@@ -163,7 +164,8 @@ export const FILTER_LABELS: Readonly<Record<FilterType, string>> = {
   comicCharacter: 'Comic Character',
   comicTeam: 'Comic Team',
   comicLocation: 'Comic Location',
-  comicCreator: 'Comic Creator'
+  comicCreator: 'Comic Creator',
+  verificationStatus: 'Verification Status'
 };
 
 // ============================================================================
@@ -266,7 +268,8 @@ export const FILTER_EXTRACTORS: Readonly<Record<Exclude<FilterType, 'library'>, 
       }
     }
     return creators;
-  }
+  },
+  verificationStatus: (book) => extractSingleString(book.metadata?.verificationStatus)
 };
 
 // Translation key for each FilterType — used by UI components to translate filter labels
@@ -297,7 +300,8 @@ export const FILTER_LABEL_KEYS: Readonly<Record<FilterType, string>> = {
   comicCharacter: 'book.filter.labels.comicCharacter',
   comicTeam: 'book.filter.labels.comicTeam',
   comicLocation: 'book.filter.labels.comicLocation',
-  comicCreator: 'book.filter.labels.comicCreator'
+  comicCreator: 'book.filter.labels.comicCreator',
+  verificationStatus: 'book.filter.labels.verificationStatus'
 };
 
 export const READ_STATUS_LABEL_KEYS: Readonly<Record<ReadStatus, string>> = {
@@ -361,5 +365,6 @@ export const FILTER_CONFIGS: Readonly<Record<Exclude<FilterType, 'library'>, Omi
   comicCharacter: {label: 'Comic Character', sortMode: 'count'},
   comicTeam: {label: 'Comic Team', sortMode: 'count'},
   comicLocation: {label: 'Comic Location', sortMode: 'count'},
-  comicCreator: {label: 'Comic Creator', sortMode: 'count'}
+  comicCreator: {label: 'Comic Creator', sortMode: 'count'},
+  verificationStatus: {label: 'Verification Status', sortMode: 'count'}
 };

@@ -49,6 +49,17 @@
             (onClick)="applyDetectedMetadata(book.id)">
           </p-button>
         }
+        @if ((admin || canEditMetadata) && book.metadata?.verificationStatus) {
+          <p-button
+            label="Clear"
+            icon="pi pi-times"
+            size="small"
+            severity="secondary"
+            [outlined]="true"
+            [loading]="clearingVerificationStatus"
+            (onClick)="clearVerificationStatus(book.id)">
+          </p-button>
+        }
         @if (admin) {
           <p-button
             label="Verify Content"

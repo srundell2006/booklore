@@ -58,6 +58,7 @@ export class BookMetadataCenterComponent implements OnInit, OnDestroy {
   isLocalStorage: boolean = true;
   verifyingContent = false;
   applyingDetectedMetadata = false;
+  clearingVerificationStatus = false;
 
   private appSettings$ = this.appSettingsService.appSettings$;
   private currentBookId$ = new BehaviorSubject<number | null>(null);
@@ -181,6 +182,14 @@ export class BookMetadataCenterComponent implements OnInit, OnDestroy {
     this.bookService.applyVerificationMetadata(bookId).pipe(take(1)).subscribe({
       next: () => { this.applyingDetectedMetadata = false; },
       error: () => { this.applyingDetectedMetadata = false; }
+    });
+  }
+
+  clearVerificationStatus(bookId: number): void {
+    this.clearingVerificationStatus = true;
+    this.bookService.clearVerificationStatus(bookId).pipe(take(1)).subscribe({
+      next: () => { this.clearingVerificationStatus = false; },
+      error: () => { this.clearingVerificationStatus = false; }
     });
   }
 
