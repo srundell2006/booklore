@@ -339,4 +339,18 @@ public class BookController {
             @Parameter(description = "ID of the book") @PathVariable long bookId) {
         return ResponseEntity.ok(audiobookVerificationService.applyDetectedMetadata(bookId));
     }
+
+    @Operation(summary = "Clear audiobook verification status", description = "Resets the verification status and all detected metadata fields without applying any changes. The book will appear as unverified again.")
+    @ApiResponses({
+            @ApiResponse(responseCode = "200", description = "Verification status cleared successfully"),
+            @ApiResponse(responseCode = "403", description = "Forbidden"),
+            @ApiResponse(responseCode = "404", description = "Book not found")
+    })
+    @PostMapping("/{bookId}/clear-verification-status")
+    @CheckBookAccess(bookIdParam = "bookId")
+    @PreAuthorize("@securityUtil.canEditMetadata() or @securityUtil.isAdmin()")
+    public ResponseEntity<Book> clearVerificationStatus(
+            @Parameter(description = "ID of the book") @PathVariable long bookId) {
+        return ResponseEntity.ok(audiobookVerificationService.clearVerificationStatus(bookId));
+    }
 }

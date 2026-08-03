@@ -199,6 +199,44 @@ public class AudiobookVerificationService {
         return bookDto;
     }
 
+    /**
+     * Clears the verification status and all detected metadata fields for a book,
+     * without applying any detected changes. The book will appear as unverified again.
+     *
+     * @param bookId the book whose verification status should be cleared
+     * @return the refreshed Book DTO after the update
+     */
+    public Book clearVerificationStatus(long bookId) {
+        Book bookDto = transactionTemplate.execute(tx -> {
+            BookMetadataEntity metadata = bookMetadataRepository.findById(bookId)
+                    .orElseThrow(() -> ApiError.GENERIC_NOT_FOUND.createException(
+                            "Book not found: " + bookId));
+
+            metadata.setVerificationStatus(null);
+            metadata.setVerificationDetectedTitle(null);
+            metadata.setVerificationDetectedAuthors(null);
+            metadata.setVerificationMismatchReason(null);
+
+            bookMetadataRepository.save(metadata);
+
+            return bookRepository.findByIdWithBookFiles(bookId)
+                    .map(book -> bookMapper.toBookWithDescription(book, true))
+                    .orElse(null);
+        });
+
+        if (bookDto != null) {
+            try {
+                notificationService.sendMessageToPermissions(
+                        Topic.BOOK_UPDATE, bookDto, Set.of(PermissionType.DOWNLOAD));
+            } catch (Exception e) {
+                log.warn("Failed to send BOOK_UPDATE after clearing verification status for book {}: {}",
+                        bookId, e.getMessage());
+            }
+        }
+
+        return bookDto;
+    }
+
     // -----------------------------------------------------------------------
     // Core verification
     // -----------------------------------------------------------------------
