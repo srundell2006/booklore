@@ -67,7 +67,8 @@
       "moreActions": "More actions",
       "selectAll": "Select all books",
       "deselectAll": "Deselect all books",
-      "deleteSelected": "Delete selected books"
+      "deleteSelected": "Delete selected books",
+      "verifyAudiobooks": "Verify audiobook content"
     },
     "placeholder": {
       "selectColumns": "Select Columns",
