@@ -383,6 +383,16 @@
                             tooltipPosition="top">
                           </p-button>
                         }
+                        @if (userState.user!.permissions.admin && hasSelectedAudiobooks) {
+                          <p-button
+                            outlined="true"
+                            icon="pi pi-headphones"
+                            severity="info"
+                            (click)="verifySelectedAudiobooks()"
+                            [pTooltip]="t('tooltip.verifyAudiobooks')"
+                            tooltipPosition="top">
+                          </p-button>
+                        }
                         @if (userState.user!.permissions.canManageLibrary || userState.user!.permissions.admin) {
                           <p-button
                             outlined="true"

@@ -1006,6 +1006,28 @@ export class BookBrowserComponent implements OnInit, AfterViewInit, OnDestroy {
     return libraryIds.size === 1;
   }
 
+  get hasSelectedAudiobooks(): boolean {
+    if (this.selectedBooks.size === 0) return false;
+    const currentState = this.bookService.getCurrentBookState();
+    const selectedBookIds = Array.from(this.selectedBooks);
+    return (currentState.books || []).some(
+      b => selectedBookIds.includes(b.id) && b.primaryFile?.bookType === 'AUDIOBOOK'
+    );
+  }
+
+  verifySelectedAudiobooks(): void {
+    const currentState = this.bookService.getCurrentBookState();
+    const selectedBookIds = Array.from(this.selectedBooks);
+    const audiobookIds = (currentState.books || [])
+      .filter(b => selectedBookIds.includes(b.id) && b.primaryFile?.bookType === 'AUDIOBOOK')
+      .map(b => b.id);
+    if (audiobookIds.length === 0) return;
+    this.taskHelperService.verifyAudiobookTask({
+      scanType: 'BOOKS',
+      bookIds: audiobookIds
+    }).subscribe();
+  }
+
   user() {
     return this.userService.getCurrentUser();
   }
