@@ -9,13 +9,10 @@ import tools.jackson.core.type.TypeReference;
 import tools.jackson.databind.ObjectMapper;
 
 import java.net.URI;
-import java.net.URLEncoder;
 import java.net.http.HttpClient;
 import java.net.http.HttpRequest;
 import java.net.http.HttpResponse;
-import java.nio.charset.StandardCharsets;
 import java.time.Duration;
-import java.util.Arrays;
 import java.util.List;
 
 @Slf4j
@@ -30,23 +27,12 @@ public class ProwlarrClient {
 
     public List<ProwlarrRelease> search(BookAcquisitionSettings settings, String query) {
         String baseUrl = trimTrailingSlash(settings.getProwlarrUrl());
-        // Built by hand and percent-encoded: UriComponentsBuilder.queryParam does
-        // not encode values, so a title containing '&' (say "Dungeons & Dragons")
-        // would break out of the query parameter and corrupt the request.
-        StringBuilder q = new StringBuilder("query=")
-                .append(URLEncoder.encode(query, StandardCharsets.UTF_8))
-                .append("&type=search&limit=100");
-
-        // Prowlarr expects categories as repeated query parameters
-        // (categories=7000&categories=7020). Passing the configured value as a
-        // single comma-joined string made Prowlarr reject the entire request
-        // with 400 "The value '7000,7020' is not valid.", so every search came
-        // back empty.
-        for (String category : splitCategories(settings.getSearchCategories())) {
-            q.append("&categories=").append(URLEncoder.encode(category, StandardCharsets.UTF_8));
-        }
-
-        URI uri = URI.create(baseUrl + "/api/v1/search?" + q);
+        URI uri = UriComponentsBuilder.fromUriString(baseUrl + "/api/v1/search")
+                .queryParam("query", query)
+                .queryParam("categories", settings.getSearchCategories())
+                .queryParam("type", "search")
+                .queryParam("limit", 100)
+                .build().toUri();
 
         try {
             log.info("Prowlarr search: {}", query);
@@ -58,30 +44,16 @@ public class ProwlarrClient {
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() != 200) {
                 log.warn("Prowlarr search failed. Status: {}, body: {}", response.statusCode(), truncate(response.body()));
-                throw new ProwlarrSearchException(
-                        "Prowlarr rejected the search (HTTP " + response.statusCode() + "): " + truncate(response.body()));
+                return List.of();
             }
             return objectMapper.readValue(response.body(), new TypeReference<List<ProwlarrRelease>>() {});
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
-            throw new ProwlarrSearchException("Prowlarr search was interrupted");
-        } catch (ProwlarrSearchException e) {
-            throw e;
+            return List.of();
         } catch (Exception e) {
             log.error("Prowlarr search error for query '{}': {}", query, e.getMessage());
-            throw new ProwlarrSearchException("Prowlarr search failed: " + e.getMessage());
-        }
-    }
-
-    /** "7000, 7020" -> ["7000", "7020"]; blank or null yields no categories at all. */
-    private List<String> splitCategories(String configured) {
-        if (configured == null || configured.isBlank()) {
             return List.of();
         }
-        return Arrays.stream(configured.split(","))
-                .map(String::trim)
-                .filter(value -> !value.isEmpty())
-                .toList();
     }
 
     public boolean testConnection(BookAcquisitionSettings settings) {
