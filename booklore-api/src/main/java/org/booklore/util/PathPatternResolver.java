@@ -8,6 +8,7 @@ import org.booklore.model.entity.BookMetadataEntity;
 import lombok.experimental.UtilityClass;
 import lombok.extern.slf4j.Slf4j;
 
+import java.text.Normalizer;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
 import java.nio.charset.CharsetEncoder;
@@ -31,6 +32,7 @@ public class PathPatternResolver {
     private final Pattern WHITESPACE_PATTERN = Pattern.compile("\\s+");
     private final Pattern CONTROL_CHARACTER_PATTERN = Pattern.compile("\\p{Cntrl}");
     private final Pattern INVALID_CHARS_PATTERN = Pattern.compile("[\\\\/:*?\"<>|]");
+    private final Pattern NON_ASCII_PATTERN = Pattern.compile("[^\\p{ASCII}]");
     private final Pattern PLACEHOLDER_PATTERN = Pattern.compile("\\{(.*?)}");
     private final Pattern MODIFIER_PLACEHOLDER_PATTERN = Pattern.compile("\\{([^}:]+)(?::([^}]+))?}");
     private final Pattern COMMA_SPACE_PATTERN = Pattern.compile(", ");
@@ -284,10 +286,26 @@ public class PathPatternResolver {
         };
     }
 
+    /**
+     * Sanitize a string for use as a filesystem path component.
+     * <p>
+     * Steps:
+     * 1. NFD-decompose accented characters so combining marks become separate code points
+     *    (e.g. é → e + ́, ñ → n + ̃).
+     * 2. Strip all non-ASCII code points (removing the combining marks, leaving the base letter).
+     * 3. Remove filesystem-illegal characters (\ / : * ? " < > |).
+     * 4. Remove control characters.
+     * 5. Collapse runs of whitespace to a single space and trim.
+     */
     private String sanitize(String input) {
         if (input == null) return "";
-        return WHITESPACE_PATTERN.matcher(CONTROL_CHARACTER_PATTERN.matcher(INVALID_CHARS_PATTERN.matcher(input).replaceAll("")).replaceAll("")).replaceAll(" ")
-                .trim();
+        // Strip accents: decompose to NFD, then remove all non-ASCII code points
+        String ascii = NON_ASCII_PATTERN.matcher(Normalizer.normalize(input, Normalizer.Form.NFD)).replaceAll("");
+        return WHITESPACE_PATTERN.matcher(
+                CONTROL_CHARACTER_PATTERN.matcher(
+                        INVALID_CHARS_PATTERN.matcher(ascii).replaceAll("")
+                ).replaceAll("")
+        ).replaceAll(" ").trim();
     }
 
     private String truncateAuthorsForFilesystem(String authors) {
