@@ -106,6 +106,14 @@ public enum TaskType {
             false,
             "Verify Audiobook Content",
             "Transcribes a sample of audiobook audio via Whisper and uses an LLM to extract and verify the title and author against stored metadata."
+    ),
+    EPUB_TEXT_IDENTIFY(
+            false,
+            true,
+            false,
+            false,
+            "Identify EPUBs from Text",
+            "Reads the opening pages of EPUB files, uses an LLM to identify the title and author, then fetches and applies full metadata from Google Books or Open Library."
     );
 
     @Getter
@@ -126,12 +134,13 @@ public enum TaskType {
     @Getter
     private final String description;
 
-    TaskType(boolean parallel, boolean async, boolean cronSupported, boolean hiddenFromUI, String name, String description) {
-        this.parallel = parallel;
-        this.async = async;
+    TaskType(boolean parallel, boolean async, boolean cronSupported, boolean hiddenFromUI,
+             String name, String description) {
+        this.parallel      = parallel;
+        this.async         = async;
         this.cronSupported = cronSupported;
-        this.hiddenFromUI = hiddenFromUI;
-        this.name = name;
-        this.description = description;
+        this.hiddenFromUI  = hiddenFromUI;
+        this.name          = name;
+        this.description   = description;
     }
 }
