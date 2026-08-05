@@ -3,7 +3,7 @@ import {MessageService} from 'primeng/api';
 import {MetadataRefreshRequest} from '../../metadata/model/request/metadata-refresh-request.model';
 import {catchError, map} from 'rxjs/operators';
 import {of} from 'rxjs';
-import {AudiobookVerificationRequest, IsbnScanRequest, OrganizeLibraryRequest, TaskCreateRequest, TaskService, TaskType} from './task.service';
+import {AudiobookVerificationRequest, EpubTextIdentifyRequest, IsbnScanRequest, OrganizeLibraryRequest, TaskCreateRequest, TaskService, TaskType} from './task.service';
 import {TranslocoService} from '@jsverse/transloco';
 
 @Injectable({
@@ -79,6 +79,42 @@ export class TaskHelperService {
             summary: this.t.translate('settingsTasks.toast.metadataFailed'),
             life: 5000,
             detail: this.t.translate('settingsTasks.toast.isbnScanFailed', {default: 'Failed to start ISBN scan.'})
+          });
+        }
+        return of({success: false});
+      })
+    );
+  }
+
+  identifyEpubTextTask(options: EpubTextIdentifyRequest) {
+    const request: TaskCreateRequest = {
+      taskType: TaskType.EPUB_TEXT_IDENTIFY,
+      triggeredByCron: false,
+      options
+    };
+    return this.taskService.startTask(request).pipe(
+      map(() => {
+        this.messageService.add({
+          severity: 'success',
+          summary: this.t.translate('common.success'),
+          detail: this.t.translate('settingsTasks.toast.epubTextIdentifyScheduled', {default: 'EPUB text identification started. Progress will appear in Task Management.'})
+        });
+        return {success: true};
+      }),
+      catchError((e) => {
+        if (e.status === 409) {
+          this.messageService.add({
+            severity: 'error',
+            summary: this.t.translate('settingsTasks.toast.alreadyRunning'),
+            life: 5000,
+            detail: this.t.translate('settingsTasks.toast.epubTextIdentifyAlreadyRunning', {default: 'EPUB text identification is already running.'})
+          });
+        } else {
+          this.messageService.add({
+            severity: 'error',
+            summary: this.t.translate('settingsTasks.toast.metadataFailed'),
+            life: 5000,
+            detail: this.t.translate('settingsTasks.toast.epubTextIdentifyFailed', {default: 'Failed to start EPUB text identification.'})
           });
         }
         return of({success: false});

@@ -7,7 +7,7 @@ import {Library} from '../model/library.model';
 import {Shelf} from '../model/shelf.model';
 import {MetadataRefreshType} from '../../metadata/model/request/metadata-refresh-type.enum';
 import {MagicShelf, MagicShelfService} from '../../magic-shelf/service/magic-shelf.service';
-import {IsbnScanRequest, OrganizeLibraryRequest} from '../../settings/task-management/task.service';
+import {EpubTextIdentifyRequest, IsbnScanRequest, OrganizeLibraryRequest} from '../../settings/task-management/task.service';
 import {TaskHelperService} from '../../settings/task-management/task-helper.service';
 import {UserService} from "../../../features/settings/user-management/user.service";
 import {LoadingService} from '../../../core/services/loading.service';
@@ -158,6 +158,16 @@ export class LibraryShelfMenuService {
                 refreshType: 'LIBRARY',
                 libraryId: entity?.id ?? undefined
               } as IsbnScanRequest).subscribe();
+            }
+          },
+          {
+            label: this.t.translate('book.shelfMenuService.library.identifyEpubsFromText', {default: 'Identify EPUBs from Text'}),
+            icon: 'pi pi-sparkles',
+            command: () => {
+              this.taskHelperService.identifyEpubTextTask({
+                refreshType: 'LIBRARY',
+                libraryId: entity?.id ?? undefined
+              } as EpubTextIdentifyRequest).subscribe();
             }
           },
           {
@@ -321,6 +331,16 @@ export class LibraryShelfMenuService {
                 refreshType: 'MAGIC_SHELF',
                 magicShelfId: entity?.id ?? undefined
               } as IsbnScanRequest).subscribe();
+            }
+          },
+          {
+            label: this.t.translate('book.shelfMenuService.magicShelf.identifyEpubsFromText', {default: 'Identify EPUBs from Text'}),
+            icon: 'pi pi-sparkles',
+            command: () => {
+              this.taskHelperService.identifyEpubTextTask({
+                refreshType: 'MAGIC_SHELF',
+                magicShelfId: entity?.id ?? undefined
+              } as EpubTextIdentifyRequest).subscribe();
             }
           },
           {
