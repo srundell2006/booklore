@@ -18,7 +18,10 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.util.Comparator;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -49,7 +52,14 @@ public class LibraryOrganizeService {
         int skipped = 0;
         int errors = 0;
 
+        // Collect every library-root path we encounter so we can prune empty dirs afterward.
+        Set<Path> libraryRoots = new LinkedHashSet<>();
+
         for (BookEntity book : books) {
+            LibraryPathEntity lp = book.getLibraryPath();
+            if (lp != null) {
+                libraryRoots.add(Paths.get(lp.getPath()).toAbsolutePath().normalize());
+            }
             for (BookFileEntity bookFile : book.getBookFiles()) {
                 try {
                     boolean wasOrganized = organizeFile(book, bookFile, pattern);
@@ -64,6 +74,11 @@ public class LibraryOrganizeService {
 
         log.info("Library '{}' organized: {} moved, {} already in place, {} errors",
                 library.getName(), moved, skipped, errors);
+
+        // Remove any subdirectories that are now empty as a result of moves.
+        if (moved > 0) {
+            deleteEmptyDirectories(libraryRoots);
+        }
     }
 
     private boolean organizeFile(BookEntity book, BookFileEntity bookFile, String pattern) throws IOException {
@@ -108,6 +123,36 @@ public class LibraryOrganizeService {
         bookFileRepository.save(bookFile);
 
         return true;
+    }
+
+    /**
+     * Walks each library root in reverse (deepest paths first) and deletes any
+     * directory that is now empty — but never the root itself.
+     */
+    private void deleteEmptyDirectories(Set<Path> libraryRoots) {
+        for (Path root : libraryRoots) {
+            if (!Files.isDirectory(root)) {
+                continue;
+            }
+            try (var pathStream = Files.walk(root)) {
+                pathStream
+                    .sorted(Comparator.reverseOrder())
+                    .filter(path -> !path.equals(root))
+                    .filter(Files::isDirectory)
+                    .forEach(dir -> {
+                        try (var children = Files.newDirectoryStream(dir)) {
+                            if (!children.iterator().hasNext()) {
+                                Files.delete(dir);
+                                log.debug("Deleted empty directory: {}", dir);
+                            }
+                        } catch (IOException e) {
+                            log.warn("Could not check or delete directory '{}': {}", dir, e.getMessage());
+                        }
+                    });
+            } catch (IOException e) {
+                log.warn("Failed to walk library path '{}' for empty-directory cleanup: {}", root, e.getMessage());
+            }
+        }
     }
 
     /**
