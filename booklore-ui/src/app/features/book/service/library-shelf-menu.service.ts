@@ -334,7 +334,7 @@ export class LibraryShelfMenuService {
             }
           },
           {
-            label: this.t.translate('book.shelfMenuService.magicShelf.identifyEpubsFromText', {default: 'Identify EPUBs from Text'}),
+            label: this.t.translate('book.shelfMenuService.magicShelf.identifyEpubsFromText', {default: 'Scan Text for Metadata'}),
             icon: 'pi pi-sparkles',
             command: () => {
               this.taskHelperService.identifyEpubTextTask({
