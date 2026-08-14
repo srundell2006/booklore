@@ -257,7 +257,7 @@ public class PathPatternResolver {
         if (value == null || value.isEmpty()) {
             return value;
         }
-        return switch (modifier) {
+        return switch (modifier.toLowerCase(Locale.ROOT)) {
             case "first" -> {
                 String[] parts = COMMA_SPACE_PATTERN.split(value);
                 yield parts[0].trim();
@@ -270,7 +270,7 @@ public class PathPatternResolver {
                 }
                 yield firstItem;
             }
-            case "initial" -> {
+            case "initial", "lastinitial" -> {
                 String target = value;
                 if ("authors".equals(fieldName)) {
                     // For authors, use the first letter of the last name of the first author
@@ -278,12 +278,40 @@ public class PathPatternResolver {
                     int lastSpace = firstAuthor.lastIndexOf(' ');
                     target = lastSpace > 0 ? firstAuthor.substring(lastSpace + 1) : firstAuthor;
                 }
-                yield target.substring(0, 1).toUpperCase();
+                yield initialOf(target);
+            }
+            case "firstinitial" -> {
+                String target = value;
+                if ("authors".equals(fieldName)) {
+                    // For authors, use the first letter of the given name of the first author
+                    String firstAuthor = COMMA_SPACE_PATTERN.split(value)[0].trim();
+                    int firstSpace = firstAuthor.indexOf(' ');
+                    target = firstSpace > 0 ? firstAuthor.substring(0, firstSpace) : firstAuthor;
+                }
+                yield initialOf(target);
             }
             case "upper" -> value.toUpperCase();
             case "lower" -> value.toLowerCase();
             default -> value;
         };
+    }
+
+    /**
+     * First alphanumeric character of {@code value}, uppercased.  Falls back to
+     * "#" when the value has no alphanumeric characters, so initials never
+     * produce an empty or punctuation-only path component.
+     */
+    private String initialOf(String value) {
+        if (value == null) {
+            return "#";
+        }
+        for (int i = 0; i < value.length(); i++) {
+            char c = value.charAt(i);
+            if (Character.isLetterOrDigit(c)) {
+                return String.valueOf(Character.toUpperCase(c));
+            }
+        }
+        return "#";
     }
 
     /**
