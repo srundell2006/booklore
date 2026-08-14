@@ -19,7 +19,9 @@ import org.booklore.model.websocket.Topic;
 import org.booklore.repository.BookRepository;
 import org.booklore.service.NotificationService;
 import org.booklore.service.metadata.extractor.EpubOpeningTextExtractor;
-import org.booklore.service.metadata.parser.GoogleParser;
+import org.booklore.service.metadata.parser.AmazonBookParser;
+import org.booklore.service.metadata.parser.BookParser;
+import org.booklore.service.metadata.parser.GoodReadsParser;
 import org.booklore.service.metadata.parser.OpenLibraryParser;
 import org.booklore.service.opds.MagicShelfBookService;
 import org.booklore.task.TaskCancellationManager;
@@ -41,15 +43,16 @@ import java.util.stream.Collectors;
 
 /**
  * Identifies EPUB title and author by reading the book's opening pages, asking
- * an Ollama LLM to extract them, then fetching full metadata from Google Books
- * (with Open Library as fallback) and saving the result via BookMetadataUpdater.
+ * an Ollama LLM to extract them, then fetching full metadata
+ * from Amazon, then GoodReads, then Open Library, and saving the result via
+ * BookMetadataUpdater.
  *
  * <p>Processing order per book:
  * <ol>
  *   <li>Extract opening text (first {@link EpubOpeningTextExtractor#DEFAULT_MAX_SPINE_ITEMS} spine items)</li>
  *   <li>POST text to Ollama → receive {@code {"title":"...","author":"..."}}</li>
- *   <li>Query Google Books with identified title + author</li>
- *   <li>If Google Books returns nothing, fall back to Open Library</li>
+ *   <li>Query Amazon with identified title + author</li>
+ *   <li>Fall through to GoodReads, then Open Library, until one returns data</li>
  *   <li>Apply best result via {@link BookMetadataUpdater#setBookMetadata}</li>
  * </ol>
  */
@@ -62,8 +65,8 @@ public class EpubTextIdentifyService {
 
     private final BookRepository bookRepository;
     private final EpubOpeningTextExtractor epubOpeningTextExtractor;
-    private final GoogleParser googleParser;
-    private final OpenLibraryParser openLibraryParser;
+    /** Ordered lookup chain applied after Ollama identifies title/author. */
+    private final Map<String, BookParser> providerChain;
     private final BookMetadataUpdater bookMetadataUpdater;
     private final NotificationService notificationService;
     private final PlatformTransactionManager transactionManager;
@@ -82,7 +85,8 @@ public class EpubTextIdentifyService {
     public EpubTextIdentifyService(
             BookRepository bookRepository,
             EpubOpeningTextExtractor epubOpeningTextExtractor,
-            GoogleParser googleParser,
+            AmazonBookParser amazonBookParser,
+            GoodReadsParser goodReadsParser,
             OpenLibraryParser openLibraryParser,
             BookMetadataUpdater bookMetadataUpdater,
             NotificationService notificationService,
@@ -93,8 +97,10 @@ public class EpubTextIdentifyService {
             ObjectMapper objectMapper) {
         this.bookRepository             = bookRepository;
         this.epubOpeningTextExtractor   = epubOpeningTextExtractor;
-        this.googleParser               = googleParser;
-        this.openLibraryParser          = openLibraryParser;
+        this.providerChain              = new LinkedHashMap<>();
+        this.providerChain.put("Amazon",       amazonBookParser);
+        this.providerChain.put("GoodReads",    goodReadsParser);
+        this.providerChain.put("Open Library", openLibraryParser);
         this.bookMetadataUpdater        = bookMetadataUpdater;
         this.notificationService        = notificationService;
         this.transactionManager         = transactionManager;
@@ -188,7 +194,7 @@ public class EpubTextIdentifyService {
                     log.info("EpubTextIdentify: '{}' → title='{}' author='{}'",
                             displayTitle, identified.title(), identified.author());
 
-                    // ── Step 3: Google Books lookup ───────────────────────────
+                    // ── Step 3: Metadata lookup (Amazon → GoodReads → Open Library) ──
                     FetchMetadataRequest fetchRequest = FetchMetadataRequest.builder()
                             .title(identified.title())
                             .author(identified.author())
@@ -198,22 +204,18 @@ public class EpubTextIdentifyService {
                     BookMetadata metadata = null;
                     String       source   = null;
 
-                    try {
-                        metadata = googleParser.fetchTopMetadata(bookDto, fetchRequest);
-                        if (metadata != null) source = "Google Books";
-                    } catch (Exception e) {
-                        log.debug("EpubTextIdentify: Google Books failed for '{}': {}",
-                                displayTitle, e.getMessage());
-                    }
-
-                    // ── Step 4: Open Library fallback ─────────────────────────
-                    if (metadata == null) {
+                    for (Map.Entry<String, BookParser> provider : providerChain.entrySet()) {
                         try {
-                            metadata = openLibraryParser.fetchTopMetadata(bookDto, fetchRequest);
-                            if (metadata != null) source = "Open Library";
+                            BookMetadata candidate =
+                                    provider.getValue().fetchTopMetadata(bookDto, fetchRequest);
+                            if (candidate != null) {
+                                metadata = candidate;
+                                source   = provider.getKey();
+                                break;
+                            }
                         } catch (Exception e) {
-                            log.debug("EpubTextIdentify: Open Library failed for '{}': {}",
-                                    displayTitle, e.getMessage());
+                            log.debug("EpubTextIdentify: {} failed for '{}': {}",
+                                    provider.getKey(), displayTitle, e.getMessage());
                         }
                     }
 
