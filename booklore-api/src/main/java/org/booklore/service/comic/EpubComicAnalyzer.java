@@ -39,6 +39,14 @@ public class EpubComicAnalyzer {
     /** Share of uncompressed archive bytes that must be images to count as image-dominated. */
     private static final double IMAGE_BYTE_RATIO = 0.85;
 
+    /**
+     * Images per spine document must sit near 1:1 to read as one-page-one-scan.
+     * A scanned prose book dumps hundreds of images into one or two XHTML files,
+     * which is a very different shape from a comic and must not score here.
+     */
+    private static final double IMAGE_PER_PAGE_MIN = 0.8;
+    private static final double IMAGE_PER_PAGE_MAX = 1.5;
+
     public void analyze(File epubFile, ComicScoreCard card) {
         try (ZipFile zip = new ZipFile(epubFile)) {
             List<FileHeader> headers = zip.getFileHeaders();
@@ -62,21 +70,41 @@ public class EpubComicAnalyzer {
             }
 
             double imageRatio = imageByteRatio(headers);
-            if (imageRatio >= IMAGE_BYTE_RATIO) {
+            boolean imageDominated = imageRatio >= IMAGE_BYTE_RATIO;
+            if (imageDominated) {
                 card.add("EPUB_IMAGE_BYTES", 25,
                         String.format("%.0f%% of archive bytes are images", imageRatio * 100));
             }
 
-            if (opf.spineCount > 0 && opf.imageCount >= opf.spineCount) {
-                card.add("EPUB_IMAGE_PER_PAGE", 15,
-                        String.format("%d images across %d spine documents (~1 per page)",
-                                opf.imageCount, opf.spineCount));
+            boolean pagePerImage = false;
+            if (opf.spineCount > 0) {
+                double perPage = (double) opf.imageCount / opf.spineCount;
+                if (perPage >= IMAGE_PER_PAGE_MIN && perPage <= IMAGE_PER_PAGE_MAX) {
+                    pagePerImage = true;
+                    card.add("EPUB_IMAGE_PER_PAGE", 15,
+                            String.format("%d images across %d spine documents (%.1f per page)",
+                                    opf.imageCount, opf.spineCount, perPage));
+                } else if (perPage > IMAGE_PER_PAGE_MAX) {
+                    card.add("EPUB_BULK_IMAGES", 0,
+                            String.format("%d images crammed into %d spine documents (%.0f per page) "
+                                            + "— shaped like a scanned book, not a comic",
+                                    opf.imageCount, opf.spineCount, perPage));
+                }
             }
 
             int meanChars = meanTextPerDocument(zip, opf.spineHrefs);
-            if (meanChars >= 0 && meanChars < TEXT_DENSITY_FLOOR) {
+            boolean lowText = meanChars >= 0 && meanChars < TEXT_DENSITY_FLOOR;
+            if (lowText) {
                 card.add("EPUB_LOW_TEXT", 25,
                         String.format("Only ~%d characters of text per page", meanChars));
+            }
+
+            // Three independent structural signals agreeing is far stronger evidence
+            // than any one of them alone, and is the only way a CBZ-converted EPUB
+            // reaches the auto-mark threshold — such files rarely declare fixed-layout.
+            if (imageDominated && pagePerImage && lowText) {
+                card.add("EPUB_STRUCTURAL_CONSENSUS", 25,
+                        "Image-dominated, one image per page, and no readable text — all three agree");
             }
 
         } catch (Exception e) {

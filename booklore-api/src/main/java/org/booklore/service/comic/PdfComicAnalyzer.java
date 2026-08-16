@@ -66,16 +66,26 @@ public class PdfComicAnalyzer {
             if (sampled == 0) return;
 
             int meanChars = (int) (chars / sampled);
-            if (meanChars < TEXT_FLOOR) {
+            boolean noTextLayer = meanChars < TEXT_FLOOR;
+            if (noTextLayer) {
                 card.add("PDF_NO_TEXT_LAYER", 30,
                         String.format("Only ~%d characters of text per page", meanChars));
             }
 
             double singleRatio = (double) singleImagePages / sampled;
-            if (singleRatio >= SINGLE_IMAGE_PAGE_RATIO) {
+            boolean pagePerImage = singleRatio >= SINGLE_IMAGE_PAGE_RATIO;
+            if (pagePerImage) {
                 card.add("PDF_PAGE_PER_IMAGE", 30,
                         String.format("%d of %d sampled pages are a single full-page image",
                                 singleImagePages, sampled));
+            }
+
+            // Same reasoning as the EPUB consensus bonus: a PDF with no text layer
+            // whose every page is one full-bleed image tops out at 60 otherwise,
+            // which would send every scanned comic to the review queue.
+            if (noTextLayer && pagePerImage) {
+                card.add("PDF_STRUCTURAL_CONSENSUS", 25,
+                        "No text layer and one full-page image per page — both agree");
             }
 
         } catch (Exception e) {

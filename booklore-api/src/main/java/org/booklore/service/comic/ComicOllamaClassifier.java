@@ -66,13 +66,17 @@ public class ComicOllamaClassifier {
             content = content.replaceAll("(?s)```json\\s*", "").replaceAll("(?s)```\\s*", "").trim();
             JsonNode node = objectMapper.readTree(content);
 
-            if (!node.has("comic")) return;
+            if (!node.has("comic")) {
+                log.warn("ComicDetect: LLM reply had no 'comic' field for '{}': {}", title, content);
+                return;
+            }
             boolean comic = node.get("comic").asBoolean(false);
             double confidence = node.has("confidence") ? node.get("confidence").asDouble(0d) : 0d;
 
             // Ignore low-confidence opinions rather than letting them nudge the score.
             if (confidence < 0.6d) {
-                log.debug("ComicDetect: LLM unsure about '{}' (confidence {})", title, confidence);
+                log.info("ComicDetect: LLM unsure about '{}' — comic={} confidence={}",
+                        title, comic, confidence);
                 return;
             }
 
@@ -84,7 +88,7 @@ public class ComicOllamaClassifier {
                         String.format("LLM classified as prose (confidence %.2f)", confidence));
             }
         } catch (Exception e) {
-            log.debug("ComicDetect: LLM classification failed for '{}': {}", title, e.getMessage());
+            log.warn("ComicDetect: LLM classification failed for '{}': {}", title, e.getMessage());
         }
     }
 
