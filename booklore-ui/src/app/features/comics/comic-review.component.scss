@@ -1,0 +1,60 @@
+@use '../../shared/styles/settings-shared' as settings;
+
+.comic-review {
+  @include settings.settings-page-container;
+
+  .header {
+    display: flex;
+    justify-content: space-between;
+    align-items: flex-start;
+    gap: 1rem;
+    margin-bottom: 1.25rem;
+    flex-wrap: wrap;
+
+    h2 {
+      margin: 0 0 0.35rem;
+      font-size: 1.35rem;
+    }
+
+    .subtitle {
+      margin: 0;
+      max-width: 60ch;
+      color: var(--text-color-secondary);
+      font-size: 0.875rem;
+      line-height: 1.4;
+    }
+
+    .actions {
+      display: flex;
+      gap: 0.5rem;
+      flex-wrap: wrap;
+    }
+  }
+
+  .title {
+    font-weight: 600;
+  }
+
+  .filename {
+    font-size: 0.75rem;
+    color: var(--text-color-secondary);
+    word-break: break-all;
+  }
+
+  ul.signals {
+    margin: 0;
+    padding-left: 1.1rem;
+    font-size: 0.8rem;
+    color: var(--text-color-secondary);
+
+    li {
+      line-height: 1.35;
+    }
+  }
+
+  .empty {
+    text-align: center;
+    padding: 2rem 1rem;
+    color: var(--text-color-secondary);
+  }
+}

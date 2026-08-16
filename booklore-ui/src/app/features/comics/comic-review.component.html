@@ -1,0 +1,68 @@
+<div class="comic-review">
+  <div class="header">
+    <div class="title-block">
+      <h2>Comic Review Queue</h2>
+      <p class="subtitle">
+        Books that scored in the borderline band during comic detection. Confirming a book sets its
+        <strong>Mark as Comic</strong> flag; dismissing leaves it unchanged.
+      </p>
+    </div>
+    <div class="actions">
+      <p-button label="Refresh" icon="pi pi-refresh" severity="secondary" (onClick)="load()"/>
+      <p-button label="Mark selected as comics" icon="pi pi-check"
+                [disabled]="!selected.length" (onClick)="acceptSelected()"/>
+      <p-button label="Dismiss selected" icon="pi pi-times" severity="secondary"
+                [disabled]="!selected.length" (onClick)="rejectSelected()"/>
+    </div>
+  </div>
+
+  <p-table [value]="candidates" [(selection)]="selected" dataKey="id"
+           [loading]="loading" [paginator]="candidates.length > 25" [rows]="25"
+           [scrollable]="true" scrollHeight="flex" styleClass="p-datatable-sm">
+    <ng-template pTemplate="header">
+      <tr>
+        <th style="width: 3rem"><p-tableHeaderCheckbox/></th>
+        <th style="width: 6rem">Score</th>
+        <th>Title</th>
+        <th style="width: 14rem">Author</th>
+        <th style="width: 7rem">Format</th>
+        <th>Why</th>
+        <th style="width: 11rem">Actions</th>
+      </tr>
+    </ng-template>
+
+    <ng-template pTemplate="body" let-candidate>
+      <tr>
+        <td><p-tableCheckbox [value]="candidate"/></td>
+        <td><p-tag [value]="candidate.score.toString()" [severity]="scoreSeverity(candidate.score)"/></td>
+        <td>
+          <div class="title">{{ candidate.title }}</div>
+          <div class="filename" *ngIf="candidate.fileName">{{ candidate.fileName }}</div>
+        </td>
+        <td>{{ candidate.authors || '—' }}</td>
+        <td>{{ candidate.fileType || '—' }}</td>
+        <td>
+          <ul class="signals">
+            <li *ngFor="let signal of candidate.signals">{{ signal }}</li>
+          </ul>
+        </td>
+        <td>
+          <p-button icon="pi pi-check" severity="success" [text]="true"
+                    pTooltip="Mark as comic" (onClick)="accept(candidate)"/>
+          <p-button icon="pi pi-times" severity="secondary" [text]="true"
+                    pTooltip="Not a comic" (onClick)="reject(candidate)"/>
+        </td>
+      </tr>
+    </ng-template>
+
+    <ng-template pTemplate="emptymessage">
+      <tr>
+        <td colspan="7" class="empty">
+          Nothing awaiting review. Run the <strong>Detect Comics</strong> task from Task Management to populate this queue.
+        </td>
+      </tr>
+    </ng-template>
+  </p-table>
+</div>
+
+<p-confirmDialog/>

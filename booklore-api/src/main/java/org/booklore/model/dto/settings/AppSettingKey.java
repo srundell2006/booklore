@@ -20,6 +20,7 @@ public enum AppSettingKey {
     AUDIOBOOK_MERGE_SETTINGS            ("audiobook_merge_settings",             true,  false, List.of(PermissionType.ADMIN)),
     AUDIOBOOK_VERIFICATION_SETTINGS     ("audiobook_verification_settings",      true,  false, List.of(PermissionType.ADMIN)),
     EBOOK_CONVERSION_SETTINGS           ("ebook_conversion_settings",            true,  false, List.of(PermissionType.ADMIN)),
+    COMIC_DETECTION_SETTINGS            ("comic_detection_settings",             true,  false, List.of(PermissionType.ADMIN)),
     OPDS_SERVER_ENABLED                 ("opds_server_enabled",                  false, false, List.of(PermissionType.ADMIN)),
     KOMGA_API_ENABLED                     ("komga_api_enabled",                  false, false, List.of(PermissionType.ADMIN)),
     KOMGA_GROUP_UNKNOWN                 ("komga_group_unknown",                  false, false, List.of(PermissionType.ADMIN)),

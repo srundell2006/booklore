@@ -113,7 +113,15 @@ public enum TaskType {
             false,
             false,
             "Identify EPUBs from Text",
-            "Reads the opening pages of EPUB files, uses an LLM to identify the title and author, then fetches and applies full metadata from Google Books or Open Library."
+            "Reads the opening pages of EPUB files, uses an LLM to identify the title and author, then fetches and applies full metadata from Amazon, GoodReads or Open Library."
+    ),
+    COMIC_DETECTION(
+            false,
+            true,
+            false,
+            false,
+            "Detect Comics",
+            "Scans books for comic characteristics — archive type, embedded ComicInfo.xml, EPUB/PDF page structure, publisher and category metadata, with an LLM tiebreaker — then flags confident matches as comics and queues borderline ones for review."
     );
 
     @Getter

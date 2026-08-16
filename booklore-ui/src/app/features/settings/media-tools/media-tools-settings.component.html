@@ -145,6 +145,37 @@
     </div>
   </section>
 
+  <section class="tool-section">
+    <div class="section-header">
+      <h3>Comic Detection</h3>
+      <p class="hint">Scores each book on archive type, embedded ComicInfo.xml, EPUB/PDF page structure and metadata, then flags confident matches and queues the rest for review.</p>
+    </div>
+    <div class="field-row">
+      <label><p-checkbox [(ngModel)]="comics.structuralAnalysis" [binary]="true"></p-checkbox> Inspect EPUB/PDF structure</label>
+      <span class="inline-hint">Opens each file to check fixed-layout, image ratio and text density. The slow stage.</span>
+    </div>
+    <div class="field-row">
+      <label><p-checkbox [(ngModel)]="comics.metadataHeuristics" [binary]="true"></p-checkbox> Use publisher and category heuristics</label>
+    </div>
+    <div class="field-row">
+      <label><p-checkbox [(ngModel)]="comics.llmTiebreaker" [binary]="true"></p-checkbox> Ask Ollama to break ties</label>
+      <span class="inline-hint">Only runs for scores inside the review band.</span>
+    </div>
+    <div class="field-row">
+      <label><p-checkbox [(ngModel)]="comics.recheckExisting" [binary]="true"></p-checkbox> Re-scan books already flagged as comics</label>
+    </div>
+    <div class="field-row">
+      <label>Auto-mark at</label>
+      <input pInputText type="number" [(ngModel)]="comics.autoMarkThreshold" class="narrow"/>
+      <span class="inline-hint">Score at or above which a book is flagged without review (default: 80)</span>
+    </div>
+    <div class="field-row">
+      <label>Review from</label>
+      <input pInputText type="number" [(ngModel)]="comics.reviewThreshold" class="narrow"/>
+      <span class="inline-hint">Score at or above which a book is queued for review (default: 45)</span>
+    </div>
+  </section>
+
   <div class="save-row">
     <p-button label="Save Settings" icon="pi pi-save" severity="success" [loading]="saving"
               (onClick)="save()"></p-button>

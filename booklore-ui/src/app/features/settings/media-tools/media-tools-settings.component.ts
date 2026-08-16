@@ -10,7 +10,7 @@ import {MessageService} from 'primeng/api';
 import {filter, take} from 'rxjs/operators';
 import {AppSettingsService} from '../../../shared/service/app-settings.service';
 import {MediaToolsService} from './media-tools.service';
-import {AudiobookMergeSettings, AudiobookVerificationSettings, EbookConversionSettings} from './media-tools-settings.model';
+import {AudiobookMergeSettings, AudiobookVerificationSettings, ComicDetectionSettings, EbookConversionSettings} from './media-tools-settings.model';
 
 @Component({
   selector: 'app-media-tools-settings',
@@ -27,6 +27,7 @@ export class MediaToolsSettingsComponent implements OnInit {
   conversion: EbookConversionSettings = this.defaultConversion();
   merge: AudiobookMergeSettings = this.defaultMerge();
   verification: AudiobookVerificationSettings = this.defaultVerification();
+  comics: ComicDetectionSettings = this.defaultComics();
 
   testingConverter = false;
   testingMerge = false;
@@ -44,6 +45,7 @@ export class MediaToolsSettingsComponent implements OnInit {
       const loadedConversion = (settings as any)?.ebookConversionSettings;
       const loadedMerge = (settings as any)?.audiobookMergeSettings;
       const loadedVerification = (settings as any)?.audiobookVerificationSettings;
+      const loadedComics = (settings as any)?.comicDetectionSettings;
       if (loadedConversion) {
         this.conversion = {...this.defaultConversion(), ...loadedConversion};
       }
@@ -52,6 +54,9 @@ export class MediaToolsSettingsComponent implements OnInit {
       }
       if (loadedVerification) {
         this.verification = {...this.defaultVerification(), ...loadedVerification};
+      }
+      if (loadedComics) {
+        this.comics = {...this.defaultComics(), ...loadedComics};
       }
     });
   }
@@ -106,7 +111,8 @@ export class MediaToolsSettingsComponent implements OnInit {
     this.appSettingsService.saveSettings([
       {key: 'EBOOK_CONVERSION_SETTINGS', newValue: this.conversion},
       {key: 'AUDIOBOOK_MERGE_SETTINGS', newValue: this.merge},
-      {key: 'AUDIOBOOK_VERIFICATION_SETTINGS', newValue: this.verification}
+      {key: 'AUDIOBOOK_VERIFICATION_SETTINGS', newValue: this.verification},
+      {key: 'COMIC_DETECTION_SETTINGS', newValue: this.comics}
     ]).subscribe({
       next: () => {
         this.saving = false;
@@ -151,6 +157,17 @@ export class MediaToolsSettingsComponent implements OnInit {
       jobs: 2,
       deleteSourcesAfterMerge: false,
       jobTimeoutMinutes: 360
+    };
+  }
+
+  private defaultComics(): ComicDetectionSettings {
+    return {
+      autoMarkThreshold: 80,
+      reviewThreshold: 45,
+      structuralAnalysis: true,
+      metadataHeuristics: true,
+      llmTiebreaker: true,
+      recheckExisting: false
     };
   }
 

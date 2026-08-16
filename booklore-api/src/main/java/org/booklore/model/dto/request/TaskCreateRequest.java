@@ -33,6 +33,7 @@ public class TaskCreateRequest {
             @JsonSubTypes.Type(value = OrganizeLibraryRequest.class, name = "ORGANIZE_LIBRARY"),
             @JsonSubTypes.Type(value = AudiobookVerificationRequest.class, name = "AUDIOBOOK_VERIFICATION"),
             @JsonSubTypes.Type(value = EpubTextIdentifyRequest.class, name = "EPUB_TEXT_IDENTIFY"),
+            @JsonSubTypes.Type(value = ComicDetectionRequest.class, name = "COMIC_DETECTION"),
     })
     private Object options;
 

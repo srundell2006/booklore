@@ -41,6 +41,8 @@ public class AppSettings {
     private AudiobookMergeSettings audiobookMergeSettings;
     private AudiobookVerificationSettings audiobookVerificationSettings;
     private EbookConversionSettings ebookConversionSettings;
+
+    private ComicDetectionSettings comicDetectionSettings;
     private CoverCroppingSettings coverCroppingSettings;
     private MetadataProviderSpecificFields metadataProviderSpecificFields;
     private Integer oidcSessionDurationHours;

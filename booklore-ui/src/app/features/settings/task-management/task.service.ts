@@ -17,7 +17,8 @@ export enum TaskType {
   LOW_SCORE_METADATA_REFRESH = 'LOW_SCORE_METADATA_REFRESH',
   ORGANIZE_LIBRARY = 'ORGANIZE_LIBRARY',
   AUDIOBOOK_VERIFICATION = 'AUDIOBOOK_VERIFICATION',
-  EPUB_TEXT_IDENTIFY = 'EPUB_TEXT_IDENTIFY'
+  EPUB_TEXT_IDENTIFY = 'EPUB_TEXT_IDENTIFY',
+  COMIC_DETECTION = 'COMIC_DETECTION'
 }
 
 export const TASK_TYPE_CONFIG: Record<TaskType, { parallel: boolean; async: boolean; displayOrder: number }> = {
@@ -34,6 +35,7 @@ export const TASK_TYPE_CONFIG: Record<TaskType, { parallel: boolean; async: bool
   [TaskType.ORGANIZE_LIBRARY]: {parallel: false, async: true, displayOrder: 11},
   [TaskType.AUDIOBOOK_VERIFICATION]: {parallel: false, async: true, displayOrder: 12},
   [TaskType.EPUB_TEXT_IDENTIFY]: {parallel: false, async: true, displayOrder: 13},
+  [TaskType.COMIC_DETECTION]: {parallel: false, async: true, displayOrder: 14},
 };
 
 export enum MetadataReplaceMode {
@@ -61,6 +63,15 @@ export interface EpubTextIdentifyRequest {
   overwriteExisting?: boolean;
 }
 
+export interface ComicDetectionRequest {
+  refreshType: 'LIBRARY' | 'MAGIC_SHELF' | 'BOOKS';
+  libraryId?: number;
+  magicShelfId?: number;
+  bookIds?: number[];
+  recheckExisting?: boolean;
+  dryRun?: boolean;
+}
+
 export interface OrganizeLibraryRequest {
   libraryId?: number;
 }
@@ -73,7 +84,7 @@ export interface AudiobookVerificationRequest {
 export interface TaskCreateRequest {
   taskType: TaskType;
   triggeredByCron?: boolean;
-  options?: LibraryRescanOptions | MetadataRefreshRequest | IsbnScanRequest | EpubTextIdentifyRequest | OrganizeLibraryRequest | AudiobookVerificationRequest | null;
+  options?: LibraryRescanOptions | MetadataRefreshRequest | IsbnScanRequest | EpubTextIdentifyRequest | ComicDetectionRequest | OrganizeLibraryRequest | AudiobookVerificationRequest | null;
 }
 
 export interface TaskCreateResponse {

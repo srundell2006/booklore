@@ -30,3 +30,12 @@ export interface AudiobookVerificationSettings {
   ollamaModel: string;
   ollamaUrl?: string;
 }
+
+export interface ComicDetectionSettings {
+  autoMarkThreshold: number;
+  reviewThreshold: number;
+  structuralAnalysis: boolean;
+  metadataHeuristics: boolean;
+  llmTiebreaker: boolean;
+  recheckExisting: boolean;
+}
