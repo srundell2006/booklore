@@ -354,6 +354,16 @@ export class LibraryShelfMenuService {
             }
           },
           {
+            label: this.t.translate('book.shelfMenuService.magicShelf.detectComics', {default: 'Detect Comics'}),
+            icon: 'pi pi-images',
+            command: () => {
+              this.taskHelperService.detectComicsTask({
+                refreshType: 'MAGIC_SHELF',
+                magicShelfId: entity?.id ?? undefined
+              } as ComicDetectionRequest).subscribe();
+            }
+          },
+          {
             label: this.t.translate('book.shelfMenuService.magicShelf.clearTitleChangedFlag'),
             icon: 'pi pi-flag',
             command: () => {

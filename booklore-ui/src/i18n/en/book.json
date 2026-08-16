@@ -271,7 +271,8 @@
       "findDuplicates": "Find Duplicates",
       "deleteLibrary": "Delete Library",
       "enableWatcher": "Enable File Watcher",
-      "disableWatcher": "Disable File Watcher"
+      "disableWatcher": "Disable File Watcher",
+      "detectComics": "Detect Comics"
     },
     "shelf": {
       "publicShelfPrefix": "Public Shelf - ",
@@ -284,7 +285,8 @@
       "optionsLabel": "Options",
       "editMagicShelf": "Edit Magic Shelf",
       "exportJson": "Copy JSON",
-      "deleteMagicShelf": "Delete Magic Shelf"
+      "deleteMagicShelf": "Delete Magic Shelf",
+      "detectComics": "Detect Comics"
     },
     "confirm": {
       "rescanLibraryMessage": "Are you sure you want to refresh library: {{ name }}?",
