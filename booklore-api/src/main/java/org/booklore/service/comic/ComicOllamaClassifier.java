@@ -2,8 +2,6 @@ package org.booklore.service.comic;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.booklore.model.entity.BookMetadataEntity;
-import org.booklore.model.entity.CategoryEntity;
 import org.springframework.beans.factory.annotation.Value;
 import org.springframework.stereotype.Component;
 import org.springframework.web.client.RestClient;
@@ -12,8 +10,7 @@ import tools.jackson.databind.ObjectMapper;
 import tools.jackson.databind.node.ArrayNode;
 import tools.jackson.databind.node.ObjectNode;
 
-import java.util.Set;
-import java.util.stream.Collectors;
+
 
 /**
  * Asks the local LLM whether a title looks like a comic, used only to break ties
@@ -36,10 +33,10 @@ public class ComicOllamaClassifier {
     @Value("${ollama.model:" + DEFAULT_MODEL + "}")
     private String ollamaModel;
 
-    public void analyze(BookMetadataEntity metadata, ComicScoreCard card) {
-        if (metadata == null) return;
+    public void analyze(ComicScanTarget target, ComicScoreCard card) {
+        if (target == null) return;
 
-        String title = safe(metadata.getTitle());
+        String title = safe(target.title());
         if (title.isBlank()) return;
 
         String prompt = """
@@ -58,9 +55,9 @@ public class ComicOllamaClassifier {
                 Publisher: %s
                 Categories: %s
                 """.formatted(title,
-                safe(metadata.getSeriesName()),
-                safe(metadata.getPublisher()),
-                categoryList(metadata));
+                safe(target.seriesName()),
+                safe(target.publisher()),
+                categoryList(target));
 
         try {
             String content = extractContent(callOllama(prompt));
@@ -91,14 +88,9 @@ public class ComicOllamaClassifier {
         }
     }
 
-    private String categoryList(BookMetadataEntity metadata) {
-        Set<CategoryEntity> categories = metadata.getCategories();
-        if (categories == null || categories.isEmpty()) return "(none)";
-        return categories.stream()
-                .map(CategoryEntity::getName)
-                .filter(n -> n != null && !n.isBlank())
-                .limit(8)
-                .collect(Collectors.joining(", "));
+    private String categoryList(ComicScanTarget target) {
+        if (target.categories().isEmpty()) return "(none)";
+        return String.join(", ", target.categories().stream().limit(8).toList());
     }
 
     private String callOllama(String prompt) {

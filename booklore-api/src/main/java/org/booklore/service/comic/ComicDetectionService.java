@@ -6,8 +6,6 @@ import org.booklore.model.dto.BookLoreUser;
 import org.booklore.model.dto.MetadataBatchProgressNotification;
 import org.booklore.model.dto.request.ComicDetectionRequest;
 import org.booklore.model.dto.settings.ComicDetectionSettings;
-import org.booklore.model.entity.BookEntity;
-import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.ComicDetectionCandidateEntity;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.model.enums.ComicCandidateStatus;
@@ -25,6 +23,7 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.File;
+import java.nio.file.Path;
 import java.time.Instant;
 import java.util.*;
 
@@ -40,17 +39,22 @@ import java.util.*;
  *   <li>LLM — tiebreaker, borderline band only</li>
  * </ol>
  *
- * <p>Books scoring at or above the auto-mark threshold get {@code is_comic} set
- * immediately. Books in the review band are written to
- * {@code comic_detection_candidate} for confirmation and are <em>not</em>
- * modified.
+ * <p>Books are processed in chunks: each chunk is flattened into
+ * {@link ComicScanTarget}s inside a short read-only transaction, then scored
+ * with no session held open and no entities retained. That keeps a
+ * whole-library scan flat in memory and keeps slow file I/O off the database
+ * connection.
  */
 @Slf4j
 @Service
 public class ComicDetectionService {
 
+    /** Books flattened and scored per pass. */
+    private static final int CHUNK_SIZE = 250;
+
     private final BookRepository bookRepository;
     private final ComicDetectionCandidateRepository candidateRepository;
+    private final ComicScanTargetLoader scanTargetLoader;
     private final EpubComicAnalyzer epubComicAnalyzer;
     private final PdfComicAnalyzer pdfComicAnalyzer;
     private final ComicMetadataHeuristics metadataHeuristics;
@@ -64,6 +68,7 @@ public class ComicDetectionService {
 
     public ComicDetectionService(BookRepository bookRepository,
                                  ComicDetectionCandidateRepository candidateRepository,
+                                 ComicScanTargetLoader scanTargetLoader,
                                  EpubComicAnalyzer epubComicAnalyzer,
                                  PdfComicAnalyzer pdfComicAnalyzer,
                                  ComicMetadataHeuristics metadataHeuristics,
@@ -76,6 +81,7 @@ public class ComicDetectionService {
                                  MagicShelfBookService magicShelfBookService) {
         this.bookRepository = bookRepository;
         this.candidateRepository = candidateRepository;
+        this.scanTargetLoader = scanTargetLoader;
         this.epubComicAnalyzer = epubComicAnalyzer;
         this.pdfComicAnalyzer = pdfComicAnalyzer;
         this.metadataHeuristics = metadataHeuristics;
@@ -105,86 +111,90 @@ public class ComicDetectionService {
                 return;
             }
 
-            List<BookEntity> books = bookRepository.findAllWithMetadataByIds(bookIds);
-            List<BookEntity> toScan = recheck
-                    ? books
-                    : books.stream().filter(b -> !Boolean.TRUE.equals(b.getIsComic())).toList();
-
-            int total = toScan.size();
-            log.info("ComicDetect [{}]: scanning {} books ({} skipped — already flagged as comics)",
-                    taskId, total, books.size() - total);
-
-            if (total == 0) {
-                sendProgress(taskId, 0, 0,
-                        "All books in scope are already flagged as comics. Enable 'recheck existing' to re-scan.",
-                        MetadataFetchTaskStatus.COMPLETED);
-                return;
-            }
+            List<Long> ordered = new ArrayList<>(bookIds);
+            int total = ordered.size();
+            log.info("ComicDetect [{}]: scanning {} books in chunks of {}", taskId, total, CHUNK_SIZE);
 
             TransactionTemplate tx = new TransactionTemplate(transactionManager);
             int completed = 0;
             int marked = 0;
             int queued = 0;
+            int skipped = 0;
             boolean cancelled = false;
 
-            for (BookEntity book : toScan) {
-                if (cancellationManager.isTaskCancelled(taskId)) {
-                    cancelled = true;
-                    break;
-                }
+            for (int offset = 0; offset < total && !cancelled; offset += CHUNK_SIZE) {
+                List<Long> chunkIds = ordered.subList(offset, Math.min(offset + CHUNK_SIZE, total));
+                List<ComicScanTarget> targets = scanTargetLoader.load(new LinkedHashSet<>(chunkIds));
 
-                String displayTitle = bookTitle(book);
-                completed++;
+                for (ComicScanTarget target : targets) {
+                    if (cancellationManager.isTaskCancelled(taskId)) {
+                        cancelled = true;
+                        break;
+                    }
 
-                try {
-                    ComicScoreCard card = score(book, settings);
-                    int scoreValue = card.score();
-                    ComicVerdict verdict = verdictFor(scoreValue, settings);
+                    completed++;
+                    String displayTitle = target.displayTitle();
 
-                    if (request.isDryRun()) {
-                        log.info("ComicDetect [{}]: DRY RUN '{}' score={} verdict={} | {}",
-                                taskId, displayTitle, scoreValue, verdict,
-                                card.reasons().replace('\n', ';'));
-                        sendProgress(taskId, completed, total,
-                                verdict + " (" + scoreValue + "): " + displayTitle,
-                                MetadataFetchTaskStatus.IN_PROGRESS);
+                    if (target.alreadyComic() && !recheck) {
+                        skipped++;
                         continue;
                     }
 
-                    switch (verdict) {
-                        case COMIC -> {
-                            persistComicFlag(tx, book.getId(), card, scoreValue);
-                            marked++;
-                            log.info("ComicDetect [{}]: marked '{}' as comic (score {}) | {}",
-                                    taskId, displayTitle, scoreValue,
-                                    card.reasons().replace('\n', ';'));
+                    try {
+                        ComicScoreCard card = score(target, settings);
+                        int scoreValue = card.score();
+                        ComicVerdict verdict = verdictFor(scoreValue, settings);
+
+                        if (request.isDryRun()) {
+                            if (verdict != ComicVerdict.NOT_COMIC) {
+                                log.info("ComicDetect [{}]: DRY RUN '{}' score={} verdict={} | {}",
+                                        taskId, displayTitle, scoreValue, verdict,
+                                        card.reasons().replace('\n', ';'));
+                            }
                             sendProgress(taskId, completed, total,
-                                    "Marked as comic (" + scoreValue + "): " + displayTitle,
+                                    verdict + " (" + scoreValue + "): " + displayTitle,
+                                    MetadataFetchTaskStatus.IN_PROGRESS);
+                            continue;
+                        }
+
+                        switch (verdict) {
+                            case COMIC -> {
+                                persistComicFlag(tx, target.bookId(), card, scoreValue);
+                                marked++;
+                                log.info("ComicDetect [{}]: marked '{}' as comic (score {}) | {}",
+                                        taskId, displayTitle, scoreValue,
+                                        card.reasons().replace('\n', ';'));
+                                sendProgress(taskId, completed, total,
+                                        "Marked as comic (" + scoreValue + "): " + displayTitle,
+                                        MetadataFetchTaskStatus.IN_PROGRESS);
+                            }
+                            case BORDERLINE -> {
+                                persistCandidate(tx, target.bookId(), card, scoreValue);
+                                queued++;
+                                log.info("ComicDetect [{}]: queued '{}' for review (score {}) | {}",
+                                        taskId, displayTitle, scoreValue,
+                                        card.reasons().replace('\n', ';'));
+                                sendProgress(taskId, completed, total,
+                                        "Queued for review (" + scoreValue + "): " + displayTitle,
+                                        MetadataFetchTaskStatus.IN_PROGRESS);
+                            }
+                            case NOT_COMIC -> sendProgress(taskId, completed, total,
+                                    "Not a comic (" + scoreValue + "): " + displayTitle,
                                     MetadataFetchTaskStatus.IN_PROGRESS);
                         }
-                        case BORDERLINE -> {
-                            persistCandidate(tx, book.getId(), card, scoreValue, ComicVerdict.BORDERLINE);
-                            queued++;
-                            sendProgress(taskId, completed, total,
-                                    "Queued for review (" + scoreValue + "): " + displayTitle,
-                                    MetadataFetchTaskStatus.IN_PROGRESS);
-                        }
-                        case NOT_COMIC -> sendProgress(taskId, completed, total,
-                                "Not a comic (" + scoreValue + "): " + displayTitle,
+
+                    } catch (Exception e) {
+                        log.warn("ComicDetect: error scanning '{}': {}", displayTitle, e.getMessage());
+                        sendProgress(taskId, completed, total,
+                                "Error: " + displayTitle + " — " + e.getMessage(),
                                 MetadataFetchTaskStatus.IN_PROGRESS);
                     }
-
-                } catch (Exception e) {
-                    log.warn("ComicDetect: error scanning '{}': {}", displayTitle, e.getMessage());
-                    sendProgress(taskId, completed, total,
-                            "Error: " + displayTitle + " — " + e.getMessage(),
-                            MetadataFetchTaskStatus.IN_PROGRESS);
                 }
             }
 
             String summary = String.format(
-                    "Scan complete. Marked %d, queued %d for review, scanned %d.",
-                    marked, queued, completed);
+                    "Scan complete. Marked %d, queued %d for review, skipped %d already flagged, scanned %d of %d.",
+                    marked, queued, skipped, completed, total);
 
             if (cancelled) {
                 sendProgress(taskId, completed, total, "Scan cancelled. " + summary,
@@ -203,20 +213,18 @@ public class ComicDetectionService {
 
     // ── scoring ───────────────────────────────────────────────────────────────
 
-    private ComicScoreCard score(BookEntity book, ComicDetectionSettings settings) {
+    private ComicScoreCard score(ComicScanTarget target, ComicDetectionSettings settings) {
         ComicScoreCard card = new ComicScoreCard();
-
-        BookFileEntity primary = book.getPrimaryBookFile();
-        BookFileType type = primary != null ? primary.getBookType() : null;
+        BookFileType type = target.fileType();
 
         if (BookFileType.CBX == type) {
             card.add("CBX_EXTENSION", 100, "File is a comic archive (CBZ/CBR/CB7)");
             return card;
         }
 
-        if (settings.isStructuralAnalysis() && primary != null) {
-            File file = resolveFile(book);
-            if (file != null && file.exists()) {
+        if (settings.isStructuralAnalysis() && target.filePath() != null) {
+            File file = Path.of(target.filePath()).toFile();
+            if (file.exists()) {
                 if (BookFileType.EPUB == type) {
                     epubComicAnalyzer.analyze(file, card);
                 } else if (BookFileType.PDF == type) {
@@ -230,14 +238,14 @@ public class ComicDetectionService {
         }
 
         if (settings.isMetadataHeuristics()) {
-            metadataHeuristics.analyze(book.getMetadata(), card);
+            metadataHeuristics.analyze(target, card);
         }
 
         // Only spend an LLM call when the cheap evidence left it ambiguous.
         if (settings.isLlmTiebreaker()) {
             int interim = card.score();
             if (interim >= settings.getReviewThreshold() && interim < settings.getAutoMarkThreshold()) {
-                ollamaClassifier.analyze(book.getMetadata(), card);
+                ollamaClassifier.analyze(target, card);
             }
         }
 
@@ -262,16 +270,21 @@ public class ComicDetectionService {
         });
     }
 
-    private void persistCandidate(TransactionTemplate tx, Long bookId, ComicScoreCard card,
-                                  int score, ComicVerdict verdict) {
+    private void persistCandidate(TransactionTemplate tx, Long bookId, ComicScoreCard card, int score) {
         tx.executeWithoutResult(status ->
-                upsertCandidate(bookId, card, score, verdict, ComicCandidateStatus.PENDING));
+                upsertCandidate(bookId, card, score, ComicVerdict.BORDERLINE, ComicCandidateStatus.PENDING));
     }
 
     private void upsertCandidate(Long bookId, ComicScoreCard card, int score,
                                  ComicVerdict verdict, ComicCandidateStatus status) {
         ComicDetectionCandidateEntity entity = candidateRepository.findByBookId(bookId)
                 .orElseGet(() -> ComicDetectionCandidateEntity.builder().bookId(bookId).build());
+
+        // Never resurrect something the user has already dismissed.
+        if (entity.getId() != null && entity.getStatus() == ComicCandidateStatus.REJECTED) {
+            return;
+        }
+
         entity.setScore(score);
         entity.setVerdict(verdict);
         entity.setStatus(status);
@@ -306,7 +319,7 @@ public class ComicDetectionService {
                 if (request.getMagicShelfId() == null || userId == null)
                     throw new IllegalArgumentException(
                             "magicShelfId and authenticated user required for MAGIC_SHELF scope");
-                yield new HashSet<>(magicShelfBookService.getBookIdsByMagicShelfId(
+                yield new LinkedHashSet<>(magicShelfBookService.getBookIdsByMagicShelfId(
                         userId, request.getMagicShelfId()));
             }
             case BOOKS -> {
@@ -315,24 +328,6 @@ public class ComicDetectionService {
                 yield request.getBookIds();
             }
         };
-    }
-
-    private File resolveFile(BookEntity book) {
-        try {
-            return book.getPrimaryBookFile().getFullFilePath().toFile();
-        } catch (Exception e) {
-            return null;
-        }
-    }
-
-    private String bookTitle(BookEntity book) {
-        if (book.getMetadata() != null && book.getMetadata().getTitle() != null) {
-            return book.getMetadata().getTitle();
-        }
-        BookFileEntity primary = book.getPrimaryBookFile();
-        return primary != null && primary.getFileName() != null
-                ? primary.getFileName()
-                : "Book " + book.getId();
     }
 
     private void sendProgress(String taskId, int current, int total, String message,
