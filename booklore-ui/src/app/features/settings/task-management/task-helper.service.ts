@@ -3,7 +3,7 @@ import {MessageService} from 'primeng/api';
 import {MetadataRefreshRequest} from '../../metadata/model/request/metadata-refresh-request.model';
 import {catchError, map} from 'rxjs/operators';
 import {of} from 'rxjs';
-import {AudiobookVerificationRequest, ComicDetectionRequest, EpubTextIdentifyRequest, IsbnScanRequest, OrganizeLibraryRequest, TaskCreateRequest, TaskService, TaskType} from './task.service';
+import {AudiobookVerificationRequest, ComicDetectionRequest, EpubTextIdentifyRequest, FilenameAuthorExtractRequest, IsbnScanRequest, OrganizeLibraryRequest, TaskCreateRequest, TaskService, TaskType} from './task.service';
 import {TranslocoService} from '@jsverse/transloco';
 
 @Injectable({
@@ -223,6 +223,42 @@ export class TaskHelperService {
             summary: this.t.translate('settingsTasks.toast.metadataFailed'),
             life: 5000,
             detail: 'Failed to start audiobook verification.'
+          });
+        }
+        return of({success: false});
+      })
+    );
+  }
+
+  filenameAuthorExtractTask(options: FilenameAuthorExtractRequest) {
+    const request: TaskCreateRequest = {
+      taskType: TaskType.FILENAME_AUTHOR_EXTRACT,
+      triggeredByCron: false,
+      options
+    };
+    return this.taskService.startTask(request).pipe(
+      map(() => {
+        this.messageService.add({
+          severity: 'success',
+          summary: this.t.translate('common.success'),
+          detail: this.t.translate('settingsTasks.toast.filenameAuthorExtractScheduled', {default: 'Filename author extraction started. Progress will appear in Task Management.'})
+        });
+        return {success: true};
+      }),
+      catchError((e) => {
+        if (e.status === 409) {
+          this.messageService.add({
+            severity: 'error',
+            summary: this.t.translate('settingsTasks.toast.alreadyRunning'),
+            life: 5000,
+            detail: this.t.translate('settingsTasks.toast.filenameAuthorExtractAlreadyRunning', {default: 'Filename author extraction is already running.'})
+          });
+        } else {
+          this.messageService.add({
+            severity: 'error',
+            summary: this.t.translate('settingsTasks.toast.metadataFailed'),
+            life: 5000,
+            detail: this.t.translate('settingsTasks.toast.filenameAuthorExtractFailed', {default: 'Failed to start filename author extraction.'})
           });
         }
         return of({success: false});
