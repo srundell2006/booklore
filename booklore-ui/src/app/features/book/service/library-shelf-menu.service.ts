@@ -1,4 +1,5 @@
 import {inject, Injectable} from '@angular/core';
+import {AppSettingsService} from '../../../shared/service/app-settings.service';
 import {ConfirmationService, MenuItem, MessageService} from 'primeng/api';
 import {Router} from '@angular/router';
 import {LibraryService} from './library.service';
@@ -37,6 +38,13 @@ export class LibraryShelfMenuService {
   private readonly t = inject(TranslocoService);
   private bookSelectionService = inject(BookSelectionService);
   private bookMetadataService = inject(BookMetadataService);
+  private appSettingsService = inject(AppSettingsService);
+
+  /** Configured wide-scan depth, falling back to the backend default. */
+  private isbnScanDepth(): number {
+    const configured = (this.appSettingsService.getCurrentAppSettings() as any)?.isbnScanSettings?.spineItemsToScan;
+    return typeof configured === 'number' && configured > 0 ? configured : 8;
+  }
 
   initializeLibraryMenuItems(entity: Library | Shelf | MagicShelf | null): MenuItem[] {
     return [
@@ -201,13 +209,13 @@ export class LibraryShelfMenuService {
             }
           },
           {
-            label: this.t.translate('book.shelfMenuService.library.scanFrontMatterIsbn', {default: 'Scan First 15 Sections for ISBN'}),
+            label: this.t.translate('book.shelfMenuService.library.scanFrontMatterIsbn', {default: 'Scan Front Sections for ISBN'}),
             icon: 'pi pi-search',
             command: () => {
               this.taskHelperService.scanCopyrightIsbnTask({
                 refreshType: 'LIBRARY',
                 libraryId: entity?.id ?? undefined,
-                spineItemsToScan: 15
+                spineItemsToScan: this.isbnScanDepth()
               } as CopyrightIsbnScanRequest).subscribe();
             }
           },
@@ -415,13 +423,13 @@ export class LibraryShelfMenuService {
             }
           },
           {
-            label: this.t.translate('book.shelfMenuService.magicShelf.scanFrontMatterIsbn', {default: 'Scan First 15 Sections for ISBN'}),
+            label: this.t.translate('book.shelfMenuService.magicShelf.scanFrontMatterIsbn', {default: 'Scan Front Sections for ISBN'}),
             icon: 'pi pi-search',
             command: () => {
               this.taskHelperService.scanCopyrightIsbnTask({
                 refreshType: 'MAGIC_SHELF',
                 magicShelfId: entity?.id ?? undefined,
-                spineItemsToScan: 15
+                spineItemsToScan: this.isbnScanDepth()
               } as CopyrightIsbnScanRequest).subscribe();
             }
           },

@@ -176,6 +176,18 @@
     </div>
   </section>
 
+  <section class="tool-section">
+    <div class="section-header">
+      <h3>ISBN Scanning</h3>
+      <p class="hint">Depth used by the wide "Scan First N Sections for ISBN" action. The strict copyright-page scan ignores this.</p>
+    </div>
+    <div class="field-row">
+      <label>Sections to scan</label>
+      <input pInputText type="number" [(ngModel)]="isbnScan.spineItemsToScan" class="narrow"/>
+      <span class="inline-hint">Spine documents, not rendered pages — each is roughly a chapter or front-matter section (default: 8). Higher finds more ISBNs but risks matching another book advertised in the front matter.</span>
+    </div>
+  </section>
+
   <div class="save-row">
     <p-button label="Save Settings" icon="pi pi-save" severity="success" [loading]="saving"
               (onClick)="save()"></p-button>

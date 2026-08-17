@@ -174,6 +174,7 @@ public class AppSettingService {
         builder.audiobookVerificationSettings(settingPersistenceHelper.getJsonSetting(settingsMap, AppSettingKey.AUDIOBOOK_VERIFICATION_SETTINGS, AudiobookVerificationSettings.class, AudiobookVerificationSettings.builder().build(), false));
         builder.ebookConversionSettings(settingPersistenceHelper.getJsonSetting(settingsMap, AppSettingKey.EBOOK_CONVERSION_SETTINGS, EbookConversionSettings.class, EbookConversionSettings.builder().build(), false));
         builder.comicDetectionSettings(settingPersistenceHelper.getJsonSetting(settingsMap, AppSettingKey.COMIC_DETECTION_SETTINGS, ComicDetectionSettings.class, ComicDetectionSettings.builder().build(), false));
+        builder.isbnScanSettings(settingPersistenceHelper.getJsonSetting(settingsMap, AppSettingKey.ISBN_SCAN_SETTINGS, IsbnScanSettings.class, IsbnScanSettings.builder().build(), false));
         builder.coverCroppingSettings(settingPersistenceHelper.getJsonSetting(settingsMap, AppSettingKey.COVER_CROPPING_SETTINGS, CoverCroppingSettings.class, settingPersistenceHelper.getDefaultCoverCroppingSettings(), true));
         builder.metadataProviderSpecificFields(
             settingPersistenceHelper.getJsonSetting(

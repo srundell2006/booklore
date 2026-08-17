@@ -43,6 +43,8 @@ public class AppSettings {
     private EbookConversionSettings ebookConversionSettings;
 
     private ComicDetectionSettings comicDetectionSettings;
+
+    private IsbnScanSettings isbnScanSettings;
     private CoverCroppingSettings coverCroppingSettings;
     private MetadataProviderSpecificFields metadataProviderSpecificFields;
     private Integer oidcSessionDurationHours;

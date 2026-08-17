@@ -10,7 +10,7 @@ import {MessageService} from 'primeng/api';
 import {filter, take} from 'rxjs/operators';
 import {AppSettingsService} from '../../../shared/service/app-settings.service';
 import {MediaToolsService} from './media-tools.service';
-import {AudiobookMergeSettings, AudiobookVerificationSettings, ComicDetectionSettings, EbookConversionSettings} from './media-tools-settings.model';
+import {AudiobookMergeSettings, AudiobookVerificationSettings, ComicDetectionSettings, EbookConversionSettings, IsbnScanSettings} from './media-tools-settings.model';
 
 @Component({
   selector: 'app-media-tools-settings',
@@ -28,6 +28,7 @@ export class MediaToolsSettingsComponent implements OnInit {
   merge: AudiobookMergeSettings = this.defaultMerge();
   verification: AudiobookVerificationSettings = this.defaultVerification();
   comics: ComicDetectionSettings = this.defaultComics();
+  isbnScan: IsbnScanSettings = this.defaultIsbnScan();
 
   testingConverter = false;
   testingMerge = false;
@@ -46,6 +47,7 @@ export class MediaToolsSettingsComponent implements OnInit {
       const loadedMerge = (settings as any)?.audiobookMergeSettings;
       const loadedVerification = (settings as any)?.audiobookVerificationSettings;
       const loadedComics = (settings as any)?.comicDetectionSettings;
+      const loadedIsbnScan = (settings as any)?.isbnScanSettings;
       if (loadedConversion) {
         this.conversion = {...this.defaultConversion(), ...loadedConversion};
       }
@@ -57,6 +59,9 @@ export class MediaToolsSettingsComponent implements OnInit {
       }
       if (loadedComics) {
         this.comics = {...this.defaultComics(), ...loadedComics};
+      }
+      if (loadedIsbnScan) {
+        this.isbnScan = {...this.defaultIsbnScan(), ...loadedIsbnScan};
       }
     });
   }
@@ -112,7 +117,8 @@ export class MediaToolsSettingsComponent implements OnInit {
       {key: 'EBOOK_CONVERSION_SETTINGS', newValue: this.conversion},
       {key: 'AUDIOBOOK_MERGE_SETTINGS', newValue: this.merge},
       {key: 'AUDIOBOOK_VERIFICATION_SETTINGS', newValue: this.verification},
-      {key: 'COMIC_DETECTION_SETTINGS', newValue: this.comics}
+      {key: 'COMIC_DETECTION_SETTINGS', newValue: this.comics},
+      {key: 'ISBN_SCAN_SETTINGS', newValue: this.isbnScan}
     ]).subscribe({
       next: () => {
         this.saving = false;
@@ -158,6 +164,10 @@ export class MediaToolsSettingsComponent implements OnInit {
       deleteSourcesAfterMerge: false,
       jobTimeoutMinutes: 360
     };
+  }
+
+  private defaultIsbnScan(): IsbnScanSettings {
+    return {spineItemsToScan: 8};
   }
 
   private defaultComics(): ComicDetectionSettings {

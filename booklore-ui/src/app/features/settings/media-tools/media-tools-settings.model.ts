@@ -39,3 +39,7 @@ export interface ComicDetectionSettings {
   llmTiebreaker: boolean;
   recheckExisting: boolean;
 }
+
+export interface IsbnScanSettings {
+  spineItemsToScan: number;
+}

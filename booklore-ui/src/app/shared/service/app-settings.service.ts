@@ -34,6 +34,11 @@ export class AppSettingsService {
     })
   );
 
+  /** Latest cached settings, or null before the first load completes. */
+  getCurrentAppSettings(): AppSettings | null {
+    return this.appSettingsSubject.value;
+  }
+
   private publicLoading$: Observable<PublicAppSettings> | null = null;
   private publicAppSettingsSubject = new BehaviorSubject<PublicAppSettings | null>(null);
 
