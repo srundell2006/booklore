@@ -122,6 +122,14 @@ public enum TaskType {
             false,
             "Detect Comics",
             "Scans books for comic characteristics — archive type, embedded ComicInfo.xml, EPUB/PDF page structure, publisher and category metadata, with an LLM tiebreaker — then flags confident matches as comics and queues borderline ones for review."
+    ),
+    FILENAME_AUTHOR_EXTRACT(
+            false,
+            true,
+            false,
+            false,
+            "Extract Author from Filename",
+            "Parses book filenames to extract missing author names. Supports common naming conventions: 'Title - Author', 'Author - Title', and 'Last, First - Title'. No internet access required — uses filename patterns and known title metadata only."
     );
 
     @Getter
