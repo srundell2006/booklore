@@ -83,6 +83,8 @@ export interface CopyrightIsbnScanRequest {
   bookIds?: number[];
   overwriteExisting?: boolean;
   isbnOnly?: boolean;
+  /** 0 = copyright page only; >0 widens to that many spine documents. */
+  spineItemsToScan?: number;
 }
 
 export interface OrganizeLibraryRequest {

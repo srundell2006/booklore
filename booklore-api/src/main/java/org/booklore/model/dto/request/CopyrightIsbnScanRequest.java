@@ -35,6 +35,21 @@ public class CopyrightIsbnScanRequest {
     @Builder.Default
     private boolean isbnOnly = false;
 
+    /**
+     * How many spine documents to read beyond the declared copyright page.
+     *
+     * <p>Zero (the default) keeps the scan strictly declarative: OPF-declared
+     * copyright page only. Any positive value widens to the full escalation —
+     * dc:identifier, copyright page, this many spine documents, then
+     * copyright-named manifest files — which finds more ISBNs but can pick up
+     * one belonging to another book advertised in the front matter.
+     *
+     * <p>Note these are spine <em>documents</em>, not rendered pages: in a
+     * typical novel 15 reaches roughly the tenth chapter.
+     */
+    @Builder.Default
+    private int spineItemsToScan = 0;
+
     public enum RefreshType {
         LIBRARY, MAGIC_SHELF, BOOKS
     }

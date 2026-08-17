@@ -107,8 +107,11 @@ public class CopyrightIsbnScanService {
                     .toList();
 
             int total = toScan.size();
-            log.info("CopyrightIsbn [{}]: {} EPUBs to scan ({} skipped — not EPUB or already have an ISBN)",
-                    taskId, total, allBooks.size() - total);
+            log.info("CopyrightIsbn [{}]: {} EPUBs to scan ({} skipped — not EPUB or already have an ISBN), depth={}",
+                    taskId, total, allBooks.size() - total,
+                    request.getSpineItemsToScan() > 0
+                            ? request.getSpineItemsToScan() + " spine items"
+                            : "copyright page only");
 
             if (total == 0) {
                 sendProgress(taskId, 0, 0,
@@ -141,10 +144,13 @@ public class CopyrightIsbnScanService {
                         continue;
                     }
 
-                    Optional<IsbnResult> result = epubIsbnScanner.scanCopyrightPageOnly(epubFile);
+                    int depth = request.getSpineItemsToScan();
+                    Optional<IsbnResult> result = depth > 0
+                            ? epubIsbnScanner.scan(epubFile, depth)
+                            : epubIsbnScanner.scanCopyrightPageOnly(epubFile);
                     if (result.isEmpty()) {
                         sendProgress(taskId, completed, total,
-                                "No copyright-page ISBN: " + displayTitle,
+                                (depth > 0 ? "No ISBN found: " : "No copyright-page ISBN: ") + displayTitle,
                                 MetadataFetchTaskStatus.IN_PROGRESS);
                         continue;
                     }

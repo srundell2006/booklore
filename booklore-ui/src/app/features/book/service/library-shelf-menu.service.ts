@@ -201,6 +201,17 @@ export class LibraryShelfMenuService {
             }
           },
           {
+            label: this.t.translate('book.shelfMenuService.library.scanFrontMatterIsbn', {default: 'Scan First 15 Sections for ISBN'}),
+            icon: 'pi pi-search',
+            command: () => {
+              this.taskHelperService.scanCopyrightIsbnTask({
+                refreshType: 'LIBRARY',
+                libraryId: entity?.id ?? undefined,
+                spineItemsToScan: 15
+              } as CopyrightIsbnScanRequest).subscribe();
+            }
+          },
+          {
             label: this.t.translate('book.shelfMenuService.library.findDuplicates'),
             icon: 'pi pi-copy',
             command: () => {
@@ -400,6 +411,17 @@ export class LibraryShelfMenuService {
               this.taskHelperService.scanCopyrightIsbnTask({
                 refreshType: 'MAGIC_SHELF',
                 magicShelfId: entity?.id ?? undefined
+              } as CopyrightIsbnScanRequest).subscribe();
+            }
+          },
+          {
+            label: this.t.translate('book.shelfMenuService.magicShelf.scanFrontMatterIsbn', {default: 'Scan First 15 Sections for ISBN'}),
+            icon: 'pi pi-search',
+            command: () => {
+              this.taskHelperService.scanCopyrightIsbnTask({
+                refreshType: 'MAGIC_SHELF',
+                magicShelfId: entity?.id ?? undefined,
+                spineItemsToScan: 15
               } as CopyrightIsbnScanRequest).subscribe();
             }
           },
