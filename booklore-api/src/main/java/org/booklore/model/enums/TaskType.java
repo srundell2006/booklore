@@ -130,6 +130,14 @@ public enum TaskType {
             false,
             "Extract Author from Filename",
             "Parses book filenames to extract missing author names. Supports common naming conventions: 'Title - Author', 'Author - Title', and 'Last, First - Title'. No internet access required — uses filename patterns and known title metadata only."
+    ),
+    COPYRIGHT_ISBN_SCAN(
+            false,
+            true,
+            false,
+            false,
+            "Scan Copyright Page for ISBN",
+            "Reads the ISBN from each EPUB's declared copyright page only — no body-text guessing — then fetches and applies full metadata for that ISBN from Amazon, GoodReads or Open Library."
     );
 
     @Getter

@@ -80,6 +80,57 @@ public class EpubIsbnScanner {
         return scan(epubFile, DEFAULT_MAX_SPINE_ITEMS);
     }
 
+    /**
+     * Reads an ISBN from the book's declared copyright page and nowhere else.
+     *
+     * <p>Unlike {@link #scan(File, int)} this performs no body-text sweep. The
+     * spine and manifest passes will happily match a valid ISBN belonging to a
+     * different book — publishers routinely advertise other titles in front
+     * matter — which is unacceptable when the result will be used to overwrite
+     * metadata on a book that has no title to sanity-check against.
+     *
+     * <p>The copyright page is located declaratively: the EPUB 2 {@code <guide>}
+     * reference, or the EPUB 3 nav document landmarks. If the book does not
+     * declare one, this returns empty rather than guessing.
+     */
+    public Optional<IsbnResult> scanCopyrightPageOnly(File epubFile) {
+        try (ZipFile zip = new ZipFile(epubFile)) {
+            DocumentBuilder xmlBuilder = SecureXmlUtils.createSecureDocumentBuilder(true);
+
+            String opfPath = resolveOpfPath(zip, xmlBuilder);
+            if (opfPath == null) {
+                log.debug("CopyrightIsbn: no OPF path in {}", epubFile.getName());
+                return Optional.empty();
+            }
+
+            OpfData opf = parseOpf(zip, xmlBuilder, opfPath);
+
+            String copyrightHref = opf.copyrightPageHref();
+            if (copyrightHref == null && opf.navDocPath() != null) {
+                copyrightHref = findCopyrightHrefInNavDoc(zip, opf.navDocPath(), opfPath);
+            }
+            if (copyrightHref == null) {
+                log.debug("CopyrightIsbn: {} declares no copyright page", epubFile.getName());
+                return Optional.empty();
+            }
+
+            IsbnResult result = scanSingleDoc(zip, copyrightHref);
+            if (result == null) {
+                log.debug("CopyrightIsbn: copyright page {} held no valid ISBN in {}",
+                        copyrightHref, epubFile.getName());
+                return Optional.empty();
+            }
+
+            log.debug("CopyrightIsbn: {} -> isbn13={} isbn10={} (from {})",
+                    epubFile.getName(), result.isbn13(), result.isbn10(), copyrightHref);
+            return Optional.of(result);
+
+        } catch (Exception e) {
+            log.warn("CopyrightIsbn: failed to scan {}: {}", epubFile.getName(), e.getMessage());
+            return Optional.empty();
+        }
+    }
+
     public Optional<IsbnResult> scan(File epubFile, int maxSpineItems) {
         try (ZipFile zip = new ZipFile(epubFile)) {
             DocumentBuilder xmlBuilder = SecureXmlUtils.createSecureDocumentBuilder(true);

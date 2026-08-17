@@ -3,7 +3,7 @@ import {MessageService} from 'primeng/api';
 import {MetadataRefreshRequest} from '../../metadata/model/request/metadata-refresh-request.model';
 import {catchError, map} from 'rxjs/operators';
 import {of} from 'rxjs';
-import {AudiobookVerificationRequest, ComicDetectionRequest, EpubTextIdentifyRequest, FilenameAuthorExtractRequest, IsbnScanRequest, OrganizeLibraryRequest, TaskCreateRequest, TaskService, TaskType} from './task.service';
+import {AudiobookVerificationRequest, ComicDetectionRequest, EpubTextIdentifyRequest, FilenameAuthorExtractRequest, IsbnScanRequest, OrganizeLibraryRequest, TaskCreateRequest, TaskService, TaskType, CopyrightIsbnScanRequest} from './task.service';
 import {TranslocoService} from '@jsverse/transloco';
 
 @Injectable({
@@ -151,6 +151,42 @@ export class TaskHelperService {
             summary: this.t.translate('settingsTasks.toast.metadataFailed'),
             life: 5000,
             detail: this.t.translate('settingsTasks.toast.comicDetectionFailed', {default: 'Failed to start comic detection.'})
+          });
+        }
+        return of({success: false});
+      })
+    );
+  }
+
+  scanCopyrightIsbnTask(options: CopyrightIsbnScanRequest) {
+    const request: TaskCreateRequest = {
+      taskType: TaskType.COPYRIGHT_ISBN_SCAN,
+      triggeredByCron: false,
+      options
+    };
+    return this.taskService.startTask(request).pipe(
+      map(() => {
+        this.messageService.add({
+          severity: 'success',
+          summary: this.t.translate('common.success'),
+          detail: this.t.translate('settingsTasks.toast.copyrightIsbnScanScheduled', {default: 'Copyright-page ISBN scan started. Progress will appear in Task Management.'})
+        });
+        return {success: true};
+      }),
+      catchError((e) => {
+        if (e.status === 409) {
+          this.messageService.add({
+            severity: 'error',
+            summary: this.t.translate('settingsTasks.toast.alreadyRunning'),
+            life: 5000,
+            detail: this.t.translate('settingsTasks.toast.copyrightIsbnScanAlreadyRunning', {default: 'A copyright-page ISBN scan is already running.'})
+          });
+        } else {
+          this.messageService.add({
+            severity: 'error',
+            summary: this.t.translate('settingsTasks.toast.metadataFailed'),
+            life: 5000,
+            detail: this.t.translate('settingsTasks.toast.copyrightIsbnScanFailed', {default: 'Failed to start the copyright-page ISBN scan.'})
           });
         }
         return of({success: false});

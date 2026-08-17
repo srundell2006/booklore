@@ -7,7 +7,7 @@ import {Library} from '../model/library.model';
 import {Shelf} from '../model/shelf.model';
 import {MetadataRefreshType} from '../../metadata/model/request/metadata-refresh-type.enum';
 import {MagicShelf, MagicShelfService} from '../../magic-shelf/service/magic-shelf.service';
-import {ComicDetectionRequest, EpubTextIdentifyRequest, FilenameAuthorExtractRequest, IsbnScanRequest, OrganizeLibraryRequest} from '../../settings/task-management/task.service';
+import {ComicDetectionRequest, EpubTextIdentifyRequest, FilenameAuthorExtractRequest, IsbnScanRequest, OrganizeLibraryRequest, CopyrightIsbnScanRequest} from '../../settings/task-management/task.service';
 import {TaskHelperService} from '../../settings/task-management/task-helper.service';
 import {UserService} from "../../../features/settings/user-management/user.service";
 import {LoadingService} from '../../../core/services/loading.service';
@@ -188,6 +188,16 @@ export class LibraryShelfMenuService {
                 refreshType: 'LIBRARY',
                 libraryId: entity?.id ?? undefined
               } as ComicDetectionRequest).subscribe();
+            }
+          },
+          {
+            label: this.t.translate('book.shelfMenuService.library.scanCopyrightIsbn', {default: 'Scan Copyright Page for ISBN'}),
+            icon: 'pi pi-hashtag',
+            command: () => {
+              this.taskHelperService.scanCopyrightIsbnTask({
+                refreshType: 'LIBRARY',
+                libraryId: entity?.id ?? undefined
+              } as CopyrightIsbnScanRequest).subscribe();
             }
           },
           {
@@ -381,6 +391,16 @@ export class LibraryShelfMenuService {
                 refreshType: 'MAGIC_SHELF',
                 magicShelfId: entity?.id ?? undefined
               } as ComicDetectionRequest).subscribe();
+            }
+          },
+          {
+            label: this.t.translate('book.shelfMenuService.magicShelf.scanCopyrightIsbn', {default: 'Scan Copyright Page for ISBN'}),
+            icon: 'pi pi-hashtag',
+            command: () => {
+              this.taskHelperService.scanCopyrightIsbnTask({
+                refreshType: 'MAGIC_SHELF',
+                magicShelfId: entity?.id ?? undefined
+              } as CopyrightIsbnScanRequest).subscribe();
             }
           },
           {
