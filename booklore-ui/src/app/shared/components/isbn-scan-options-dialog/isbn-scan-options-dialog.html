@@ -1,0 +1,40 @@
+<div class="isbn-scan-dialog">
+  <header>
+    <h2>{{ isWideScan ? 'Scan Front Sections for ISBN' : 'Scan Copyright Page for ISBN' }}</h2>
+    <p class="scope" *ngIf="data.scopeName">{{ data.scopeName }}</p>
+  </header>
+
+  <p class="explain" *ngIf="!isWideScan">
+    Reads only the copyright page each EPUB declares in its OPF guide or EPUB&nbsp;3 landmarks.
+    Books that declare no copyright page are skipped rather than guessed at.
+  </p>
+  <p class="explain" *ngIf="isWideScan">
+    Checks the OPF identifier and copyright page, then reads up to
+    <strong>{{ data.depth }}</strong> spine sections of front matter.
+    Deeper scans find more ISBNs but can match one belonging to another book
+    advertised in the front matter.
+  </p>
+
+  <div class="options">
+    <label>
+      <p-checkbox [(ngModel)]="overwriteExisting" [binary]="true"></p-checkbox>
+      <span>
+        <strong>Overwrite existing ISBNs</strong>
+        <small>By default only books with no ISBN are scanned. Enable this to re-scan and replace ISBNs that are already set.</small>
+      </span>
+    </label>
+
+    <label>
+      <p-checkbox [(ngModel)]="isbnOnly" [binary]="true"></p-checkbox>
+      <span>
+        <strong>Record the ISBN only</strong>
+        <small>Skips the metadata lookup so you can review what was found before anything writes titles, authors or covers.</small>
+      </span>
+    </label>
+  </div>
+
+  <footer>
+    <p-button label="Cancel" severity="secondary" [text]="true" (onClick)="cancel()"></p-button>
+    <p-button label="Start Scan" icon="pi pi-play" (onClick)="start()"></p-button>
+  </footer>
+</div>

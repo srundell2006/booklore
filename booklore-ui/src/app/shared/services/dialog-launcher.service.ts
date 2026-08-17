@@ -18,6 +18,7 @@ import {MetadataRefreshType} from '../../features/metadata/model/request/metadat
 import {MetadataFetchOptionsComponent} from '../../features/metadata/component/metadata-options-dialog/metadata-fetch-options/metadata-fetch-options.component';
 import {ShelfEditDialogComponent} from '../../features/book/components/shelf-edit-dialog/shelf-edit-dialog.component';
 import {IconPickerComponent} from '../components/icon-picker/icon-picker-component';
+import {IsbnScanDialogData, IsbnScanOptionsDialog} from '../components/isbn-scan-options-dialog/isbn-scan-options-dialog';
 
 /**
  * Dialog size classes - use these to control dialog dimensions
@@ -67,6 +68,14 @@ export class DialogLauncherService {
     return this.openDialog(DashboardSettingsComponent, {
       showHeader: false,
       styleClass: `${DialogSize.XL} ${DialogStyle.MINIMAL}`,
+    });
+  }
+
+  openIsbnScanOptionsDialog(data: IsbnScanDialogData): DynamicDialogRef | null {
+    return this.openDialog(IsbnScanOptionsDialog, {
+      showHeader: false,
+      styleClass: `${DialogSize.SM} ${DialogStyle.MINIMAL}`,
+      data
     });
   }
 

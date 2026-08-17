@@ -1,5 +1,6 @@
 import {inject, Injectable} from '@angular/core';
 import {AppSettingsService} from '../../../shared/service/app-settings.service';
+import {IsbnScanDialogResult} from '../../../shared/components/isbn-scan-options-dialog/isbn-scan-options-dialog';
 import {ConfirmationService, MenuItem, MessageService} from 'primeng/api';
 import {Router} from '@angular/router';
 import {LibraryService} from './library.service';
@@ -39,6 +40,27 @@ export class LibraryShelfMenuService {
   private bookSelectionService = inject(BookSelectionService);
   private bookMetadataService = inject(BookMetadataService);
   private appSettingsService = inject(AppSettingsService);
+
+  /**
+   * Opens the options dialog, then starts the scan only if the user confirms.
+   * Closing the dialog without pressing Start yields undefined and is a no-op.
+   */
+  private launchIsbnScan(depth: number,
+                         scopeName: string | undefined,
+                         scope: {refreshType: 'LIBRARY' | 'MAGIC_SHELF'; id?: number}): void {
+    const ref = this.dialogLauncherService.openIsbnScanOptionsDialog({depth, scopeName});
+    ref?.onClose.subscribe((result?: IsbnScanDialogResult) => {
+      if (!result) return;
+      this.taskHelperService.scanCopyrightIsbnTask({
+        refreshType: scope.refreshType,
+        libraryId: scope.refreshType === 'LIBRARY' ? scope.id : undefined,
+        magicShelfId: scope.refreshType === 'MAGIC_SHELF' ? scope.id : undefined,
+        spineItemsToScan: depth,
+        overwriteExisting: result.overwriteExisting,
+        isbnOnly: result.isbnOnly
+      } as CopyrightIsbnScanRequest).subscribe();
+    });
+  }
 
   /** Configured wide-scan depth, falling back to the backend default. */
   private isbnScanDepth(): number {
@@ -202,21 +224,14 @@ export class LibraryShelfMenuService {
             label: this.t.translate('book.shelfMenuService.library.scanCopyrightIsbn', {default: 'Scan Copyright Page for ISBN'}),
             icon: 'pi pi-hashtag',
             command: () => {
-              this.taskHelperService.scanCopyrightIsbnTask({
-                refreshType: 'LIBRARY',
-                libraryId: entity?.id ?? undefined
-              } as CopyrightIsbnScanRequest).subscribe();
+              this.launchIsbnScan(0, entity?.name, {refreshType: 'LIBRARY', id: entity?.id ?? undefined});
             }
           },
           {
             label: this.t.translate('book.shelfMenuService.library.scanFrontMatterIsbn', {default: 'Scan Front Sections for ISBN'}),
             icon: 'pi pi-search',
             command: () => {
-              this.taskHelperService.scanCopyrightIsbnTask({
-                refreshType: 'LIBRARY',
-                libraryId: entity?.id ?? undefined,
-                spineItemsToScan: this.isbnScanDepth()
-              } as CopyrightIsbnScanRequest).subscribe();
+              this.launchIsbnScan(this.isbnScanDepth(), entity?.name, {refreshType: 'LIBRARY', id: entity?.id ?? undefined});
             }
           },
           {
@@ -416,21 +431,14 @@ export class LibraryShelfMenuService {
             label: this.t.translate('book.shelfMenuService.magicShelf.scanCopyrightIsbn', {default: 'Scan Copyright Page for ISBN'}),
             icon: 'pi pi-hashtag',
             command: () => {
-              this.taskHelperService.scanCopyrightIsbnTask({
-                refreshType: 'MAGIC_SHELF',
-                magicShelfId: entity?.id ?? undefined
-              } as CopyrightIsbnScanRequest).subscribe();
+              this.launchIsbnScan(0, entity?.name, {refreshType: 'MAGIC_SHELF', id: entity?.id ?? undefined});
             }
           },
           {
             label: this.t.translate('book.shelfMenuService.magicShelf.scanFrontMatterIsbn', {default: 'Scan Front Sections for ISBN'}),
             icon: 'pi pi-search',
             command: () => {
-              this.taskHelperService.scanCopyrightIsbnTask({
-                refreshType: 'MAGIC_SHELF',
-                magicShelfId: entity?.id ?? undefined,
-                spineItemsToScan: this.isbnScanDepth()
-              } as CopyrightIsbnScanRequest).subscribe();
+              this.launchIsbnScan(this.isbnScanDepth(), entity?.name, {refreshType: 'MAGIC_SHELF', id: entity?.id ?? undefined});
             }
           },
           {
