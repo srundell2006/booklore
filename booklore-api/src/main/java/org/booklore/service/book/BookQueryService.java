@@ -40,6 +40,33 @@ public class BookQueryService {
         return bookRepository.findAllWithMetadataByIds(bookIds);
     }
 
+    /** Ids only — the entry point for streaming the catalogue chunk by chunk. */
+    public List<Long> getAllBookIdsForStreaming() {
+        return bookRepository.findAllBookIdsForStreaming();
+    }
+
+    public List<Long> getBookIdsByLibraryIdsForStreaming(Set<Long> libraryIds) {
+        return bookRepository.findBookIdsByLibraryIdsForStreaming(libraryIds);
+    }
+
+    /**
+     * Loads and maps a single chunk for the list view.
+     *
+     * <p>Kept transactional and short-lived so lazy associations resolve while a
+     * session is open, and so no more than one chunk of entities is reachable at
+     * a time. {@code applyRestrictions} mirrors what
+     * {@link #getAllBooksByLibraryIds} does for non-admin callers.
+     */
+    @Transactional(readOnly = true)
+    public List<Book> getListViewChunk(Set<Long> bookIds, boolean includeDescription,
+                                       Long userId, boolean applyRestrictions) {
+        List<BookEntity> books = bookRepository.findAllWithMetadataByIds(bookIds);
+        if (applyRestrictions) {
+            books = contentRestrictionService.applyRestrictions(books, userId);
+        }
+        return mapBooksToDto(books, includeDescription, userId, !includeDescription);
+    }
+
     public List<Book> mapEntitiesToDto(List<BookEntity> entities, boolean includeDescription, Long userId) {
         return mapBooksToDto(entities, includeDescription, userId, !includeDescription);
     }

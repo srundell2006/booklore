@@ -2,7 +2,9 @@ package org.booklore.controller;
 
 import org.booklore.config.security.annotation.CheckBookAccess;
 import org.booklore.exception.ApiError;
+import org.booklore.config.security.service.AuthenticationService;
 import org.booklore.model.dto.Book;
+import org.booklore.model.dto.BookLoreUser;
 import org.booklore.model.dto.BookRecommendation;
 import org.booklore.model.dto.BookViewerSettings;
 import org.booklore.model.dto.request.AttachBookFileRequest;
@@ -39,11 +41,15 @@ import jakarta.validation.constraints.Max;
 import jakarta.validation.constraints.Min;
 import jakarta.validation.constraints.Size;
 import lombok.AllArgsConstructor;
+import lombok.extern.slf4j.Slf4j;
 import org.springframework.core.io.Resource;
 import org.springframework.http.ResponseEntity;
+import org.springframework.http.MediaType;
 import org.springframework.security.access.prepost.PreAuthorize;
 import org.springframework.validation.annotation.Validated;
 import org.springframework.web.bind.annotation.*;
+import org.springframework.web.servlet.mvc.method.annotation.StreamingResponseBody;
+import java.io.IOException;
 
 import java.util.List;
 import java.util.Set;
@@ -53,6 +59,7 @@ import java.util.Set;
 @Validated
 @RestController
 @AllArgsConstructor
+@Slf4j
 public class BookController {
 
     private final BookService bookService;
@@ -64,14 +71,34 @@ public class BookController {
     private final PhysicalBookService physicalBookService;
     private final DuplicateDetectionService duplicateDetectionService;
     private final AudiobookVerificationService audiobookVerificationService;
+    private final AuthenticationService authenticationService;
 
     @Operation(summary = "Get all books", description = "Retrieve a list of all books. Optionally include descriptions.")
     @ApiResponse(responseCode = "200", description = "List of books returned successfully")
-    @GetMapping
-    public ResponseEntity<List<Book>> getBooks(
+    @GetMapping(produces = MediaType.APPLICATION_JSON_VALUE)
+    public ResponseEntity<StreamingResponseBody> getBooks(
             @Parameter(description = "Include book descriptions in the response")
             @RequestParam(required = false, defaultValue = "false") boolean withDescription) {
-        return ResponseEntity.ok(bookService.getBookDTOs(withDescription));
+
+        // Resolve the user on the request thread. StreamingResponseBody runs on a
+        // separate task executor where the SecurityContextHolder ThreadLocal is
+        // empty, so reading it inside the callback would fail.
+        BookLoreUser user = authenticationService.getAuthenticatedUser();
+
+        StreamingResponseBody body = outputStream -> {
+            try {
+                bookService.streamBooks(user, withDescription, outputStream);
+            } catch (IOException e) {
+                // Client disconnects mid-stream are routine for a large catalogue;
+                // there is no usable response left to report an error through.
+                log.debug("Book stream aborted for user {}: {}",
+                        user != null ? user.getId() : null, e.getMessage());
+            }
+        };
+
+        return ResponseEntity.ok()
+                .contentType(MediaType.APPLICATION_JSON)
+                .body(body);
     }
 
     @Operation(summary = "Get a book by ID", description = "Retrieve details of a specific book by its ID.")

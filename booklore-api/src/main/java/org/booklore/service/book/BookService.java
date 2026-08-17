@@ -19,6 +19,8 @@ import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
 import org.booklore.service.monitoring.MonitoringRegistrationService;
 import org.booklore.service.progress.ReadingProgressService;
 import org.booklore.service.FileStreamingService;
+import tools.jackson.databind.ObjectMapper;
+import tools.jackson.databind.SequenceWriter;
 import org.booklore.util.FileService;
 import org.booklore.util.FileUtils;
 import jakarta.servlet.http.HttpServletRequest;
@@ -37,6 +39,7 @@ import org.springframework.transaction.annotation.Transactional;
 
 import java.io.File;
 import java.io.IOException;
+import java.io.OutputStream;
 import java.net.MalformedURLException;
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -69,7 +72,74 @@ public class BookService {
     private final SidecarMetadataWriter sidecarMetadataWriter;
     private final FileStreamingService fileStreamingService;
     private final AuditService auditService;
+    private final ObjectMapper objectMapper;
 
+
+    /**
+     * Chunk size for {@link #streamBooks}. Small enough that peak heap stays flat
+     * on a six-figure catalogue, large enough to keep query round-trips sane.
+     */
+    private static final int STREAM_CHUNK_SIZE = 500;
+
+    /**
+     * Writes the catalogue as a JSON array without ever materialising it.
+     *
+     * <p>The previous implementation loaded every BookEntity, mapped every one to
+     * a DTO, and handed Jackson a finished list — so both full object graphs sat
+     * in heap before a byte was written. On a 140k-book library that reached
+     * ~16 GB and the client timed out mid-serialisation.
+     *
+     * <p>Here ids are fetched once (cheap), then each chunk is loaded, mapped,
+     * enriched and written before the next is touched. The wire format is
+     * unchanged — still a flat JSON array — so existing clients need no changes.
+     *
+     * <p>{@code user} is passed in rather than read from the SecurityContext:
+     * Spring MVC executes StreamingResponseBody on a separate task executor
+     * where the SecurityContextHolder ThreadLocal is empty.
+     */
+    public void streamBooks(BookLoreUser user, boolean includeDescription, OutputStream out) throws IOException {
+        boolean isAdmin = user.getPermissions().isAdmin();
+        Long userId = user.getId();
+
+        List<Long> bookIds = isAdmin
+                ? bookQueryService.getAllBookIdsForStreaming()
+                : bookQueryService.getBookIdsByLibraryIdsForStreaming(getUserLibraryIds(user));
+
+        log.debug("Streaming {} books for user {} (admin={})", bookIds.size(), userId, isAdmin);
+
+        int written = 0;
+        try (SequenceWriter writer = objectMapper.writer().writeValuesAsArray(out)) {
+            for (int offset = 0; offset < bookIds.size(); offset += STREAM_CHUNK_SIZE) {
+                Set<Long> chunk = new LinkedHashSet<>(
+                        bookIds.subList(offset, Math.min(offset + STREAM_CHUNK_SIZE, bookIds.size())));
+
+                List<Book> books = bookQueryService.getListViewChunk(chunk, includeDescription, userId, !isAdmin);
+                enrichChunkWithProgress(books, userId, includeDescription);
+
+                for (Book book : books) {
+                    writer.write(book);
+                    written++;
+                }
+                out.flush();
+            }
+        }
+        log.debug("Streamed {} books for user {}", written, userId);
+    }
+
+    private void enrichChunkWithProgress(List<Book> books, Long userId, boolean includeDescription) {
+        if (books.isEmpty()) return;
+
+        Set<Long> ids = books.stream().map(Book::getId).collect(Collectors.toSet());
+        Map<Long, UserBookProgressEntity> progressMap = readingProgressService.fetchUserProgress(userId, ids);
+        Map<Long, UserBookFileProgressEntity> fileProgressMap = readingProgressService.fetchUserFileProgress(userId, ids);
+
+        books.forEach(book -> {
+            readingProgressService.enrichBookWithProgress(
+                    book, progressMap.get(book.getId()), fileProgressMap.get(book.getId()));
+            Set<Shelf> filtered = filterShelvesByUserId(book.getShelves(), userId);
+            book.setShelves(!includeDescription && filtered != null && filtered.isEmpty() ? null : filtered);
+        });
+    }
 
     public List<Book> getBookDTOs(boolean includeDescription) {
         BookLoreUser user = authenticationService.getAuthenticatedUser();
