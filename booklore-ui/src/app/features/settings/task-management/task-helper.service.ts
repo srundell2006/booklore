@@ -3,7 +3,7 @@ import {MessageService} from 'primeng/api';
 import {MetadataRefreshRequest} from '../../metadata/model/request/metadata-refresh-request.model';
 import {catchError, map} from 'rxjs/operators';
 import {of} from 'rxjs';
-import {AudiobookVerificationRequest, ComicDetectionRequest, EpubTextIdentifyRequest, FilenameAuthorExtractRequest, IsbnScanRequest, OrganizeLibraryRequest, TaskCreateRequest, TaskService, TaskType, CopyrightIsbnScanRequest} from './task.service';
+import {AudiobookVerificationRequest, ComicDetectionRequest, EpubTextIdentifyRequest, FilenameAuthorExtractRequest, IsbnScanRequest, OrganizeLibraryRequest, TaskCreateRequest, TaskService, TaskType, CopyrightIsbnScanRequest, MissingFileScanRequest} from './task.service';
 import {TranslocoService} from '@jsverse/transloco';
 
 @Injectable({
@@ -187,6 +187,42 @@ export class TaskHelperService {
             summary: this.t.translate('settingsTasks.toast.metadataFailed'),
             life: 5000,
             detail: this.t.translate('settingsTasks.toast.copyrightIsbnScanFailed', {default: 'Failed to start the copyright-page ISBN scan.'})
+          });
+        }
+        return of({success: false});
+      })
+    );
+  }
+
+  scanMissingFilesTask(options: MissingFileScanRequest) {
+    const request: TaskCreateRequest = {
+      taskType: TaskType.MISSING_FILE_SCAN,
+      triggeredByCron: false,
+      options
+    };
+    return this.taskService.startTask(request).pipe(
+      map(() => {
+        this.messageService.add({
+          severity: 'success',
+          summary: this.t.translate('common.success'),
+          detail: this.t.translate('settingsTasks.toast.missingFileScanScheduled', {default: 'Missing file scan started. Books whose files are gone will be tagged.'})
+        });
+        return {success: true};
+      }),
+      catchError((e) => {
+        if (e.status === 409) {
+          this.messageService.add({
+            severity: 'error',
+            summary: this.t.translate('settingsTasks.toast.alreadyRunning'),
+            life: 5000,
+            detail: this.t.translate('settingsTasks.toast.missingFileScanAlreadyRunning', {default: 'A missing file scan is already running.'})
+          });
+        } else {
+          this.messageService.add({
+            severity: 'error',
+            summary: this.t.translate('settingsTasks.toast.metadataFailed'),
+            life: 5000,
+            detail: this.t.translate('settingsTasks.toast.missingFileScanFailed', {default: 'Failed to start the missing file scan.'})
           });
         }
         return of({success: false});

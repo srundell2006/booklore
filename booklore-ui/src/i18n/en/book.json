@@ -274,7 +274,8 @@
       "disableWatcher": "Disable File Watcher",
       "detectComics": "Detect Comics",
       "scanCopyrightIsbn": "Scan Copyright Page for ISBN",
-      "scanFrontMatterIsbn": "Scan Front Sections for ISBN"
+      "scanFrontMatterIsbn": "Scan Front Sections for ISBN",
+      "findMissingFiles": "Find Missing Files"
     },
     "shelf": {
       "publicShelfPrefix": "Public Shelf - ",
@@ -290,7 +291,8 @@
       "deleteMagicShelf": "Delete Magic Shelf",
       "detectComics": "Detect Comics",
       "scanCopyrightIsbn": "Scan Copyright Page for ISBN",
-      "scanFrontMatterIsbn": "Scan Front Sections for ISBN"
+      "scanFrontMatterIsbn": "Scan Front Sections for ISBN",
+      "findMissingFiles": "Find Missing Files"
     },
     "confirm": {
       "rescanLibraryMessage": "Are you sure you want to refresh library: {{ name }}?",

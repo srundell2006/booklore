@@ -138,6 +138,14 @@ public enum TaskType {
             false,
             "Scan Copyright Page for ISBN",
             "Reads the ISBN from each EPUB's declared copyright page only — no body-text guessing — then fetches and applies full metadata for that ISBN from Amazon, GoodReads or Open Library."
+    ),
+    MISSING_FILE_SCAN(
+            false,
+            true,
+            true,
+            false,
+            "Find Missing Files",
+            "Checks every attached file for each book and tags those no longer on disk with 'File Not Found', so they can be collected with a Magic Shelf rule on Tags. Removes the tag again when a file reappears."
     );
 
     @Getter

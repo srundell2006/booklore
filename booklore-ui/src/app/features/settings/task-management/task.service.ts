@@ -20,7 +20,8 @@ export enum TaskType {
   EPUB_TEXT_IDENTIFY = 'EPUB_TEXT_IDENTIFY',
   COMIC_DETECTION = 'COMIC_DETECTION',
   FILENAME_AUTHOR_EXTRACT = 'FILENAME_AUTHOR_EXTRACT',
-  COPYRIGHT_ISBN_SCAN = 'COPYRIGHT_ISBN_SCAN'
+  COPYRIGHT_ISBN_SCAN = 'COPYRIGHT_ISBN_SCAN',
+  MISSING_FILE_SCAN = 'MISSING_FILE_SCAN'
 }
 
 export const TASK_TYPE_CONFIG: Record<TaskType, { parallel: boolean; async: boolean; displayOrder: number }> = {
@@ -40,6 +41,7 @@ export const TASK_TYPE_CONFIG: Record<TaskType, { parallel: boolean; async: bool
   [TaskType.COMIC_DETECTION]: {parallel: false, async: true, displayOrder: 14},
   [TaskType.FILENAME_AUTHOR_EXTRACT]: {parallel: false, async: true, displayOrder: 15},
   [TaskType.COPYRIGHT_ISBN_SCAN]: {parallel: false, async: true, displayOrder: 16},
+  [TaskType.MISSING_FILE_SCAN]: {parallel: false, async: true, displayOrder: 17},
 };
 
 export enum MetadataReplaceMode {
@@ -87,6 +89,16 @@ export interface CopyrightIsbnScanRequest {
   spineItemsToScan?: number;
 }
 
+export interface MissingFileScanRequest {
+  refreshType: 'LIBRARY' | 'MAGIC_SHELF' | 'BOOKS';
+  libraryId?: number;
+  magicShelfId?: number;
+  bookIds?: number[];
+  tagName?: string;
+  clearTagWhenPresent?: boolean;
+  dryRun?: boolean;
+}
+
 export interface OrganizeLibraryRequest {
   libraryId?: number;
 }
@@ -107,7 +119,7 @@ export interface FilenameAuthorExtractRequest {
 export interface TaskCreateRequest {
   taskType: TaskType;
   triggeredByCron?: boolean;
-  options?: LibraryRescanOptions | MetadataRefreshRequest | IsbnScanRequest | EpubTextIdentifyRequest | ComicDetectionRequest | OrganizeLibraryRequest | AudiobookVerificationRequest | FilenameAuthorExtractRequest | CopyrightIsbnScanRequest | null;
+  options?: LibraryRescanOptions | MetadataRefreshRequest | IsbnScanRequest | EpubTextIdentifyRequest | ComicDetectionRequest | OrganizeLibraryRequest | AudiobookVerificationRequest | FilenameAuthorExtractRequest | CopyrightIsbnScanRequest | MissingFileScanRequest | null;
 }
 
 export interface TaskCreateResponse {

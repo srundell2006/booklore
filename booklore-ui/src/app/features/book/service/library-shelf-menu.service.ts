@@ -9,7 +9,7 @@ import {Library} from '../model/library.model';
 import {Shelf} from '../model/shelf.model';
 import {MetadataRefreshType} from '../../metadata/model/request/metadata-refresh-type.enum';
 import {MagicShelf, MagicShelfService} from '../../magic-shelf/service/magic-shelf.service';
-import {ComicDetectionRequest, EpubTextIdentifyRequest, FilenameAuthorExtractRequest, IsbnScanRequest, OrganizeLibraryRequest, CopyrightIsbnScanRequest} from '../../settings/task-management/task.service';
+import {ComicDetectionRequest, EpubTextIdentifyRequest, FilenameAuthorExtractRequest, IsbnScanRequest, OrganizeLibraryRequest, CopyrightIsbnScanRequest, MissingFileScanRequest} from '../../settings/task-management/task.service';
 import {TaskHelperService} from '../../settings/task-management/task-helper.service';
 import {UserService} from "../../../features/settings/user-management/user.service";
 import {LoadingService} from '../../../core/services/loading.service';
@@ -235,6 +235,16 @@ export class LibraryShelfMenuService {
             }
           },
           {
+            label: this.t.translate('book.shelfMenuService.library.findMissingFiles', {default: 'Find Missing Files'}),
+            icon: 'pi pi-exclamation-triangle',
+            command: () => {
+              this.taskHelperService.scanMissingFilesTask({
+                refreshType: 'LIBRARY',
+                libraryId: entity?.id ?? undefined
+              } as MissingFileScanRequest).subscribe();
+            }
+          },
+          {
             label: this.t.translate('book.shelfMenuService.library.findDuplicates'),
             icon: 'pi pi-copy',
             command: () => {
@@ -439,6 +449,16 @@ export class LibraryShelfMenuService {
             icon: 'pi pi-search',
             command: () => {
               this.launchIsbnScan(this.isbnScanDepth(), entity?.name, {refreshType: 'MAGIC_SHELF', id: entity?.id ?? undefined});
+            }
+          },
+          {
+            label: this.t.translate('book.shelfMenuService.magicShelf.findMissingFiles', {default: 'Find Missing Files'}),
+            icon: 'pi pi-exclamation-triangle',
+            command: () => {
+              this.taskHelperService.scanMissingFilesTask({
+                refreshType: 'MAGIC_SHELF',
+                magicShelfId: entity?.id ?? undefined
+              } as MissingFileScanRequest).subscribe();
             }
           },
           {
