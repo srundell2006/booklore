@@ -7,7 +7,6 @@ import org.booklore.model.dto.BookLoreUser;
 import org.booklore.model.dto.MetadataBatchProgressNotification;
 import org.booklore.model.dto.request.MissingFileScanRequest;
 import org.booklore.model.entity.BookEntity;
-import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.entity.TagEntity;
 import org.booklore.model.enums.MetadataFetchTaskStatus;
@@ -15,6 +14,8 @@ import org.booklore.model.websocket.Topic;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.TagRepository;
 import org.booklore.service.NotificationService;
+import org.booklore.service.book.MissingFileScanLoader.FileCheckTarget;
+import org.booklore.service.book.MissingFileScanLoader.FileRef;
 import org.booklore.service.opds.MagicShelfBookService;
 import org.booklore.task.TaskCancellationManager;
 import org.springframework.stereotype.Service;
@@ -24,18 +25,21 @@ import org.springframework.transaction.support.TransactionTemplate;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.*;
+import java.util.concurrent.*;
 
 /**
  * Tags books whose file is no longer on disk, so they can be gathered with a
  * Magic Shelf rule on Tags.
  *
- * <p>Checks every {@link BookFileEntity} attached to a book, not just the
- * primary: a book whose EPUB is present but whose audiobook has vanished is
- * still partially broken and worth surfacing.
+ * <p>Existence checks run in parallel and each is bounded by a timeout. Both
+ * matter on network storage: a single {@code Files.exists()} against the CIFS
+ * share here takes roughly two seconds, so a serial pass over a six-figure
+ * library would run for days, and a wedged SMB path blocks a stat call in
+ * uninterruptible IO, stalling the whole scan.
  *
- * <p>Runs in chunks and re-reads each chunk inside a short transaction, because
- * the tag collection is LAZY and the file checks are slow enough on network
- * storage that holding a session open across them would be wasteful.
+ * <p>Checking threads work from plain values produced by
+ * {@link MissingFileScanLoader}: no entities, no session and no database
+ * connection is held while waiting on storage.
  */
 @Slf4j
 @Service
@@ -44,15 +48,25 @@ public class MissingFileScanService {
 
     public static final String DEFAULT_TAG_NAME = "File Not Found";
 
-    private static final int CHUNK_SIZE = 250;
+    private static final int CHUNK_SIZE = 500;
+    private static final int MAX_PARALLELISM = 128;
 
     private final BookRepository bookRepository;
     private final TagRepository tagRepository;
+    private final MissingFileScanLoader scanLoader;
     private final NotificationService notificationService;
     private final PlatformTransactionManager transactionManager;
     private final AuthenticationService authenticationService;
     private final TaskCancellationManager cancellationManager;
     private final MagicShelfBookService magicShelfBookService;
+
+    /** Outcome of checking one book's files. */
+    private record CheckResult(Long bookId, String title, List<String> absent, boolean timedOut,
+                               boolean alreadyTagged) {
+        boolean isMissing() {
+            return !absent.isEmpty();
+        }
+    }
 
     public void scan(MissingFileScanRequest request, String taskId) {
         BookLoreUser user = authenticationService.getAuthenticatedUser();
@@ -61,6 +75,9 @@ public class MissingFileScanService {
         String tagName = request.getTagName() == null || request.getTagName().isBlank()
                 ? DEFAULT_TAG_NAME
                 : request.getTagName().trim();
+
+        int parallelism = Math.max(1, Math.min(MAX_PARALLELISM, request.getParallelism()));
+        int timeoutSeconds = Math.max(1, request.getCheckTimeoutSeconds());
 
         try {
             Set<Long> bookIds = resolveBookIds(request, userId);
@@ -72,8 +89,9 @@ public class MissingFileScanService {
 
             List<Long> ordered = new ArrayList<>(bookIds);
             int total = ordered.size();
-            log.info("MissingFileScan [{}]: checking {} books, tag '{}'{}",
-                    taskId, total, tagName, request.isDryRun() ? " (dry run)" : "");
+            log.info("MissingFileScan [{}]: checking {} books, tag '{}', parallelism {}, timeout {}s{}",
+                    taskId, total, tagName, parallelism, timeoutSeconds,
+                    request.isDryRun() ? " (dry run)" : "");
 
             TransactionTemplate tx = new TransactionTemplate(transactionManager);
             TagEntity tag = request.isDryRun() ? null : resolveTag(tx, tagName);
@@ -81,71 +99,48 @@ public class MissingFileScanService {
             int completed = 0;
             int missing = 0;
             int cleared = 0;
+            int unresolved = 0;
             boolean cancelled = false;
+            long startedAt = System.currentTimeMillis();
 
-            for (int offset = 0; offset < total && !cancelled; offset += CHUNK_SIZE) {
-                List<Long> chunk = ordered.subList(offset, Math.min(offset + CHUNK_SIZE, total));
-                final int chunkStart = completed;
-                final TagEntity finalTag = tag;
+            Semaphore permits = new Semaphore(parallelism);
 
-                int[] counts = tx.execute(status -> {
-                    int localMissing = 0;
-                    int localCleared = 0;
-                    int localDone = 0;
+            try (ExecutorService pool = Executors.newVirtualThreadPerTaskExecutor()) {
+                for (int offset = 0; offset < total && !cancelled; offset += CHUNK_SIZE) {
+                    List<Long> chunk = ordered.subList(offset, Math.min(offset + CHUNK_SIZE, total));
+                    List<FileCheckTarget> targets = scanLoader.load(new LinkedHashSet<>(chunk), tagName);
 
-                    for (BookEntity book : bookRepository.findAllWithMetadataByIds(new LinkedHashSet<>(chunk))) {
-                        localDone++;
-                        List<String> absent = missingPaths(book);
-                        boolean fileMissing = !absent.isEmpty();
-                        BookMetadataEntity meta = book.getMetadata();
-                        if (meta == null) continue;
+                    List<CheckResult> results = checkInParallel(targets, pool, permits, timeoutSeconds);
+                    completed += results.size();
 
-                        boolean tagged = hasTag(meta, tagName);
+                    for (CheckResult r : results) {
+                        if (r.timedOut()) unresolved++;
+                    }
 
-                        if (fileMissing && !tagged) {
-                            if (!request.isDryRun()) {
-                                if (meta.getTags() == null) meta.setTags(new HashSet<>());
-                                meta.getTags().add(finalTag);
-                                bookRepository.save(book);
-                            }
-                            localMissing++;
-                            log.info("MissingFileScan [{}]: '{}' missing {} -> tagged",
-                                    taskId, bookTitle(book), absent);
-                        } else if (fileMissing) {
-                            localMissing++;
-                        } else if (tagged && request.isClearTagWhenPresent()) {
-                            if (!request.isDryRun()) {
-                                meta.getTags().removeIf(t -> t.getName() != null
-                                        && t.getName().equalsIgnoreCase(tagName));
-                                bookRepository.save(book);
-                            }
-                            localCleared++;
-                            log.info("MissingFileScan [{}]: '{}' file present again -> tag removed",
-                                    taskId, bookTitle(book));
+                    if (!request.isDryRun()) {
+                        int[] applied = applyChunk(tx, results, tag, tagName, request.isClearTagWhenPresent());
+                        missing += applied[0];
+                        cleared += applied[1];
+                    } else {
+                        for (CheckResult r : results) {
+                            if (r.isMissing()) missing++;
                         }
                     }
-                    return new int[]{localDone, localMissing, localCleared};
-                });
 
-                if (counts != null) {
-                    completed += counts[0];
-                    missing += counts[1];
-                    cleared += counts[2];
+                    long elapsed = Math.max(1, (System.currentTimeMillis() - startedAt) / 1000);
+                    sendProgress(taskId, completed, total,
+                            String.format("Checked %d of %d — %d missing, %d unresolved (%d books/sec)",
+                                    completed, total, missing, unresolved, completed / elapsed),
+                            MetadataFetchTaskStatus.IN_PROGRESS);
+
+                    if (cancellationManager.isTaskCancelled(taskId)) cancelled = true;
                 }
-
-                sendProgress(taskId, completed, total,
-                        String.format("Checked %d of %d — %d missing", completed, total, missing),
-                        MetadataFetchTaskStatus.IN_PROGRESS);
-
-                if (cancellationManager.isTaskCancelled(taskId)) {
-                    cancelled = true;
-                }
-                if (completed == chunkStart) break; // defensive: nothing loaded, avoid spinning
             }
 
             String summary = String.format(
-                    "%sFile check complete. %d missing (tagged '%s'), %d restored, %d checked.",
-                    request.isDryRun() ? "DRY RUN — " : "", missing, tagName, cleared, completed);
+                    "%sFile check complete. %d missing (tagged '%s'), %d restored, %d unresolved, %d checked in %ds.",
+                    request.isDryRun() ? "DRY RUN — " : "", missing, tagName, cleared, unresolved,
+                    completed, (System.currentTimeMillis() - startedAt) / 1000);
 
             sendProgress(taskId, cancelled ? completed : total, total,
                     cancelled ? "Scan cancelled. " + summary : summary,
@@ -159,31 +154,117 @@ public class MissingFileScanService {
         }
     }
 
-    // ── helpers ───────────────────────────────────────────────────────────────
+    // ── parallel checking ─────────────────────────────────────────────────────
 
-    /** Filenames of every attached file that is not currently readable on disk. */
-    private List<String> missingPaths(BookEntity book) {
-        List<String> absent = new ArrayList<>();
-        if (book.getBookFiles() == null) return absent;
+    private List<CheckResult> checkInParallel(List<FileCheckTarget> targets,
+                                              ExecutorService pool,
+                                              Semaphore permits,
+                                              int timeoutSeconds) {
+        Map<Long, Future<List<String>>> futures = new LinkedHashMap<>();
 
-        for (BookFileEntity file : book.getBookFiles()) {
-            try {
-                Path path = file.getFullFilePath();
-                if (path == null || !Files.exists(path)) {
-                    absent.add(file.getFileName() != null ? file.getFileName() : "(unnamed)");
+        for (FileCheckTarget target : targets) {
+            futures.put(target.bookId(), pool.submit(() -> {
+                permits.acquire();
+                try {
+                    return absentFiles(target);
+                } finally {
+                    permits.release();
                 }
+            }));
+        }
+
+        List<CheckResult> results = new ArrayList<>(targets.size());
+        for (FileCheckTarget target : targets) {
+            Future<List<String>> future = futures.get(target.bookId());
+            try {
+                List<String> absent = future.get(timeoutSeconds, TimeUnit.SECONDS);
+                results.add(new CheckResult(target.bookId(), target.title(), absent, false,
+                        target.alreadyTagged()));
+            } catch (TimeoutException e) {
+                // Storage is not answering for this book. Cancel the attempt and
+                // treat it as unknown rather than missing — tagging on a timeout
+                // would mark healthy books when the share is merely slow.
+                future.cancel(true);
+                log.warn("MissingFileScan: timed out checking '{}' after {}s — left unchanged",
+                        target.title(), timeoutSeconds);
+                results.add(new CheckResult(target.bookId(), target.title(), List.of(), true,
+                        target.alreadyTagged()));
             } catch (Exception e) {
-                // An unresolvable path is as good as a missing file for this purpose.
-                absent.add(file.getFileName() != null ? file.getFileName() : "(unresolvable)");
+                future.cancel(true);
+                log.warn("MissingFileScan: error checking '{}': {}", target.title(), e.getMessage());
+                results.add(new CheckResult(target.bookId(), target.title(), List.of(), true,
+                        target.alreadyTagged()));
+            }
+        }
+        return results;
+    }
+
+    private List<String> absentFiles(FileCheckTarget target) {
+        List<String> absent = new ArrayList<>();
+        for (FileRef file : target.files()) {
+            Path path = file.path();
+            if (path == null) {
+                absent.add(file.name());
+                continue;
+            }
+            try {
+                if (!Files.exists(path)) absent.add(file.name());
+            } catch (Exception e) {
+                absent.add(file.name());
             }
         }
         return absent;
     }
 
-    private boolean hasTag(BookMetadataEntity meta, String tagName) {
-        return meta.getTags() != null && meta.getTags().stream()
-                .anyMatch(t -> t.getName() != null && t.getName().equalsIgnoreCase(tagName));
+    // ── persistence ───────────────────────────────────────────────────────────
+
+    /** Returns {newlyMissing, cleared}. */
+    private int[] applyChunk(TransactionTemplate tx, List<CheckResult> results,
+                             TagEntity tag, String tagName, boolean clearWhenPresent) {
+        List<CheckResult> toTag = results.stream()
+                .filter(r -> !r.timedOut() && r.isMissing() && !r.alreadyTagged())
+                .toList();
+        List<CheckResult> toClear = clearWhenPresent
+                ? results.stream().filter(r -> !r.timedOut() && !r.isMissing() && r.alreadyTagged()).toList()
+                : List.of();
+
+        int stillMissing = (int) results.stream().filter(r -> !r.timedOut() && r.isMissing()).count();
+        if (toTag.isEmpty() && toClear.isEmpty()) {
+            return new int[]{stillMissing, 0};
+        }
+
+        Integer clearedCount = tx.execute(status -> {
+            for (CheckResult r : toTag) {
+                bookRepository.findById(r.bookId()).ifPresent(book -> {
+                    BookMetadataEntity meta = book.getMetadata();
+                    if (meta == null) return;
+                    if (meta.getTags() == null) meta.setTags(new HashSet<>());
+                    meta.getTags().add(tag);
+                    bookRepository.save(book);
+                    log.info("MissingFileScan: '{}' missing {} -> tagged", r.title(), r.absent());
+                });
+            }
+            int c = 0;
+            for (CheckResult r : toClear) {
+                Optional<BookEntity> found = bookRepository.findById(r.bookId());
+                if (found.isEmpty()) continue;
+                BookEntity book = found.get();
+                BookMetadataEntity meta = book.getMetadata();
+                if (meta == null || meta.getTags() == null) continue;
+                if (meta.getTags().removeIf(t -> t.getName() != null
+                        && t.getName().equalsIgnoreCase(tagName))) {
+                    bookRepository.save(book);
+                    log.info("MissingFileScan: '{}' file present again -> tag removed", r.title());
+                    c++;
+                }
+            }
+            return c;
+        });
+
+        return new int[]{stillMissing, clearedCount == null ? 0 : clearedCount};
     }
+
+    // ── helpers ───────────────────────────────────────────────────────────────
 
     private TagEntity resolveTag(TransactionTemplate tx, String tagName) {
         return tx.execute(status -> tagRepository.findByNameIgnoreCase(tagName)
@@ -210,17 +291,6 @@ public class MissingFileScanService {
                 yield request.getBookIds();
             }
         };
-    }
-
-    private String bookTitle(BookEntity book) {
-        if (book.getMetadata() != null && book.getMetadata().getTitle() != null
-                && !book.getMetadata().getTitle().isBlank()) {
-            return book.getMetadata().getTitle();
-        }
-        BookFileEntity primary = book.getPrimaryBookFile();
-        return primary != null && primary.getFileName() != null
-                ? primary.getFileName()
-                : "Book " + book.getId();
     }
 
     private void sendProgress(String taskId, int current, int total, String message,

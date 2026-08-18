@@ -97,6 +97,10 @@ export interface MissingFileScanRequest {
   tagName?: string;
   clearTagWhenPresent?: boolean;
   dryRun?: boolean;
+  /** Concurrent existence checks; IO-bound, so well above core count. */
+  parallelism?: number;
+  /** Seconds to wait on one book before treating it as unresolved. */
+  checkTimeoutSeconds?: number;
 }
 
 export interface OrganizeLibraryRequest {

@@ -44,6 +44,25 @@ public class MissingFileScanRequest {
     @Builder.Default
     private boolean dryRun = false;
 
+    /**
+     * Concurrent existence checks. These are IO-bound round-trips to storage,
+     * not CPU work, so the useful value is far above the core count. On a
+     * network share a serial scan of a large library is effectively unbounded
+     * in duration; parallelism is what makes this task viable at all.
+     */
+    @Builder.Default
+    private int parallelism = 32;
+
+    /**
+     * Seconds to wait for a single book's files before giving up on it.
+     *
+     * <p>A wedged SMB path can block a stat call indefinitely and the thread is
+     * not interruptible. Bounding the wait lets the scan carry on and report
+     * the book as unresolved rather than stalling the entire run.
+     */
+    @Builder.Default
+    private int checkTimeoutSeconds = 15;
+
     public enum RefreshType {
         LIBRARY, MAGIC_SHELF, BOOKS
     }
