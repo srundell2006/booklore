@@ -27,7 +27,8 @@ import static org.mockito.Mockito.when;
 
 /**
  * The stored cover files must stay byte for byte what FileService wrote before the cover pipelines moved into
- * CoverImages. {@link LegacyCoverWriter} is the old code, kept as the oracle.
+ * CoverImages, whether they are written through FileService or rendered in memory. {@link LegacyCoverWriter} is the
+ * old code, kept as the oracle.
  */
 class CoverImagesEquivalenceTest {
 
@@ -93,13 +94,18 @@ class CoverImagesEquivalenceTest {
         BufferedImage image = source.get();
         try {
             boolean legacySaved = LegacyCoverWriter.saveCoverImages(image, legacyFolder, cropping);
-            boolean saved = fileService.saveCoverImages(image, 1L);
+            byte[] legacyCover = Files.readAllBytes(legacyFolder.toPath().resolve("cover.jpg"));
+            byte[] legacyThumbnail = Files.readAllBytes(legacyFolder.toPath().resolve("thumbnail.jpg"));
 
+            boolean saved = fileService.saveCoverImages(image, 1L);
             assertThat(saved).isEqualTo(legacySaved).isTrue();
-            assertThat(Files.readAllBytes(Path.of(fileService.getCoverFile(1L))))
-                    .isEqualTo(Files.readAllBytes(legacyFolder.toPath().resolve("cover.jpg")));
-            assertThat(Files.readAllBytes(Path.of(fileService.getThumbnailFile(1L))))
-                    .isEqualTo(Files.readAllBytes(legacyFolder.toPath().resolve("thumbnail.jpg")));
+            assertThat(Files.readAllBytes(Path.of(fileService.getCoverFile(1L)))).isEqualTo(legacyCover);
+            assertThat(Files.readAllBytes(Path.of(fileService.getThumbnailFile(1L)))).isEqualTo(legacyThumbnail);
+
+            RenderedCover rendered = CoverImages.renderBookCover(image, CropPolicy.from(cropping));
+            assertThat(rendered.kind()).isEqualTo(CoverKind.BOOK);
+            assertThat(rendered.cover()).isEqualTo(legacyCover);
+            assertThat(rendered.thumbnail()).isEqualTo(legacyThumbnail);
         } finally {
             image.flush();
         }
@@ -112,13 +118,18 @@ class CoverImagesEquivalenceTest {
         BufferedImage image = source.get();
         try {
             boolean legacySaved = LegacyCoverWriter.saveAudiobookCoverImages(image, legacyFolder);
-            boolean saved = fileService.saveAudiobookCoverImages(image, 1L);
+            byte[] legacyCover = Files.readAllBytes(legacyFolder.toPath().resolve("audiobook-cover.jpg"));
+            byte[] legacyThumbnail = Files.readAllBytes(legacyFolder.toPath().resolve("audiobook-thumbnail.jpg"));
 
+            boolean saved = fileService.saveAudiobookCoverImages(image, 1L);
             assertThat(saved).isEqualTo(legacySaved).isTrue();
-            assertThat(Files.readAllBytes(Path.of(fileService.getAudiobookCoverFile(1L))))
-                    .isEqualTo(Files.readAllBytes(legacyFolder.toPath().resolve("audiobook-cover.jpg")));
-            assertThat(Files.readAllBytes(Path.of(fileService.getAudiobookThumbnailFile(1L))))
-                    .isEqualTo(Files.readAllBytes(legacyFolder.toPath().resolve("audiobook-thumbnail.jpg")));
+            assertThat(Files.readAllBytes(Path.of(fileService.getAudiobookCoverFile(1L)))).isEqualTo(legacyCover);
+            assertThat(Files.readAllBytes(Path.of(fileService.getAudiobookThumbnailFile(1L)))).isEqualTo(legacyThumbnail);
+
+            RenderedCover rendered = CoverImages.renderAudiobookCover(image);
+            assertThat(rendered.kind()).isEqualTo(CoverKind.AUDIOBOOK);
+            assertThat(rendered.cover()).isEqualTo(legacyCover);
+            assertThat(rendered.thumbnail()).isEqualTo(legacyThumbnail);
         } finally {
             image.flush();
         }

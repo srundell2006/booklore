@@ -2,9 +2,12 @@ package org.booklore.util;
 
 import org.booklore.config.AppProperties;
 import org.booklore.exception.ApiError;
-import org.booklore.model.dto.settings.CoverCroppingSettings;
 import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.service.appsettings.AppSettingService;
+import org.booklore.util.cover.CoverImages;
+import org.booklore.util.cover.CoverKind;
+import org.booklore.util.cover.CropPolicy;
+import org.booklore.util.cover.RenderedCover;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.http.HttpEntity;
@@ -17,11 +20,8 @@ import org.springframework.web.client.RestTemplate;
 import org.springframework.web.multipart.MultipartFile;
 
 import javax.imageio.ImageIO;
-import javax.imageio.ImageReader;
-import javax.imageio.stream.ImageInputStream;
 import java.awt.*;
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.IOException;
 import java.io.InputStream;
@@ -30,13 +30,15 @@ import java.net.InetAddress;
 import java.net.URI;
 import java.net.URISyntaxException;
 import java.net.URL;
+import java.nio.file.AtomicMoveNotSupportedException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardCopyOption;
 import java.time.Instant;
 import java.util.Comparator;
-import java.util.Iterator;
 import java.util.Set;
+import java.util.UUID;
 import java.util.stream.Stream;
 
 @Slf4j
@@ -50,11 +52,6 @@ public class FileService {
     private final RestTemplate noRedirectRestTemplate;
 
     private static final int MAX_REDIRECTS = 5;
-
-
-    private static final double TARGET_COVER_ASPECT_RATIO = 1.5;
-    private static final int SMART_CROP_COLOR_TOLERANCE = 30;
-    private static final double SMART_CROP_MARGIN_PERCENT = 0.02;
 
     // @formatter:off
     private static final String IMAGES_DIR                    = "images";
@@ -71,14 +68,10 @@ public class FileService {
     private static final String JPEG_MIME_TYPE                = "image/jpeg";
     private static final String PNG_MIME_TYPE                 = "image/png";
     private static final long   MAX_FILE_SIZE_BYTES           = 5L * 1024 * 1024;
-    // 20 MP covers legitimate book covers and author photos with a comfortable safety margin.
-    private static final long   MAX_IMAGE_PIXELS              = 20_000_000L;
     private static final int    THUMBNAIL_WIDTH               = 250;
     private static final int    THUMBNAIL_HEIGHT              = 350;
-    private static final int    SQUARE_THUMBNAIL_SIZE         = 250;
     private static final int    MAX_ORIGINAL_WIDTH            = 1000;
     private static final int    MAX_ORIGINAL_HEIGHT           = 1500;
-    private static final int    MAX_SQUARE_SIZE               = 1000;
     private static final String IMAGE_FORMAT                  = "JPEG";
     // @formatter:on
 
@@ -186,38 +179,12 @@ public class FileService {
         return readImage(inputStream.readAllBytes());
     }
 
+    /**
+     * Decodes an image, rejecting images over 20 MP as possible decompression bombs. Reads from memory, so ImageIO
+     * creates no cache file.
+     */
     public static BufferedImage readImage(byte[] imageData) throws IOException {
-        if (imageData == null || imageData.length == 0) {
-            throw new IOException("Image data is null or empty");
-        }
-
-        try (ImageInputStream iis = ImageIO.createImageInputStream(new ByteArrayInputStream(imageData))) {
-            Iterator<ImageReader> readers = ImageIO.getImageReaders(iis);
-            if (readers.hasNext()) {
-                ImageReader reader = readers.next();
-                try {
-                    reader.setInput(iis);
-                    int width = reader.getWidth(0);
-                    int height = reader.getHeight(0);
-
-                    long pixelCount = (long) width * height;
-                    if (pixelCount > MAX_IMAGE_PIXELS) {
-                        throw new IOException(String.format("Rejected image: dimensions %dx%d (%d pixels) exceed limit %d — possible decompression bomb",
-                                width, height, pixelCount, MAX_IMAGE_PIXELS));
-                    }
-
-                    return reader.read(0);
-                } finally {
-                    reader.dispose();
-                }
-            }
-        } catch (IOException e) {
-            throw e;
-        } catch (Exception e) {
-            throw new IOException("ImageIO decode failed (possibly unsupported format): " + e.getMessage(), e);
-        }
-
-        throw new IOException("Unable to decode image, likely unsupported format");
+        return CoverImages.decode(imageData, true);
     }
 
     /**
@@ -685,239 +652,55 @@ public class FileService {
     }
 
     public boolean saveAudiobookCoverImages(BufferedImage coverImage, long bookId) throws IOException {
-        BufferedImage rgbImage = null;
-        BufferedImage resized = null;
-        BufferedImage thumb = null;
-        try {
-            String folderPath = getImagesFolder(bookId);
-            File folder = new File(folderPath);
-            if (!folder.exists() && !folder.mkdirs()) {
-                throw new IOException("Failed to create directory: " + folder.getAbsolutePath());
-            }
-
-            rgbImage = new BufferedImage(
-                    coverImage.getWidth(),
-                    coverImage.getHeight(),
-                    BufferedImage.TYPE_INT_RGB
-            );
-            Graphics2D g = rgbImage.createGraphics();
-            g.drawImage(coverImage, 0, 0, Color.WHITE, null);
-            g.dispose();
-
-            // Resize to square if needed, maintaining 1:1 aspect ratio
-            int size = Math.min(rgbImage.getWidth(), rgbImage.getHeight());
-            int x = (rgbImage.getWidth() - size) / 2;
-            int y = (rgbImage.getHeight() - size) / 2;
-            BufferedImage cropped = rgbImage.getSubimage(x, y, size, size);
-
-            // Resize if too large
-            if (size > MAX_SQUARE_SIZE) {
-                resized = resizeImage(cropped, MAX_SQUARE_SIZE, MAX_SQUARE_SIZE);
-            } else {
-                resized = cropped;
-            }
-
-            File originalFile = new File(folder, AUDIOBOOK_COVER_FILENAME);
-            boolean originalSaved = ImageIO.write(resized, IMAGE_FORMAT, originalFile);
-
-            // Create square thumbnail
-            thumb = resizeImage(resized, SQUARE_THUMBNAIL_SIZE, SQUARE_THUMBNAIL_SIZE);
-            File thumbnailFile = new File(folder, AUDIOBOOK_THUMBNAIL_FILENAME);
-            boolean thumbnailSaved = ImageIO.write(thumb, IMAGE_FORMAT, thumbnailFile);
-
-            return originalSaved && thumbnailSaved;
-        } finally {
-            if (rgbImage != null) {
-                rgbImage.flush();
-            }
-            if (resized != null && resized != rgbImage) {
-                resized.flush();
-            }
-            if (thumb != null) {
-                thumb.flush();
-            }
-        }
+        return writeRenderedCover(bookId, CoverImages.renderAudiobookCover(coverImage));
     }
 
     public boolean saveCoverImages(BufferedImage coverImage, long bookId) throws IOException {
-        BufferedImage rgbImage = null;
-        BufferedImage cropped = null;
-        BufferedImage resized = null;
-        BufferedImage thumb = null;
+        return writeRenderedCover(bookId, CoverImages.renderBookCover(coverImage, currentCropPolicy()));
+    }
+
+    public CropPolicy currentCropPolicy() {
+        return CropPolicy.from(appSettingService.getAppSettings().getCoverCroppingSettings());
+    }
+
+    /**
+     * Writes a rendered cover into the book's images folder: cover.jpg and thumbnail.jpg for a book cover,
+     * audiobook-cover.jpg and audiobook-thumbnail.jpg for an audiobook cover. Each file is written under a temporary
+     * name and renamed over the old one, so a reader never sees half a cover.
+     *
+     * @return false, writing nothing, when {@code cover} is null
+     */
+    public boolean writeRenderedCover(long bookId, RenderedCover cover) throws IOException {
+        if (cover == null) {
+            return false;
+        }
+        File folder = new File(getImagesFolder(bookId));
+        if (!folder.exists() && !folder.mkdirs()) {
+            throw new IOException("Failed to create directory: " + folder.getAbsolutePath());
+        }
+        boolean audiobook = cover.kind() == CoverKind.AUDIOBOOK;
+        writeAtomically(folder.toPath().resolve(audiobook ? AUDIOBOOK_COVER_FILENAME : COVER_FILENAME), cover.cover());
+        writeAtomically(folder.toPath().resolve(audiobook ? AUDIOBOOK_THUMBNAIL_FILENAME : THUMBNAIL_FILENAME), cover.thumbnail());
+        return true;
+    }
+
+    private static void writeAtomically(Path target, byte[] bytes) throws IOException {
+        Path temp = target.resolveSibling(target.getFileName() + ".tmp-" + UUID.randomUUID());
         try {
-            String folderPath = getImagesFolder(bookId);
-            File folder = new File(folderPath);
-            if (!folder.exists() && !folder.mkdirs()) {
-                throw new IOException("Failed to create directory: " + folder.getAbsolutePath());
+            Files.write(temp, bytes);
+            try {
+                Files.move(temp, target, StandardCopyOption.ATOMIC_MOVE);
+            } catch (AtomicMoveNotSupportedException e) {
+                Files.move(temp, target, StandardCopyOption.REPLACE_EXISTING);
             }
-
-            rgbImage = new BufferedImage(
-                    coverImage.getWidth(),
-                    coverImage.getHeight(),
-                    BufferedImage.TYPE_INT_RGB
-            );
-            Graphics2D g = rgbImage.createGraphics();
-            g.drawImage(coverImage, 0, 0, Color.WHITE, null);
-            g.dispose();
-            // Note: coverImage is not flushed here - caller is responsible for its lifecycle
-
-            cropped = applyCoverCropping(rgbImage);
-            if (cropped != rgbImage) {
-                rgbImage.flush();
-                rgbImage = cropped;
+        } catch (IOException | RuntimeException e) {
+            try {
+                Files.deleteIfExists(temp);
+            } catch (IOException suppressed) {
+                e.addSuppressed(suppressed);
             }
-
-            // Resize original image if too large to prevent OOM
-            double scale = Math.min(
-                    (double) MAX_ORIGINAL_WIDTH / rgbImage.getWidth(),
-                    (double) MAX_ORIGINAL_HEIGHT / rgbImage.getHeight()
-            );
-            if (scale < 1.0) {
-                resized = resizeImage(rgbImage, (int) (rgbImage.getWidth() * scale), (int) (rgbImage.getHeight() * scale));
-                rgbImage.flush(); // Release resources of the original large image
-                rgbImage = resized;
-            }
-
-            File originalFile = new File(folder, COVER_FILENAME);
-            boolean originalSaved = ImageIO.write(rgbImage, IMAGE_FORMAT, originalFile);
-
-            // Determine thumbnail dimensions based on source aspect ratio
-            int thumbWidth, thumbHeight;
-            double aspectRatio = (double) rgbImage.getWidth() / rgbImage.getHeight();
-            if (aspectRatio >= 0.85 && aspectRatio <= 1.15) {
-                // Square-ish image (e.g., audiobook covers) - keep square
-                thumbWidth = THUMBNAIL_WIDTH;
-                thumbHeight = THUMBNAIL_WIDTH;
-            } else {
-                // Portrait/landscape - use standard dimensions
-                thumbWidth = THUMBNAIL_WIDTH;
-                thumbHeight = THUMBNAIL_HEIGHT;
-            }
-            thumb = resizeImage(rgbImage, thumbWidth, thumbHeight);
-            File thumbnailFile = new File(folder, THUMBNAIL_FILENAME);
-            boolean thumbnailSaved = ImageIO.write(thumb, IMAGE_FORMAT, thumbnailFile);
-
-            return originalSaved && thumbnailSaved;
-        } finally {
-            // Cleanup resources created within this method
-            // Note: cropped/resized may equal rgbImage after reassignment, avoid double-flush
-            if (rgbImage != null) {
-                rgbImage.flush();
-            }
-            if (cropped != null && cropped != rgbImage) {
-                cropped.flush();
-            }
-            if (resized != null && resized != rgbImage) {
-                resized.flush();
-            }
-            if (thumb != null) {
-                thumb.flush();
-            }
+            throw e;
         }
-    }
-
-    private BufferedImage applyCoverCropping(BufferedImage image) {
-        CoverCroppingSettings settings = appSettingService.getAppSettings().getCoverCroppingSettings();
-        if (settings == null) {
-            return image;
-        }
-
-        int width = image.getWidth();
-        int height = image.getHeight();
-        double heightToWidthRatio = (double) height / width;
-        double widthToHeightRatio = (double) width / height;
-        double threshold = settings.getAspectRatioThreshold();
-        boolean smartCrop = settings.isSmartCroppingEnabled();
-
-        boolean isExtremelyTall = settings.isVerticalCroppingEnabled() && heightToWidthRatio > threshold;
-        if (isExtremelyTall) {
-            int croppedHeight = (int) (width * TARGET_COVER_ASPECT_RATIO);
-            log.debug("Cropping tall image: {}x{} (ratio {}) -> {}x{}, smartCrop={}",
-                    width, height, String.format("%.2f", heightToWidthRatio), width, croppedHeight, smartCrop);
-            return cropFromTop(image, width, croppedHeight, smartCrop);
-        }
-
-        boolean isExtremelyWide = settings.isHorizontalCroppingEnabled() && widthToHeightRatio > threshold;
-        if (isExtremelyWide) {
-            int croppedWidth = (int) (height / TARGET_COVER_ASPECT_RATIO);
-            log.debug("Cropping wide image: {}x{} (ratio {}) -> {}x{}, smartCrop={}",
-                    width, height, String.format("%.2f", widthToHeightRatio), croppedWidth, height, smartCrop);
-            return cropFromLeft(image, croppedWidth, height, smartCrop);
-        }
-
-        return image;
-    }
-
-    private BufferedImage cropFromTop(BufferedImage image, int targetWidth, int targetHeight, boolean smartCrop) {
-        int startY = 0;
-        if (smartCrop) {
-            int contentStartY = findContentStartY(image);
-            int margin = (int) (targetHeight * SMART_CROP_MARGIN_PERCENT);
-            startY = Math.max(0, contentStartY - margin);
-
-            int maxStartY = image.getHeight() - targetHeight;
-            startY = Math.min(startY, maxStartY);
-        }
-        return image.getSubimage(0, startY, targetWidth, targetHeight);
-    }
-
-    private BufferedImage cropFromLeft(BufferedImage image, int targetWidth, int targetHeight, boolean smartCrop) {
-        int startX = 0;
-        if (smartCrop) {
-            int contentStartX = findContentStartX(image);
-            int margin = (int) (targetWidth * SMART_CROP_MARGIN_PERCENT);
-            startX = Math.max(0, contentStartX - margin);
-
-            int maxStartX = image.getWidth() - targetWidth;
-            startX = Math.min(startX, maxStartX);
-        }
-        return image.getSubimage(startX, 0, targetWidth, targetHeight);
-    }
-
-    private int findContentStartY(BufferedImage image) {
-        for (int y = 0; y < image.getHeight(); y++) {
-            if (!isRowUniformColor(image, y)) {
-                return y;
-            }
-        }
-        return 0;
-    }
-
-    private int findContentStartX(BufferedImage image) {
-        for (int x = 0; x < image.getWidth(); x++) {
-            if (!isColumnUniformColor(image, x)) {
-                return x;
-            }
-        }
-        return 0;
-    }
-
-    private boolean isRowUniformColor(BufferedImage image, int y) {
-        int firstPixel = image.getRGB(0, y);
-        for (int x = 1; x < image.getWidth(); x++) {
-            if (!colorsAreSimilar(firstPixel, image.getRGB(x, y))) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private boolean isColumnUniformColor(BufferedImage image, int x) {
-        int firstPixel = image.getRGB(x, 0);
-        for (int y = 1; y < image.getHeight(); y++) {
-            if (!colorsAreSimilar(firstPixel, image.getRGB(x, y))) {
-                return false;
-            }
-        }
-        return true;
-    }
-
-    private boolean colorsAreSimilar(int rgb1, int rgb2) {
-        int r1 = (rgb1 >> 16) & 0xFF, g1 = (rgb1 >> 8) & 0xFF, b1 = rgb1 & 0xFF;
-        int r2 = (rgb2 >> 16) & 0xFF, g2 = (rgb2 >> 8) & 0xFF, b2 = rgb2 & 0xFF;
-        return Math.abs(r1 - r2) <= SMART_CROP_COLOR_TOLERANCE
-                && Math.abs(g1 - g2) <= SMART_CROP_COLOR_TOLERANCE
-                && Math.abs(b1 - b2) <= SMART_CROP_COLOR_TOLERANCE;
     }
 
     public static void setBookCoverPath(BookMetadataEntity bookMetadataEntity) {

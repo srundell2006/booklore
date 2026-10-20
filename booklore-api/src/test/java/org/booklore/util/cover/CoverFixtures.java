@@ -95,9 +95,19 @@ final class CoverFixtures {
 
     static BufferedImage gray(int width, int height) {
         BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_BYTE_GRAY);
+        WritableRaster raster = image.getRaster();
+        Random random = new Random(14);
+        int[] row = new int[width];
+        for (int y = 0; y < height; y++) {
+            for (int x = 0; x < width; x++) {
+                row[x] = (x * 127 / Math.max(1, width - 1) + y * 127 / Math.max(1, height - 1) + random.nextInt(8)) & 0xFF;
+            }
+            raster.setSamples(0, y, width, 1, 0, row);
+        }
         Graphics2D g = image.createGraphics();
         try {
-            g.drawImage(picture(width, height, BufferedImage.TYPE_INT_RGB, 14), 0, 0, null);
+            g.setColor(Color.DARK_GRAY);
+            g.fillOval(width / 5, height / 5, width / 2, height / 3);
         } finally {
             g.dispose();
         }

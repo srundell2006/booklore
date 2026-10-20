@@ -11,6 +11,7 @@ import org.booklore.model.dto.ComicMetadata;
 import org.booklore.util.ArchiveUtils;
 import org.booklore.util.CbxArchive;
 import org.booklore.util.UnrarHelper;
+import org.booklore.util.cover.CoverImages;
 import org.springframework.stereotype.Component;
 import org.w3c.dom.Document;
 import org.w3c.dom.NodeList;
@@ -735,9 +736,8 @@ public class CbxMetadataExtractor implements FileMetadataExtractor {
 
     private boolean canDecode(byte[] bytes) {
         if (bytes == null || bytes.length == 0) return false;
-        try (ByteArrayInputStream bais = new ByteArrayInputStream(bytes)) {
-            BufferedImage img = ImageIO.read(bais);
-            return img != null;
+        try {
+            return CoverImages.canDecode(bytes);
         } catch (IOException e) {
             return false;
         }
