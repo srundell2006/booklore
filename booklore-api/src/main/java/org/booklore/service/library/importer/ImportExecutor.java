@@ -38,11 +38,13 @@ import java.util.function.BooleanSupplier;
  *   <li>A task's deadline ({@code app.scan.import-file-timeout-seconds}) starts when it gets its slot, so time spent
  *       queued never counts against it. A task still running at its deadline is abandoned: its slot and render permit
  *       go to the next task at once, its heap is given back and counted as orphaned, its child processes are killed
- *       and its thread is interrupted. That frees a thread in an interruptible wait, but not one stuck in a CIFS read;
- *       such a thread counts as stuck until it returns, and whatever it returns is dropped.</li>
+ *       and its thread is interrupted, from a thread of its own because that can block. That frees a thread in an
+ *       interruptible wait, but not one stuck in a CIFS read; such a thread counts as stuck until it returns, and
+ *       whatever it returns is dropped.</li>
  *   <li>While {@code app.scan.import-max-stuck-threads} abandoned threads are still stuck, or orphaned heap reaches
  *       half the budget, the breaker is open and tasks are skipped instead of started, so stuck threads cannot pile
- *       up: there are never more than max-stuck-threads + io-parallelism - 1.</li>
+ *       up: there are never more than max-stuck-threads + io-parallelism - 1, each with at most one more thread
+ *       blocked interrupting it.</li>
  *   <li>Cover decodes, renders and encodes share {@code app.scan.import-render-parallelism} permits and a heap
  *       budget, through each task's {@link PrepareContext}. Waits for them end at the task's deadline.</li>
  * </ul>
@@ -70,6 +72,7 @@ public class ImportExecutor {
     /** Started tasks whose threads have not returned, abandoned ones included. */
     private final Set<FileTask<?>> live = ConcurrentHashMap.newKeySet();
     private final ThreadFactory workers = Thread.ofPlatform().daemon(true).name("book-import-io-", 0).factory();
+    private final ThreadFactory interrupters = Thread.ofPlatform().daemon(true).name("book-import-interrupt-", 0).factory();
     private final ScheduledThreadPoolExecutor watchdog;
     private final Thread dispatcher;
     private volatile boolean shuttingDown;
@@ -296,13 +299,28 @@ public class ImportExecutor {
             ioPermits.release();
             orphanedHeapBytes.addAndGet(task.context().revokeAll());
         }
-        task.context().destroyProcesses();
-        task.interrupt();
         log.debug("Gave up on import task {} after {} ms; {} import threads stuck",
                 task.label(), TimeUnit.NANOSECONDS.toMillis(task.elapsedNanos()), stuck.get());
         task.complete(shutdown
                 ? new Outcome.Skipped<>(task.label(), SkipReason.SHUTDOWN)
                 : new Outcome.TimedOut<>(task.label(), task.elapsedNanos()));
+        task.context().destroyProcesses();
+        interruptElsewhere(task);
+    }
+
+    /**
+     * Interrupts an abandoned task's thread from a thread of its own. Interrupting a thread blocked in a FileChannel
+     * read (PDFBox, zip and 7z archives, audio tags) closes the channel, and the close waits for the read to end, which
+     * a read wedged on a share never does. Neither the watchdog nor the shutdown thread may wait with it, so a new
+     * thread does, blocked exactly as long as the read.
+     */
+    private void interruptElsewhere(FileTask<?> task) {
+        try {
+            interrupters.newThread(task::interrupt).start();
+        } catch (RuntimeException | Error e) {
+            // No thread could be created; the task is given up on all the same
+            log.warn("Could not interrupt abandoned import task {}: {}", task.label(), e.toString());
+        }
     }
 
     private void skipQueued() {

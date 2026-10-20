@@ -15,7 +15,9 @@ import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.io.IOException;
 import java.io.InputStream;
+import java.nio.channels.spi.AbstractInterruptibleChannel;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -175,6 +177,48 @@ class ImportExecutorTest {
         assertThat(executor.breakerOpen()).isFalse();
         // What it returned late is dropped
         assertThat(outcome(wedged)).isSameAs(outcome);
+    }
+
+    /**
+     * A channel whose read blocks until {@link #release} opens, and whose close waits for that read to end, as
+     * FileChannelImpl's close does (NativeThreadSet.signalAndWait). Interrupting the reader closes the channel, so with
+     * a read wedged on a share the interrupting thread blocks as long as the read.
+     */
+    private final class WedgedChannel extends AbstractInterruptibleChannel {
+        String read() throws IOException {
+            begin();
+            try {
+                wedge();
+            } finally {
+                end(false);
+            }
+            return "late";
+        }
+
+        @Override
+        protected void implCloseChannel() {
+            wedge();
+        }
+    }
+
+    @Test
+    void aTaskWedgedInAChannelReadIsGivenUpOnWithoutBlockingTheWatchdogOrShutdown() throws Exception {
+        Duration timeout = Duration.ofMillis(300);
+        ImportExecutor executor = executor(2, timeout);
+        FileTask<String> wedged = submit(executor, "wedged pdf", ctx -> new WedgedChannel().read());
+
+        assertThat(outcome(wedged)).isInstanceOfSatisfying(Outcome.TimedOut.class, timedOut ->
+                assertThat(Duration.ofNanos(timedOut.elapsedNanos())).isBetween(timeout, timeout.plusMillis(250)));
+        // The watchdog still gives up on the next task at its deadline
+        assertThat(outcome(submit(executor, "next", ctx -> wedge()))).isInstanceOf(Outcome.TimedOut.class);
+        FileTask<String> running = submit(executor, "running pdf", ctx -> new WedgedChannel().read());
+        awaitUntil("the task to start", () -> running.state() == State.RUNNING);
+
+        long started = System.nanoTime();
+        executor.shutdown();
+
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isLessThan(Duration.ofSeconds(1));
+        assertThat(outcome(running)).isEqualTo(new Outcome.Skipped<>("running pdf", SkipReason.SHUTDOWN));
     }
 
     @Test
