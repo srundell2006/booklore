@@ -204,4 +204,72 @@ class LibraryScanRepositoryTest {
                     .isEqualTo("Prologue");
         }
     }
+
+    @Nested
+    class GroupingLookups {
+
+        @Test
+        void filelessBooksWithMetadataMatchTheGroupByQueryAndComeWithMetadataLoaded() {
+            BookEntity physical = book(library, null, false);
+            metadata(physical, "Dune");
+            BookEntity physicalWithPath = book(library, libraryPath, false);
+            metadata(physicalWithPath, "Emma");
+            BookEntity deletedPhysical = book(library, null, true);
+            metadata(deletedPhysical, "Gone");
+            BookEntity withFile = book(library, libraryPath, false);
+            metadata(withFile, "Has File");
+            file(withFile, "", "Has File.epub", BookFileType.EPUB, true);
+            clear();
+
+            List<Long> expected = bookRepository.findFilelessBooksByLibraryId(library.getId()).stream()
+                    .map(BookEntity::getId).sorted().toList();
+            clear();
+
+            List<BookEntity> fileless = bookRepository.findFilelessBooksWithMetadataByLibraryId(library.getId());
+            long statements = statistics().getPrepareStatementCount();
+
+            assertThat(fileless).extracting(BookEntity::getId)
+                    .containsExactlyElementsOf(expected)
+                    .containsExactly(physical.getId(), physicalWithPath.getId());
+            assertThat(fileless).extracting(b -> b.getMetadata().getTitle()).containsExactly("Dune", "Emma");
+            assertThat(fileless.get(1).getLibraryPath().getId()).isEqualTo(libraryPath.getId());
+            assertThat(statistics().getPrepareStatementCount()).isEqualTo(statements);
+        }
+
+        @Test
+        void booksInDirectoryMatchThePlainQueryAndComeWithAllTheirFiles() {
+            BookEntity first = book(library, libraryPath, false);
+            BookFileEntity firstEpub = file(first, "Author/Title", "Title.epub", BookFileType.EPUB, true);
+            BookFileEntity firstAudio = file(first, "Author/Title/audio", "audio", BookFileType.AUDIOBOOK, true);
+            BookFileEntity firstNotes = file(first, "Author/Title", "notes.txt", BookFileType.PDF, false);
+            BookEntity second = book(library, libraryPath, false);
+            BookFileEntity secondPdf = file(second, "Author/Title", "Other.pdf", BookFileType.PDF, true);
+            BookEntity deleted = book(library, libraryPath, true);
+            file(deleted, "Author/Title", "Deleted.epub", BookFileType.EPUB, true);
+            BookEntity onlyNonBook = book(library, libraryPath, false);
+            file(onlyNonBook, "Author/Title", "cover.jpg", BookFileType.PDF, false);
+            BookEntity elsewhere = book(library, libraryPath, false);
+            file(elsewhere, "Author/Other", "Other.epub", BookFileType.EPUB, true);
+            clear();
+
+            List<Long> expected = bookRepository.findAllByLibraryPathIdAndFileSubPath(libraryPath.getId(), "Author/Title")
+                    .stream().map(BookEntity::getId).sorted().toList();
+            clear();
+
+            List<BookEntity> books = bookRepository.findAllWithFilesByLibraryPathIdAndFileSubPath(libraryPath.getId(), "Author/Title");
+            long statements = statistics().getPrepareStatementCount();
+
+            assertThat(books).extracting(BookEntity::getId)
+                    .containsExactlyElementsOf(expected)
+                    .containsExactly(first.getId(), second.getId());
+            assertThat(books.getFirst().getBookFiles()).extracting(BookFileEntity::getId)
+                    .containsExactly(firstEpub.getId(), firstAudio.getId(), firstNotes.getId());
+            assertThat(books.get(1).getBookFiles()).extracting(BookFileEntity::getId).containsExactly(secondPdf.getId());
+            // What grouping reads: primary file (needs the library's format priority) and file types.
+            assertThat(books).extracting(b -> b.getPrimaryBookFile().getId())
+                    .containsExactly(firstEpub.getId(), secondPdf.getId());
+            assertThat(books.getFirst().getLibraryPath().getId()).isEqualTo(libraryPath.getId());
+            assertThat(statistics().getPrepareStatementCount()).isEqualTo(statements);
+        }
+    }
 }
