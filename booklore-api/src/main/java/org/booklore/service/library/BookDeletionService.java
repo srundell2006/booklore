@@ -1,6 +1,5 @@
 package org.booklore.service.library;
 
-import org.booklore.model.dto.settings.LibraryFile;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.LibraryEntity;
@@ -53,31 +52,26 @@ public class BookDeletionService {
     }
 
     /**
-     * Handles books whose primary file is gone: drops their book files that are no longer on
-     * disk and deletes the books that have no book-format file left. Files under a path the
-     * scan could not read are kept, since the scan cannot tell whether they still exist.
+     * Handles books whose primary file a rescan found gone. The rescan has already deleted
+     * every vanished file row it could vouch for, so this only decides from what is left: a
+     * book that still has a book-format file keeps it as its new primary file, the rest are
+     * deleted. It never drops files itself, because a file it does not know about (one added
+     * while the rescan ran, say) is not proof of anything.
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void processDeletedLibraryFiles(List<Long> deletedBookIds, LibraryScanResult scanResult) {
+    public void processDeletedLibraryFiles(List<Long> deletedBookIds) {
         if (deletedBookIds.isEmpty()) {
             return;
         }
 
-        Set<String> existingFileNames = scanResult.files().stream()
-                .map(LibraryFile::getFileName)
-                .collect(Collectors.toSet());
-
-        List<BookEntity> books = bookRepository.findAllById(deletedBookIds);
         List<Long> booksToDelete = new ArrayList<>();
-
-        for (BookEntity book : books) {
-            if (!tryPromoteAlternativeFormatToBook(book, existingFileNames, scanResult)) {
+        for (BookEntity book : bookRepository.findAllById(deletedBookIds)) {
+            if (book.getBookFiles().stream().anyMatch(BookFileEntity::isBook)) {
+                log.info("Book ID {} lost its primary file but keeps another format", book.getId());
+            } else {
                 booksToDelete.add(book.getId());
             }
         }
-
-        entityManager.flush();
-        entityManager.clear();
 
         if (!booksToDelete.isEmpty()) {
             deleteRemovedBooks(booksToDelete);
@@ -156,38 +150,6 @@ public class BookDeletionService {
         log.info("Purged {} book files of disallowed formats from library: {}",
                 disallowedFiles.size(), libraryEntity.getName());
         return true;
-    }
-
-    private boolean tryPromoteAlternativeFormatToBook(BookEntity book, Set<String> existingFileNames,
-                                                      LibraryScanResult scanResult) {
-        List<BookFileEntity> deletedBookFiles = book.getBookFiles().stream()
-                .filter(BookFileEntity::isBook)
-                .filter(bf -> !existingFileNames.contains(bf.getFileName()))
-                .filter(bf -> !isUnderIncompletePath(bf, scanResult))
-                .toList();
-
-        deletedBookFiles.forEach(bf -> {
-            book.getBookFiles().remove(bf);
-            bookAdditionalFileRepository.delete(bf);
-        });
-
-        boolean hasRemainingBookFiles = book.getBookFiles().stream()
-                .anyMatch(BookFileEntity::isBook);
-
-        if (hasRemainingBookFiles) {
-            bookRepository.save(book);
-            log.info("Removed {} deleted book file(s) for book ID {}", deletedBookFiles.size(), book.getId());
-            return true;
-        }
-        return false;
-    }
-
-    private static boolean isUnderIncompletePath(BookFileEntity bookFile, LibraryScanResult scanResult) {
-        if (scanResult.isComplete() || bookFile.getBook().getLibraryPath() == null
-                || bookFile.getFileSubPath() == null || bookFile.getFileName() == null) {
-            return false;
-        }
-        return scanResult.isUnderIncompletePath(bookFile.getFullFilePath());
     }
 
 

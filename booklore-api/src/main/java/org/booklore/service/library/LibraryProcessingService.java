@@ -37,11 +37,14 @@ import java.util.stream.Collectors;
  * Initial scans and rescans of a library.
  * <p>
  * Neither runs inside one big transaction. The disk walk, which on a network share can take
- * hours, happens before anything touches the database. Detection works on
- * {@link LibraryBookFiles} (one projection row per book_file) rather than on the library's
- * entities, and every phase that changes something does so in its own short transaction,
- * loading only the rows it changes. Nothing stays managed between phases, so no phase can
- * flush another phase's stale entities.
+ * hours, runs with no transaction open. Detection works on {@link LibraryBookFiles} (one
+ * projection row per book_file) rather than on the library's entities, and every phase that
+ * changes something does so in its own short transaction, loading only the rows it changes.
+ * Nothing stays managed between phases, so no phase can flush another phase's stale entities.
+ * <p>
+ * Since the database is not held at a snapshot while the walk runs, a rescan reads the rows
+ * both before and after it: removals and restores are only decided for rows that did not
+ * change in between (see {@link WalkCoverage}).
  */
 @AllArgsConstructor
 @Service
@@ -61,8 +64,12 @@ public class LibraryProcessingService {
     private final BookGroupingService bookGroupingService;
     private final PlatformTransactionManager transactionManager;
 
-    /** Ids a rescan judged gone from disk, plus how many more it kept only because the scan could not see them. */
-    record RemovalCandidates(List<Long> ids, int unverifiable) {}
+    /**
+     * Ids a rescan judged gone from disk, plus how many more it did not find but kept because
+     * the walk could not vouch for them: they lie under a path it could not read, or they
+     * changed while it ran.
+     */
+    record RemovalCandidates(List<Long> ids, int underUnreadPaths, int changedDuringWalk) {}
 
     public void processLibrary(long libraryId) {
         LibraryEntity libraryEntity = loadLibrary(libraryId);
@@ -90,6 +97,12 @@ public class LibraryProcessingService {
 
         validateLibraryPathsAccessible(libraryEntity);
 
+        // Read before the walk: a book added, moved or soft-deleted while the walk runs may be
+        // in a directory it has already listed, so the walk only judges rows still unchanged
+        // when it is done.
+        Set<BookFileScanRow> rowsBeforeWalk = Set.copyOf(
+                bookAdditionalFileRepository.findScanRowsByLibraryId(libraryEntity.getId()));
+
         // No transaction is open here: on a network share the walk can take hours.
         LibraryScanResult scanResult = libraryFileHelper.scanAllLibraryFiles(libraryEntity);
         List<LibraryFile> allLibraryFiles = scanResult.files();
@@ -115,14 +128,15 @@ public class LibraryProcessingService {
                 .map(LibraryFile::getFullPath)
                 .collect(Collectors.toSet());
 
+        WalkCoverage coverage = new WalkCoverage(rowsBeforeWalk, scanResult);
         LibraryBookFiles bookFiles = loadBookFiles(libraryEntity);
 
         // Both are judged on the rows as they were before either deletion runs. Removed books
         // in particular must be: once the vanished file rows are gone, a book whose only file
         // vanished would look fileless, and fileless books are never deleted.
-        RemovalCandidates removedFiles = detectDeletedAdditionalFiles(currentFileKeys, bookFiles, scanResult);
-        RemovalCandidates removedBooks = detectDeletedBookIds(currentFullPaths, bookFiles, libraryEntity, scanResult);
-        warnIfScanIncomplete(libraryEntity, scanResult, removedBooks, removedFiles);
+        RemovalCandidates removedFiles = detectDeletedAdditionalFiles(currentFileKeys, bookFiles, coverage);
+        RemovalCandidates removedBooks = detectDeletedBookIds(currentFullPaths, bookFiles, libraryEntity, coverage);
+        logKeptCandidates(libraryEntity, scanResult, removedBooks, removedFiles);
 
         boolean rowsChanged = false;
         if (!removedFiles.ids().isEmpty()) {
@@ -132,7 +146,8 @@ public class LibraryProcessingService {
         }
         if (!removedBooks.ids().isEmpty()) {
             log.info("Detected {} removed books in library: {}", removedBooks.ids().size(), libraryEntity.getName());
-            bookDeletionService.processDeletedLibraryFiles(removedBooks.ids(), scanResult);
+            // Decided from the files these books have left once the deletion above is done.
+            bookDeletionService.processDeletedLibraryFiles(removedBooks.ids());
             rowsChanged = true;
         }
         if (rowsChanged) {
@@ -141,7 +156,7 @@ public class LibraryProcessingService {
 
         // Restoring only flips book.deleted, which neither the purge nor new-file detection
         // reads, so the rows stay current across it.
-        bookRestorationService.restoreDeletedBooks(libraryEntity, bookFiles, currentFullPaths);
+        bookRestorationService.restoreDeletedBooks(libraryEntity, bookFiles, currentFullPaths, coverage);
         if (bookDeletionService.purgeDisallowedFormats(libraryEntity, bookFiles)) {
             bookFiles = loadBookFiles(libraryEntity);
         }
@@ -185,13 +200,14 @@ public class LibraryProcessingService {
 
     /**
      * Books whose primary file is not among the scanned paths. Soft-deleted books are skipped,
-     * fileless books are never candidates, and a book whose primary file lies under a path the
-     * scan could not read is kept.
+     * fileless books are never candidates, and a book is kept when the walk cannot vouch for
+     * its primary file.
      */
     static RemovalCandidates detectDeletedBookIds(Set<Path> currentFullPaths, LibraryBookFiles bookFiles,
-                                                  LibraryEntity libraryEntity, LibraryScanResult scanResult) {
+                                                  LibraryEntity libraryEntity, WalkCoverage coverage) {
         List<Long> ids = new ArrayList<>();
-        int unverifiable = 0;
+        int underUnreadPaths = 0;
+        int changedDuringWalk = 0;
         for (var entry : bookFiles.primaryFiles(libraryEntity.getFormatPriority()).entrySet()) {
             BookFileScanRow primaryFile = entry.getValue();
             if (primaryFile.isBookDeleted()) {
@@ -201,13 +217,15 @@ public class LibraryProcessingService {
             if (fullPath != null && currentFullPaths.contains(fullPath)) {
                 continue;
             }
-            if (scanResult.isUnderIncompletePath(fullPath)) {
-                unverifiable++;
+            if (coverage.mayHaveMissed(fullPath)) {
+                underUnreadPaths++;
+            } else if (coverage.changedDuringWalk(primaryFile)) {
+                changedDuringWalk++;
             } else {
                 ids.add(entry.getKey());
             }
         }
-        return new RemovalCandidates(ids, unverifiable);
+        return new RemovalCandidates(ids, underUnreadPaths, changedDuringWalk);
     }
 
     /**
@@ -225,28 +243,36 @@ public class LibraryProcessingService {
     }
 
     /**
-     * Book-format files of the library that the scan did not find. Files under a path the scan
-     * could not read are kept.
+     * Book-format files of the library that the scan did not find. Files the walk cannot vouch
+     * for are kept.
      */
     RemovalCandidates detectDeletedAdditionalFiles(Set<String> currentFileKeys, LibraryBookFiles bookFiles,
-                                                   LibraryScanResult scanResult) {
+                                                   WalkCoverage coverage) {
         List<Long> ids = new ArrayList<>();
-        int unverifiable = 0;
+        int underUnreadPaths = 0;
+        int changedDuringWalk = 0;
         for (BookFileScanRow bookFile : bookFiles.rows()) {
             if (!bookFile.bookFormat() || currentFileKeys.contains(generateUniqueKey(bookFile))) {
                 continue;
             }
-            if (scanResult.isUnderIncompletePath(bookFile.fullPath())) {
-                unverifiable++;
+            if (coverage.mayHaveMissed(bookFile.fullPath())) {
+                underUnreadPaths++;
+            } else if (coverage.changedDuringWalk(bookFile)) {
+                changedDuringWalk++;
             } else {
                 ids.add(bookFile.bookFileId());
             }
         }
-        return new RemovalCandidates(ids, unverifiable);
+        return new RemovalCandidates(ids, underUnreadPaths, changedDuringWalk);
     }
 
-    private void warnIfScanIncomplete(LibraryEntity libraryEntity, LibraryScanResult scanResult,
-                                      RemovalCandidates removedBooks, RemovalCandidates removedFiles) {
+    private void logKeptCandidates(LibraryEntity libraryEntity, LibraryScanResult scanResult,
+                                   RemovalCandidates removedBooks, RemovalCandidates removedFiles) {
+        if (removedBooks.changedDuringWalk() > 0 || removedFiles.changedDuringWalk() > 0) {
+            log.info("Library '{}': {} book(s) and {} book file(s) that the scan did not find changed while it ran, "
+                            + "so they were kept; the next rescan checks them again",
+                    libraryEntity.getName(), removedBooks.changedDuringWalk(), removedFiles.changedDuringWalk());
+        }
         if (scanResult.isComplete()) {
             return;
         }
@@ -260,7 +286,7 @@ public class LibraryProcessingService {
         }
         log.warn("Library '{}': the scan could not read {} path(s), so {} book(s) and {} book file(s) under them "
                         + "that were not seen were kept instead of being treated as deleted. Unreadable paths: {}",
-                libraryEntity.getName(), paths.size(), removedBooks.unverifiable(), removedFiles.unverifiable(), shown);
+                libraryEntity.getName(), paths.size(), removedBooks.underUnreadPaths(), removedFiles.underUnreadPaths(), shown);
     }
 
     /**

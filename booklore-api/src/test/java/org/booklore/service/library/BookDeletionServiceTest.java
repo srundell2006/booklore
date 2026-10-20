@@ -1,7 +1,6 @@
 package org.booklore.service.library;
 
 import jakarta.persistence.EntityManager;
-import org.booklore.model.dto.settings.LibraryFile;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.LibraryEntity;
@@ -25,7 +24,6 @@ import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
-import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -78,11 +76,6 @@ class BookDeletionServiceTest {
         return BookFileEntity.builder().id(id).fileSubPath(subPath).fileName(name).isBookFormat(true).bookType(type).build();
     }
 
-    private LibraryFile onDisk(String subPath, String name) {
-        return LibraryFile.builder().libraryEntity(library).libraryPathEntity(libraryPath)
-                .fileSubPath(subPath).fileName(name).bookFileType(BookFileType.EPUB).build();
-    }
-
     private BookFileScanRow row(long fileId, long bookId, BookFileType type, boolean bookFormat) {
         return new BookFileScanRow(fileId, bookId, 10L, "/books", "", "f" + fileId, bookFormat, type, false);
     }
@@ -97,40 +90,37 @@ class BookDeletionServiceTest {
 
     @Test
     void processDeletedLibraryFiles_keepsBooksWithARemainingFormatAndDeletesTheRest() {
-        BookFileEntity goneEpub = file(1, "a", "a.epub", BookFileType.EPUB);
+        // As loaded after the rescan deleted the vanished file rows: book 11 lost its epub but
+        // keeps a pdf, book 12 has only a supplementary file left.
         BookFileEntity presentPdf = file(2, "a", "a.pdf", BookFileType.PDF);
-        BookEntity promoted = book(11, goneEpub, presentPdf);
-        BookEntity gone = book(12, file(3, "b", "b.epub", BookFileType.EPUB));
-        LibraryScanResult scan = spy(new LibraryScanResult(List.of(onDisk("a", "a.pdf")), Set.of()));
+        BookEntity promoted = book(11, presentPdf);
+        BookFileEntity notes = file(4, "b", "notes.pdf", BookFileType.PDF);
+        notes.setBookFormat(false);
+        BookEntity gone = book(12, notes);
         when(bookRepository.findAllById(List.of(11L, 12L))).thenReturn(List.of(promoted, gone));
         when(bookRepository.findAllById(List.of(12L))).thenReturn(List.of(gone));
         givenBookFoldersUnderTempDir();
 
-        bookDeletionService.processDeletedLibraryFiles(List.of(11L, 12L), scan);
+        bookDeletionService.processDeletedLibraryFiles(List.of(11L, 12L));
 
-        verify(bookAdditionalFileRepository).delete(goneEpub);
         assertThat(promoted.getBookFiles()).containsExactly(presentPdf);
-        verify(bookRepository).save(promoted);
         verify(bookRepository).deleteAll(List.of(gone));
         verify(notificationService).sendMessage(Topic.BOOKS_REMOVE, List.of(12L));
-        // The file-name set is built once for the call, not once per book.
-        verify(scan, times(1)).files();
+        verifyNoInteractions(bookAdditionalFileRepository);
     }
 
     @Test
-    void processDeletedLibraryFiles_keepsFilesUnderPathsTheScanCouldNotRead() {
-        BookFileEntity goneEpub = file(1, "a", "a.epub", BookFileType.EPUB);
-        BookFileEntity unseenPdf = file(2, "offline/a", "a.pdf", BookFileType.PDF);
-        BookEntity book = book(11, goneEpub, unseenPdf);
-        LibraryScanResult scan = new LibraryScanResult(List.of(), Set.of(Path.of("/books/offline")));
+    void processDeletedLibraryFiles_neverDropsFilesItself() {
+        // A file the rescan did not judge, e.g. one attached while it ran, keeps its book even
+        // though the scan never saw it.
+        BookFileEntity attachedDuringRescan = file(5, "a", "a.mobi", BookFileType.MOBI);
+        BookEntity book = book(11, attachedDuringRescan);
         when(bookRepository.findAllById(List.of(11L))).thenReturn(List.of(book));
 
-        bookDeletionService.processDeletedLibraryFiles(List.of(11L), scan);
+        bookDeletionService.processDeletedLibraryFiles(List.of(11L));
 
-        verify(bookAdditionalFileRepository).delete(goneEpub);
-        verify(bookAdditionalFileRepository, never()).delete(unseenPdf);
-        assertThat(book.getBookFiles()).containsExactly(unseenPdf);
-        verify(bookRepository).save(book);
+        assertThat(book.getBookFiles()).containsExactly(attachedDuringRescan);
+        verifyNoInteractions(bookAdditionalFileRepository, fileService, notificationService);
         verify(bookRepository, never()).deleteAll(any(Iterable.class));
     }
 

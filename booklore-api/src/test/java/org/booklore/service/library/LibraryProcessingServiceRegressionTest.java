@@ -103,6 +103,6 @@ class LibraryProcessingServiceRegressionTest {
         libraryProcessingService.rescanLibrary(context);
 
         // Fileless books should NOT be marked as deleted - they are intentionally without files
-        verify(bookDeletionService, never()).processDeletedLibraryFiles(any(), any());
+        verify(bookDeletionService, never()).processDeletedLibraryFiles(any());
     }
 }

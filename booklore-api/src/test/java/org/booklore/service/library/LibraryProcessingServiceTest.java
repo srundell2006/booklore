@@ -118,6 +118,11 @@ class LibraryProcessingServiceTest {
                 bookFormat, type, bookDeleted);
     }
 
+    /** Coverage for a walk during which none of these rows changed. */
+    private static WalkCoverage unchangedSinceWalkStart(LibraryBookFiles bookFiles, LibraryScanResult scan) {
+        return new WalkCoverage(Set.copyOf(bookFiles.rows()), scan);
+    }
+
     private void givenLibrary() {
         when(libraryRepository.findById(LIBRARY_ID)).thenReturn(Optional.of(libraryEntity));
     }
@@ -281,7 +286,8 @@ class LibraryProcessingServiceTest {
                 .hasMessageContaining("not accessible");
 
         verifyNoInteractions(bookDeletionService, bookRestorationService, bookGroupingService);
-        verify(bookAdditionalFileRepository, never()).findScanRowsByLibraryId(any());
+        // Only the read from before the walk; nothing is judged on an empty walk.
+        verify(bookAdditionalFileRepository, times(1)).findScanRowsByLibraryId(LIBRARY_ID);
     }
 
     @Test
@@ -294,7 +300,7 @@ class LibraryProcessingServiceTest {
 
         rescan();
 
-        verify(bookDeletionService, never()).processDeletedLibraryFiles(any(), any());
+        verify(bookDeletionService, never()).processDeletedLibraryFiles(any());
         assertThat(filesPassedToRescanGrouping()).isEmpty();
     }
 
@@ -309,11 +315,11 @@ class LibraryProcessingServiceTest {
 
         verify(bookRepository, never()).countIncludingDeletedByLibraryId(anyLong());
         verify(bookDeletionService, never()).deleteRemovedAdditionalFiles(any());
-        verify(bookDeletionService, never()).processDeletedLibraryFiles(any(), any());
+        verify(bookDeletionService, never()).processDeletedLibraryFiles(any());
     }
 
     @Test
-    void rescanLibrary_withNothingChanged_loadsLibraryAndRowsOnce() throws IOException {
+    void rescanLibrary_withNothingChanged_loadsLibraryOnceAndRowsBeforeAndAfterTheWalk() throws IOException {
         givenLibrary();
         givenScan(libraryFile("", "book (with parens).epub"));
         givenRows(row(1, 11, "", "book (with parens).epub"));
@@ -322,7 +328,11 @@ class LibraryProcessingServiceTest {
         rescan();
 
         verify(libraryRepository, times(1)).findById(LIBRARY_ID);
-        verify(bookAdditionalFileRepository, times(1)).findScanRowsByLibraryId(LIBRARY_ID);
+        InOrder inOrder = inOrder(bookAdditionalFileRepository, libraryFileHelper);
+        inOrder.verify(bookAdditionalFileRepository).findScanRowsByLibraryId(LIBRARY_ID);
+        inOrder.verify(libraryFileHelper).scanAllLibraryFiles(libraryEntity);
+        inOrder.verify(bookAdditionalFileRepository).findScanRowsByLibraryId(LIBRARY_ID);
+        verify(bookAdditionalFileRepository, times(2)).findScanRowsByLibraryId(LIBRARY_ID);
         assertThat(filesPassedToRescanGrouping()).isEmpty();
         verifyNoInteractions(transactionManager);
     }
@@ -353,7 +363,7 @@ class LibraryProcessingServiceTest {
         rescan();
 
         verify(bookDeletionService).deleteRemovedAdditionalFiles(List.of(2L));
-        verify(bookDeletionService, never()).processDeletedLibraryFiles(any(), any());
+        verify(bookDeletionService, never()).processDeletedLibraryFiles(any());
     }
 
     @Test
@@ -361,38 +371,39 @@ class LibraryProcessingServiceTest {
         LibraryScanResult scan = new LibraryScanResult(List.of(libraryFile("", "kept.epub")), Set.of());
         givenLibrary();
         givenScan(scan);
-        // The first projection still has gone.epub; once it is deleted the reload shows book 12 fileless.
+        // The reads before and after the walk still have gone.epub; once it is deleted the reload
+        // shows book 12 fileless.
+        List<BookFileScanRow> before = List.of(row(1, 11, "", "kept.epub"), row(2, 12, "", "gone.epub"));
         when(bookAdditionalFileRepository.findScanRowsByLibraryId(LIBRARY_ID))
-                .thenReturn(List.of(row(1, 11, "", "kept.epub"), row(2, 12, "", "gone.epub")))
-                .thenReturn(List.of(row(1, 11, "", "kept.epub")));
+                .thenReturn(before, before, List.of(row(1, 11, "", "kept.epub")));
         givenNothingToGroup();
 
         rescan();
 
         verify(bookDeletionService).deleteRemovedAdditionalFiles(List.of(2L));
-        verify(bookDeletionService).processDeletedLibraryFiles(List.of(12L), scan);
+        verify(bookDeletionService).processDeletedLibraryFiles(List.of(12L));
     }
 
     @Test
     void rescanLibrary_reloadsRowsAfterDeletionsSoLaterPhasesSeeTheCurrentState() throws IOException {
         givenLibrary();
         givenScan(libraryFile("", "kept.epub"), libraryFile("", "new.epub"));
+        List<BookFileScanRow> before = List.of(row(1, 11, "", "kept.epub"), row(2, 11, "", "gone.pdf", BookFileType.PDF, true, false));
         when(bookAdditionalFileRepository.findScanRowsByLibraryId(LIBRARY_ID))
-                .thenReturn(List.of(row(1, 11, "", "kept.epub"), row(2, 11, "", "gone.pdf", BookFileType.PDF, true, false)))
-                .thenReturn(List.of(row(1, 11, "", "kept.epub")));
+                .thenReturn(before, before, List.of(row(1, 11, "", "kept.epub")));
         givenNothingToGroup();
 
         rescan();
 
         ArgumentCaptor<LibraryBookFiles> restoreRows = ArgumentCaptor.forClass(LibraryBookFiles.class);
-        verify(bookRestorationService).restoreDeletedBooks(eq(libraryEntity), restoreRows.capture(), anySet());
+        verify(bookRestorationService).restoreDeletedBooks(eq(libraryEntity), restoreRows.capture(), anySet(), any());
         assertThat(restoreRows.getValue().rows()).extracting(BookFileScanRow::bookFileId).containsExactly(1L);
 
         ArgumentCaptor<LibraryBookFiles> purgeRows = ArgumentCaptor.forClass(LibraryBookFiles.class);
         verify(bookDeletionService).purgeDisallowedFormats(eq(libraryEntity), purgeRows.capture());
         assertThat(purgeRows.getValue()).isSameAs(restoreRows.getValue());
 
-        verify(bookAdditionalFileRepository, times(2)).findScanRowsByLibraryId(LIBRARY_ID);
+        verify(bookAdditionalFileRepository, times(3)).findScanRowsByLibraryId(LIBRARY_ID);
         assertThat(filesPassedToRescanGrouping()).extracting(LibraryFile::getFileName).containsExactly("new.epub");
     }
 
@@ -407,20 +418,20 @@ class LibraryProcessingServiceTest {
         when(libraryFileHelper.filterByAllowedFormats(anyList(), any())).thenReturn(List.of(main, notes));
         // Book 12 only had a now disallowed mobi plus a supplementary notes.pdf; the purge deletes
         // it, so notes.pdf is no longer known and is picked up as new.
+        List<BookFileScanRow> before = List.of(
+                row(1, 11, "", "main.epub"),
+                row(2, 12, "", "notes.pdf", BookFileType.PDF, false, false),
+                row(3, 12, "", "old.mobi", BookFileType.MOBI, true, false));
         when(bookAdditionalFileRepository.findScanRowsByLibraryId(LIBRARY_ID))
-                .thenReturn(List.of(
-                        row(1, 11, "", "main.epub"),
-                        row(2, 12, "", "notes.pdf", BookFileType.PDF, false, false),
-                        row(3, 12, "", "old.mobi", BookFileType.MOBI, true, false)))
-                .thenReturn(List.of(row(1, 11, "", "main.epub")));
+                .thenReturn(before, before, List.of(row(1, 11, "", "main.epub")));
         when(bookDeletionService.purgeDisallowedFormats(eq(libraryEntity), any())).thenReturn(true);
         givenNothingToGroup();
 
         rescan();
 
         verify(bookDeletionService, never()).deleteRemovedAdditionalFiles(any());
-        verify(bookDeletionService, never()).processDeletedLibraryFiles(any(), any());
-        verify(bookAdditionalFileRepository, times(2)).findScanRowsByLibraryId(LIBRARY_ID);
+        verify(bookDeletionService, never()).processDeletedLibraryFiles(any());
+        verify(bookAdditionalFileRepository, times(3)).findScanRowsByLibraryId(LIBRARY_ID);
         assertThat(filesPassedToRescanGrouping()).containsExactly(notes);
     }
 
@@ -435,12 +446,14 @@ class LibraryProcessingServiceTest {
 
         rescan();
 
-        InOrder inOrder = inOrder(libraryFileHelper, bookDeletionService, bookRestorationService, bookGroupingService,
-                fileAsBookProcessor);
+        InOrder inOrder = inOrder(bookAdditionalFileRepository, libraryFileHelper, bookDeletionService,
+                bookRestorationService, bookGroupingService, fileAsBookProcessor);
+        inOrder.verify(bookAdditionalFileRepository).findScanRowsByLibraryId(LIBRARY_ID);
         inOrder.verify(libraryFileHelper).scanAllLibraryFiles(libraryEntity);
+        inOrder.verify(bookAdditionalFileRepository).findScanRowsByLibraryId(LIBRARY_ID);
         inOrder.verify(bookDeletionService).deleteRemovedAdditionalFiles(List.of(2L, 3L));
-        inOrder.verify(bookDeletionService).processDeletedLibraryFiles(List.of(12L), scan);
-        inOrder.verify(bookRestorationService).restoreDeletedBooks(eq(libraryEntity), any(), anySet());
+        inOrder.verify(bookDeletionService).processDeletedLibraryFiles(List.of(12L));
+        inOrder.verify(bookRestorationService).restoreDeletedBooks(eq(libraryEntity), any(), anySet(), any());
         inOrder.verify(bookDeletionService).purgeDisallowedFormats(eq(libraryEntity), any());
         inOrder.verify(bookGroupingService).groupForRescan(anyList(), eq(libraryEntity));
         inOrder.verify(fileAsBookProcessor).processLibraryFilesGrouped(anyMap(), eq(libraryEntity));
@@ -456,7 +469,7 @@ class LibraryProcessingServiceTest {
 
         rescan();
 
-        verify(bookDeletionService, never()).processDeletedLibraryFiles(any(), any());
+        verify(bookDeletionService, never()).processDeletedLibraryFiles(any());
         // The soft-deleted book's vanished file row is still removed, as before.
         verify(bookDeletionService).deleteRemovedAdditionalFiles(List.of(2L));
     }
@@ -480,7 +493,7 @@ class LibraryProcessingServiceTest {
         rescan();
 
         verify(bookDeletionService).deleteRemovedAdditionalFiles(List.of(4L, 5L));
-        verify(bookDeletionService).processDeletedLibraryFiles(List.of(13L), scan);
+        verify(bookDeletionService).processDeletedLibraryFiles(List.of(13L));
     }
 
     @Test
@@ -492,14 +505,108 @@ class LibraryProcessingServiceTest {
                 row(2, 11, "offline", "a.pdf", BookFileType.PDF, true, false),
                 row(3, 12, "offline/x", "b.epub"),
                 row(4, 13, "", "c.epub")));
+        WalkCoverage coverage = unchangedSinceWalkStart(bookFiles, scan);
 
-        var files = libraryProcessingService.detectDeletedAdditionalFiles(Set.of(), bookFiles, scan);
-        var books = LibraryProcessingService.detectDeletedBookIds(Set.of(), bookFiles, libraryEntity, scan);
+        var files = libraryProcessingService.detectDeletedAdditionalFiles(Set.of(), bookFiles, coverage);
+        var books = LibraryProcessingService.detectDeletedBookIds(Set.of(), bookFiles, libraryEntity, coverage);
 
         assertThat(files.ids()).containsExactly(4L);
-        assertThat(files.unverifiable()).isEqualTo(3);
+        assertThat(files.underUnreadPaths()).isEqualTo(3);
+        assertThat(files.changedDuringWalk()).isZero();
         assertThat(books.ids()).containsExactly(13L);
-        assertThat(books.unverifiable()).isEqualTo(2);
+        assertThat(books.underUnreadPaths()).isEqualTo(2);
+        assertThat(books.changedDuringWalk()).isZero();
+    }
+
+    @Test
+    void rescanLibrary_keepsTheBooksOfADirectoryTheScanCouldNotReadWhole() throws IOException {
+        // Author/Title is a folder audiobook of two tracks and 02.mp3 could not be read. The walk
+        // then reports 01.mp3 as a single file, and reports the directory as incomplete since
+        // how its tracks group depends on every one of them. Series holds two tracks kept as
+        // separate books by a booklet that could not be read either.
+        givenLibrary();
+        givenScan(new LibraryScanResult(
+                List.of(libraryFile("Author/Title", "01.mp3", BookFileType.AUDIOBOOK),
+                        libraryFile("", "Series", BookFileType.AUDIOBOOK),
+                        libraryFile("Other", "kept.epub")),
+                Set.of(Path.of(pathEntity.getPath(), "Author", "Title"), Path.of(pathEntity.getPath(), "Series"))));
+        givenRows(
+                row(1, 11, "Author", "Title", BookFileType.AUDIOBOOK, true, false),
+                row(2, 12, "Series", "a.mp3", BookFileType.AUDIOBOOK, true, false),
+                row(3, 13, "Series", "b.mp3", BookFileType.AUDIOBOOK, true, false),
+                row(4, 14, "Other", "kept.epub"),
+                row(5, 15, "Other", "gone.epub"));
+        givenNothingToGroup();
+
+        rescan();
+
+        verify(bookDeletionService).deleteRemovedAdditionalFiles(List.of(5L));
+        verify(bookDeletionService).processDeletedLibraryFiles(List.of(15L));
+    }
+
+    // ---- rescan: rows that change while the walk runs ----
+
+    @Test
+    void rescanLibrary_keepsABookAddedWhileTheWalkRan() throws IOException {
+        // Book 12 was imported into a directory the walk had already listed: it is in the rows
+        // read after the walk but was not there before it, and the walk did not see its file.
+        givenLibrary();
+        givenScan(libraryFile("", "a.epub"));
+        when(bookAdditionalFileRepository.findScanRowsByLibraryId(LIBRARY_ID))
+                .thenReturn(List.of(row(1, 11, "", "a.epub")))
+                .thenReturn(List.of(row(1, 11, "", "a.epub"), row(2, 12, "Author/X", "X.epub")));
+        givenNothingToGroup();
+
+        rescan();
+
+        verify(bookDeletionService, never()).deleteRemovedAdditionalFiles(any());
+        verify(bookDeletionService, never()).processDeletedLibraryFiles(any());
+    }
+
+    @Test
+    void rescanLibrary_keepsABookMovedWhileTheWalkRanButStillDeletesOnesThatVanished() throws IOException {
+        givenLibrary();
+        givenScan(libraryFile("", "a.epub"));
+        // Book 12's file was moved during the walk, after the walk had passed both its old and
+        // its new directory. Book 13's file was gone all along.
+        when(bookAdditionalFileRepository.findScanRowsByLibraryId(LIBRARY_ID))
+                .thenReturn(List.of(row(1, 11, "", "a.epub"), row(2, 12, "old", "m.epub"), row(3, 13, "", "gone.epub")))
+                .thenReturn(List.of(row(1, 11, "", "a.epub"), row(2, 12, "new", "m.epub"), row(3, 13, "", "gone.epub")));
+        givenNothingToGroup();
+
+        rescan();
+
+        verify(bookDeletionService).deleteRemovedAdditionalFiles(List.of(3L));
+        verify(bookDeletionService).processDeletedLibraryFiles(List.of(13L));
+    }
+
+    @Test
+    void detectionCountsRowsThatChangedWhileTheWalkRan() {
+        LibraryBookFiles before = new LibraryBookFiles(List.of(
+                row(1, 11, "", "a.epub"),
+                row(2, 12, "old", "m.epub"),
+                row(3, 13, "", "gone.epub")));
+        LibraryBookFiles after = new LibraryBookFiles(List.of(
+                row(1, 11, "", "a.epub"),
+                // moved
+                row(2, 12, "new", "m.epub"),
+                row(3, 13, "", "gone.epub"),
+                // added, with a format that outranks book 11's epub
+                row(4, 11, "", "a.pdf", BookFileType.PDF, true, false),
+                // added as a new book
+                row(5, 14, "", "x.epub")));
+        libraryEntity.setFormatPriority(List.of(BookFileType.PDF, BookFileType.EPUB));
+        WalkCoverage coverage = new WalkCoverage(Set.copyOf(before.rows()), new LibraryScanResult(List.of(), Set.of()));
+
+        var files = libraryProcessingService.detectDeletedAdditionalFiles(Set.of(), after, coverage);
+        var books = LibraryProcessingService.detectDeletedBookIds(Set.of(), after, libraryEntity, coverage);
+
+        assertThat(files.ids()).containsExactly(1L, 3L);
+        assertThat(files.changedDuringWalk()).isEqualTo(3);
+        // Book 11 is judged by its new primary file, the pdf, which the walk could not judge.
+        assertThat(books.ids()).containsExactly(13L);
+        assertThat(books.changedDuringWalk()).isEqualTo(3);
+        assertThat(books.underUnreadPaths()).isZero();
     }
 
     // ---- rescan: primary file selection ----
@@ -514,14 +621,14 @@ class LibraryProcessingServiceTest {
                 // book 12: epub present, pdf gone
                 row(3, 12, "b", "b.epub"),
                 row(4, 12, "b", "b.pdf", BookFileType.PDF, true, false)));
-        LibraryScanResult scan = new LibraryScanResult(List.of(), Set.of());
+        WalkCoverage coverage = unchangedSinceWalkStart(bookFiles, new LibraryScanResult(List.of(), Set.of()));
 
         libraryEntity.setFormatPriority(List.of(BookFileType.PDF, BookFileType.EPUB));
-        assertThat(LibraryProcessingService.detectDeletedBookIds(onDisk, bookFiles, libraryEntity, scan).ids())
+        assertThat(LibraryProcessingService.detectDeletedBookIds(onDisk, bookFiles, libraryEntity, coverage).ids())
                 .containsExactly(12L);
 
         libraryEntity.setFormatPriority(List.of());
-        assertThat(LibraryProcessingService.detectDeletedBookIds(onDisk, bookFiles, libraryEntity, scan).ids())
+        assertThat(LibraryProcessingService.detectDeletedBookIds(onDisk, bookFiles, libraryEntity, coverage).ids())
                 .containsExactly(11L);
     }
 
@@ -532,7 +639,7 @@ class LibraryProcessingServiceTest {
 
         var books = LibraryProcessingService.detectDeletedBookIds(
                 Set.of(Path.of(pathEntity.getPath(), "a.epub")), bookFiles, libraryEntity,
-                new LibraryScanResult(List.of(), Set.of()));
+                unchangedSinceWalkStart(bookFiles, new LibraryScanResult(List.of(), Set.of())));
 
         assertThat(books.ids()).containsExactly(11L);
     }
@@ -552,17 +659,20 @@ class LibraryProcessingServiceTest {
         ArgumentCaptor<LibraryBookFiles> rows = ArgumentCaptor.forClass(LibraryBookFiles.class);
         @SuppressWarnings("unchecked")
         ArgumentCaptor<Set<Path>> paths = ArgumentCaptor.forClass(Set.class);
-        verify(bookRestorationService).restoreDeletedBooks(eq(libraryEntity), rows.capture(), paths.capture());
+        ArgumentCaptor<WalkCoverage> coverage = ArgumentCaptor.forClass(WalkCoverage.class);
+        verify(bookRestorationService).restoreDeletedBooks(eq(libraryEntity), rows.capture(), paths.capture(), coverage.capture());
         assertThat(rows.getValue().rows()).extracting(BookFileScanRow::bookId).containsExactly(12L);
         assertThat(paths.getValue()).contains(Path.of(pathEntity.getPath(), "returned", "back.epub"));
+        // Book 12 was already soft-deleted, at that path, before the walk started.
+        assertThat(coverage.getValue().changedDuringWalk(rows.getValue().rows().getFirst())).isFalse();
 
         // Not deleted again, and its file is not new: only the pdf next to it goes to grouping,
         // which runs after the restore so it can attach the pdf to the restored book.
         verify(bookDeletionService, never()).deleteRemovedAdditionalFiles(any());
-        verify(bookDeletionService, never()).processDeletedLibraryFiles(any(), any());
+        verify(bookDeletionService, never()).processDeletedLibraryFiles(any());
         assertThat(filesPassedToRescanGrouping()).extracting(LibraryFile::getFileName).containsExactly("back.pdf");
         InOrder inOrder = inOrder(bookRestorationService, bookGroupingService);
-        inOrder.verify(bookRestorationService).restoreDeletedBooks(any(), any(), anySet());
+        inOrder.verify(bookRestorationService).restoreDeletedBooks(any(), any(), anySet(), any());
         inOrder.verify(bookGroupingService).groupForRescan(anyList(), any());
     }
 

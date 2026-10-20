@@ -47,6 +47,11 @@ class BookRestorationServiceTest {
         return new BookFileScanRow(fileId, bookId, 10L, "/books", "", fileName, true, type, deleted);
     }
 
+    /** Coverage for a walk during which none of these rows changed. */
+    private static WalkCoverage unchangedSinceWalkStart(LibraryBookFiles bookFiles) {
+        return new WalkCoverage(Set.copyOf(bookFiles.rows()), new LibraryScanResult(List.of(), Set.of()));
+    }
+
     @Test
     void restoresSoftDeletedBooksWhosePrimaryFileIsBackOnDisk() {
         library.setFormatPriority(List.of(BookFileType.PDF));
@@ -63,7 +68,7 @@ class BookRestorationServiceTest {
         BookEntity book12 = BookEntity.builder().id(12L).deleted(true).deletedAt(Instant.EPOCH).build();
         when(bookRepository.findAllById(List.of(12L))).thenReturn(List.of(book12));
 
-        bookRestorationService.restoreDeletedBooks(library, bookFiles, onDisk);
+        bookRestorationService.restoreDeletedBooks(library, bookFiles, onDisk, unchangedSinceWalkStart(bookFiles));
 
         assertThat(book12.getDeleted()).isFalse();
         assertThat(book12.getDeletedAt()).isNull();
@@ -79,9 +84,32 @@ class BookRestorationServiceTest {
                 row(1, 12, "a.epub", BookFileType.EPUB, true),
                 row(2, 11, "c.epub", BookFileType.EPUB, false)));
 
-        bookRestorationService.restoreDeletedBooks(library, bookFiles, Set.of(Path.of("/books/c.epub")));
-        bookRestorationService.restoreDeletedBooks(library, bookFiles, Set.of());
+        WalkCoverage coverage = unchangedSinceWalkStart(bookFiles);
+        bookRestorationService.restoreDeletedBooks(library, bookFiles, Set.of(Path.of("/books/c.epub")), coverage);
+        bookRestorationService.restoreDeletedBooks(library, bookFiles, Set.of(), coverage);
 
         verifyNoInteractions(bookRepository, bookMapper, notificationService);
+    }
+
+    @Test
+    void onlyRestoresBooksThatWereAlreadyDeletedWhenTheWalkStarted() {
+        // Book 12 was soft-deleted while the walk ran, after the walk had listed its file; book 13
+        // was deleted before and is back.
+        List<BookFileScanRow> beforeWalk = List.of(
+                row(1, 12, "a.epub", BookFileType.EPUB, false),
+                row(2, 13, "b.epub", BookFileType.EPUB, true));
+        LibraryBookFiles afterWalk = new LibraryBookFiles(List.of(
+                row(1, 12, "a.epub", BookFileType.EPUB, true),
+                row(2, 13, "b.epub", BookFileType.EPUB, true)));
+        WalkCoverage coverage = new WalkCoverage(Set.copyOf(beforeWalk), new LibraryScanResult(List.of(), Set.of()));
+        BookEntity book13 = BookEntity.builder().id(13L).deleted(true).build();
+        when(bookRepository.findAllById(List.of(13L))).thenReturn(List.of(book13));
+
+        bookRestorationService.restoreDeletedBooks(library, afterWalk,
+                Set.of(Path.of("/books/a.epub"), Path.of("/books/b.epub")), coverage);
+
+        assertThat(book13.getDeleted()).isFalse();
+        verify(bookRepository).saveAll(List.of(book13));
+        verify(bookRepository).findAllById(List.of(13L));
     }
 }

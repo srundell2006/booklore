@@ -29,16 +29,21 @@ public class BookRestorationService {
 
     /**
      * Un-deletes the soft-deleted books of the library whose primary file is back on disk.
+     * Only books that were already soft-deleted, with that primary file, when the walk started
+     * count: the walk may have listed a file just before it was removed and its book
+     * soft-deleted.
      *
      * @param currentPaths full paths of every file the scan found
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void restoreDeletedBooks(LibraryEntity libraryEntity, LibraryBookFiles bookFiles, Set<Path> currentPaths) {
+    public void restoreDeletedBooks(LibraryEntity libraryEntity, LibraryBookFiles bookFiles, Set<Path> currentPaths,
+                                    WalkCoverage coverage) {
         if (currentPaths.isEmpty()) return;
 
         List<Long> restoreIds = bookFiles.primaryFiles(libraryEntity.getFormatPriority()).entrySet().stream()
                 .filter(entry -> entry.getValue().isBookDeleted())
                 .filter(entry -> isOnDisk(entry.getValue().fullPath(), currentPaths))
+                .filter(entry -> !coverage.changedDuringWalk(entry.getValue()))
                 .map(Map.Entry::getKey)
                 .toList();
 
