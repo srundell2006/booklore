@@ -13,6 +13,8 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -97,6 +99,23 @@ class UnrarHelperWatchdogTest {
         UnrarHelper.unrarBinOverride = script.toString();
 
         assertThat(UnrarHelper.listEntries(tempDir.resolve("book.cbr"))).containsExactly("ComicInfo.xml", "page_001.jpg");
+    }
+
+    @Test
+    void slowListWhilePreparingAFileForImportIsLeftToTheFilesDeadline() throws Exception {
+        Path script = tempDir.resolve("slow-unrar");
+        // Takes longer than the process timeout of 500 ms, as a working unrar can on slow storage
+        Files.writeString(script, "#!/bin/sh\nsleep 1\nprintf 'ComicInfo.xml\\npage_001.jpg\\n'\n");
+        Files.setPosixFilePermissions(script, PosixFilePermissions.fromString("rwx------"));
+        UnrarHelper.unrarBinOverride = script.toString();
+        List<Process> registered = new ArrayList<>();
+
+        List<String> entries = ScopedValue.where(PrepareContext.CURRENT, TestProcesses.importContext(registered::add))
+                .call(() -> UnrarHelper.listEntries(tempDir.resolve("book.cbr")));
+
+        assertThat(entries).containsExactly("ComicInfo.xml", "page_001.jpg");
+        // The import kills it if the file's deadline passes first
+        assertThat(registered).hasSize(1);
     }
 
     @Test

@@ -2,6 +2,7 @@ package org.booklore.service.metadata.extractor;
 
 import org.booklore.model.dto.AudiobookMetadata;
 import org.booklore.model.dto.BookMetadata;
+import org.booklore.service.fileprocessor.prepare.PrepareContext;
 import org.booklore.service.reader.FfprobeService;
 import org.booklore.util.TestProcesses;
 import org.junit.jupiter.api.Test;
@@ -15,6 +16,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
+import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -23,7 +25,8 @@ import static org.mockito.Mockito.when;
 
 /**
  * ffprobe used to be waited for with no bound, after its output was read to the end, so one that hung blocked the
- * import for good. It is now killed at its timeout and the book gets the default chapter.
+ * import for good. It is now killed at its timeout and the book gets the default chapter. While a file is prepared
+ * for import, the file's deadline bounds it instead.
  */
 @EnabledOnOs({OS.LINUX, OS.MAC})
 class AudiobookFfprobeWatchdogTest {
@@ -61,6 +64,25 @@ class AudiobookFfprobeWatchdogTest {
 
         assertThat(chapters).extracting(AudiobookMetadata.ChapterInfo::getTitle).containsExactly("Opening", "Chapter 2");
         assertThat(chapters).extracting(AudiobookMetadata.ChapterInfo::getEndTimeMs).containsExactly(600L, 1200L);
+    }
+
+    @Test
+    void slowFfprobeWhilePreparingAFileForImportIsLeftToTheFilesDeadlineAndGivesItsChapters() throws Exception {
+        // Outlives the 500 ms process timeout, as a working ffprobe can reading a large moov atom from slow storage
+        Path ffprobe = script("slow-ffprobe", """
+                sleep 1
+                echo '{"chapters": [{"start_time": "0.000", "end_time": "0.600", "tags": {"title": "Opening"}}]}'
+                """);
+        File book = Files.copy(MP3, tempDir.resolve("book.mp3")).toFile();
+        List<Process> registered = new ArrayList<>();
+
+        BookMetadata metadata = ScopedValue.where(PrepareContext.CURRENT, TestProcesses.importContext(registered::add))
+                .call(() -> extractorUsing(ffprobe).extractMetadata(book));
+
+        assertThat(metadata.getAudiobookMetadata().getChapters()).extracting(AudiobookMetadata.ChapterInfo::getTitle)
+                .containsExactly("Opening");
+        // The import kills it if the file's deadline passes first
+        assertThat(registered).hasSize(1);
     }
 
     @Test

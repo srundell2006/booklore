@@ -451,7 +451,7 @@ public class AudiobookMetadataExtractor implements FileMetadataExtractor {
 
                 boolean exited = process.waitFor(timeout.toNanos(), TimeUnit.NANOSECONDS);
                 if (!exited || watched.killed()) {
-                    log.debug("FFprobe timed out for {}", audioFile.getName());
+                    log.warn("FFprobe timed out for {}; its chapters were not read", audioFile.getName());
                     return null;
                 }
                 int exitCode = process.exitValue();

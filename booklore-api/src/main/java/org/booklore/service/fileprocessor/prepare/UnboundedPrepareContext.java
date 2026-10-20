@@ -26,6 +26,6 @@ final class UnboundedPrepareContext implements PrepareContext {
 
     @Override
     public void registerProcess(Process process) {
-        // ProcessWatchdog still enforces the process's own timeout
+        // Never bound as CURRENT, so ProcessWatchdog keeps the process's own timeout
     }
 }

@@ -1,7 +1,5 @@
 package org.booklore.util;
 
-import org.booklore.service.fileprocessor.prepare.HeapReservation;
-import org.booklore.service.fileprocessor.prepare.IoCallable;
 import org.booklore.service.fileprocessor.prepare.PrepareContext;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
@@ -76,27 +74,7 @@ class ProcessWatchdogTest {
     @Test
     void processWatchedWhilePreparingAFileIsRegisteredWithThePreparation() throws Exception {
         List<Process> registered = new ArrayList<>();
-        PrepareContext ctx = new PrepareContext() {
-            @Override
-            public void checkpoint() {
-            }
-
-            @Override
-            public <T> T render(long estimatedBytes, IoCallable<T> work) throws Exception {
-                return work.call();
-            }
-
-            @Override
-            public HeapReservation reserveHeap(long bytes) {
-                return () -> {
-                };
-            }
-
-            @Override
-            public void registerProcess(Process process) {
-                registered.add(process);
-            }
-        };
+        PrepareContext ctx = TestProcesses.importContext(registered::add);
         Process inside = new ProcessBuilder("sh", "-c", "echo done").start();
         Process outside = new ProcessBuilder("sh", "-c", "echo done").start();
 
@@ -107,6 +85,24 @@ class ProcessWatchdogTest {
         ProcessWatchdog.watch(outside, Duration.ofSeconds(30)).close();
 
         assertThat(registered).containsExactly(inside);
+    }
+
+    @Test
+    void processWatchedWhilePreparingAFileIsLeftToTheFilesDeadline() throws Exception {
+        // Slow but working, as on slow storage: it outlives its own timeout, which the preparation's deadline replaces
+        Process process = new ProcessBuilder("sh", "-c", "sleep 1; echo done").start();
+
+        String output = ScopedValue.where(PrepareContext.CURRENT, TestProcesses.importContext(p -> {
+        })).call(() -> {
+            try (ProcessWatchdog.WatchedProcess watched = ProcessWatchdog.watch(process, Duration.ofMillis(200));
+                 InputStream out = process.getInputStream()) {
+                String read = new String(out.readAllBytes()).trim();
+                assertThat(watched.killed()).isFalse();
+                return read;
+            }
+        });
+
+        assertThat(output).isEqualTo("done");
     }
 
     @Test

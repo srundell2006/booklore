@@ -31,14 +31,18 @@ public final class ProcessWatchdog {
      * Kills {@code process} if it is still running after {@code timeout}. Close the result when done with the process:
      * that stops the timer, and kills the process if it is still running.
      * <p>
-     * Called while preparing a file for import, the process is also registered with that preparation's
-     * {@link PrepareContext}, so it is killed as soon as the import gives up on the file.
+     * Called while preparing a file for import, the process is registered with that preparation's
+     * {@link PrepareContext} instead of getting a timeout of its own: the import kills it when it gives up on the file
+     * at the file's deadline, and reads the file again on the next scan. A timeout of its own could kill a process that
+     * is slow but working on slow storage while the file still has time, and its caller would then save what it had
+     * without it, such as a book without its chapters, for good.
      */
     public static WatchedProcess watch(Process process, Duration timeout) {
         WatchedProcess watched = new WatchedProcess(process);
-        watched.startTimer(timeout);
         if (PrepareContext.CURRENT.isBound()) {
             PrepareContext.CURRENT.get().registerProcess(process);
+        } else {
+            watched.startTimer(timeout);
         }
         return watched;
     }

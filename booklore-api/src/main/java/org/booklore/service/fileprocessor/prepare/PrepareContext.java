@@ -31,7 +31,10 @@ public interface PrepareContext {
      */
     HeapReservation reserveHeap(long bytes) throws InterruptedException;
 
-    /** A child process the preparation started, to be killed when the preparation is given up on. */
+    /**
+     * A child process the preparation started, to be killed when the preparation is given up on. The preparation's
+     * deadline then bounds the process: {@link org.booklore.util.ProcessWatchdog} gives it no timeout of its own.
+     */
     void registerProcess(Process process);
 
     /** For a file prepared inline on the caller's thread: no permits, no heap budget, no deadline. */
