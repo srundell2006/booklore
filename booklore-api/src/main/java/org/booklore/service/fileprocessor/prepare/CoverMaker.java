@@ -72,6 +72,10 @@ public final class CoverMaker {
         CoverImages.Probe probe;
         try {
             probe = CoverImages.probe(encoded);
+            if (limitPixels) {
+                // Rejected on its header, as decode would reject it, without waiting for heap it would never use
+                CoverImages.checkPixelLimit(probe);
+            }
         } catch (IOException e) {
             if (nullIfUndecodable) {
                 return null;

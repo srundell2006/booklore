@@ -78,10 +78,22 @@ class CoverMakerTest {
         CoverMaker covers = new CoverMaker(ctx, CoverKind.BOOK, CropPolicy.NONE);
 
         assertThat(covers.fromEncoded(huge, true)).isNull();
-        assertThat(ctx.estimates).containsExactly(CoverImages.renderBytes(25_000_000L));
         assertThatThrownBy(() -> covers.fromEncodedOrThrow(huge, true))
                 .isInstanceOf(IOException.class)
-                .hasMessageContaining("exceed limit");
+                .hasMessage("Rejected image: dimensions 5000x5000 (25000000 pixels) exceed limit 20000000 — possible decompression bomb");
+        // Rejected on its header alone, as decoding rejects it, so no render permit or heap is waited for
+        assertThat(ctx.estimates).isEmpty();
+        assertThatThrownBy(() -> CoverImages.decode(huge, true)).hasMessage(
+                "Rejected image: dimensions 5000x5000 (25000000 pixels) exceed limit 20000000 — possible decompression bomb");
+    }
+
+    @Test
+    void imageOverTheDecodeLimit_isStillDecodedInFullWhenNotLimitedAsImageIoReadDecodesIt() throws Exception {
+        byte[] huge = pngHeader(5000, 5000);
+
+        // The header has no pixel data behind it, so the full decode fails, inside the render
+        assertThat(new CoverMaker(ctx, CoverKind.BOOK, CropPolicy.NONE).fromEncoded(huge, false)).isNull();
+        assertThat(ctx.estimates).containsExactly(CoverImages.renderBytes(25_000_000L));
     }
 
     @Test

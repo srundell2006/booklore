@@ -98,15 +98,7 @@ public final class CoverImages {
                     return reader.read(0, reader.getDefaultReadParam());
                 }
                 reader.setInput(iis);
-                int width = reader.getWidth(0);
-                int height = reader.getHeight(0);
-
-                long pixelCount = (long) width * height;
-                if (pixelCount > MAX_DECODE_PIXELS) {
-                    throw new IOException(String.format("Rejected image: dimensions %dx%d (%d pixels) exceed limit %d — possible decompression bomb",
-                            width, height, pixelCount, MAX_DECODE_PIXELS));
-                }
-
+                checkPixelLimit(new Probe(reader.getWidth(0), reader.getHeight(0)));
                 return reader.read(0);
             } finally {
                 reader.dispose();
@@ -115,6 +107,20 @@ public final class CoverImages {
             throw e;
         } catch (Exception e) {
             throw new IOException("ImageIO decode failed (possibly unsupported format): " + e.getMessage(), e);
+        }
+    }
+
+    /**
+     * Rejects an image too large for {@link #decode} with {@code limitPixels}, with the same exception, so a caller that
+     * has probed the image can reject it before reserving anything to decode it.
+     *
+     * @throws IOException when the image has more than {@link #MAX_DECODE_PIXELS} pixels
+     */
+    public static void checkPixelLimit(Probe probe) throws IOException {
+        long pixelCount = probe.decodedPixels();
+        if (pixelCount > MAX_DECODE_PIXELS) {
+            throw new IOException(String.format("Rejected image: dimensions %dx%d (%d pixels) exceed limit %d — possible decompression bomb",
+                    probe.width(), probe.height(), pixelCount, MAX_DECODE_PIXELS));
         }
     }
 
