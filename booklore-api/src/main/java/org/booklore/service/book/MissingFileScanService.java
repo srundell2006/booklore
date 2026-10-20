@@ -22,7 +22,9 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
-import java.nio.file.Files;
+import java.io.IOException;
+import java.io.InterruptedIOException;
+import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.*;
@@ -51,7 +53,12 @@ import java.util.concurrent.atomic.AtomicInteger;
  *       to the next book. The abandoned thread cannot be reclaimed while it is stuck
  *       (it ignores interrupts while in IO), so while {@value #MAX_STRANDED_CHECKS}
  *       abandoned checks of this or earlier scans are still stuck, the scan stops and
- *       reports that storage is not responding rather than put more threads at risk.</li>
+ *       reports that storage is not responding rather than put more threads at risk.
+ *       Once its call returns, an abandoned check stops without checking the book's
+ *       other files.</li>
+ *   <li>A book is missing only when storage says a file is not there. A check that
+ *       fails with any other error (the share reconnecting, an IO error) is reported
+ *       unresolved, like one that timed out.</li>
  * </ul>
  *
  * <p>Checking threads work from plain values produced by
@@ -301,7 +308,9 @@ public class MissingFileScanService {
         try {
             return new CheckResult(target.bookId(), target.title(), task.get(), false, target.alreadyTagged());
         } catch (ExecutionException e) {
-            log.warn("MissingFileScan: error checking '{}': {}", target.title(), e.getMessage());
+            // Storage could not say whether the files are there: as with a timeout, leave the book alone.
+            log.warn("MissingFileScan: error checking '{}' — left unchanged: {}",
+                    target.title(), e.getCause().toString());
             return unresolved(target);
         }
     }
@@ -339,8 +348,13 @@ public class MissingFileScanService {
         return new CheckResult(target.bookId(), target.title(), List.of(), true, target.alreadyTagged());
     }
 
-    /** Runs on a checking thread: the names of the target's files that are not there. */
-    private List<String> absentFiles(FileCheckTarget target) {
+    /**
+     * Runs on a checking thread: the names of the target's files that are not there.
+     * Throws when storage cannot say, so the book is left unresolved. Also throws once
+     * the scan has given up on the check, so a thread that was stuck makes no more
+     * calls to the share for a result nobody is waiting for.
+     */
+    private List<String> absentFiles(FileCheckTarget target) throws IOException {
         List<String> absent = new ArrayList<>();
         for (FileRef file : target.files()) {
             Path path = file.path();
@@ -348,18 +362,29 @@ public class MissingFileScanService {
                 absent.add(file.name());
                 continue;
             }
-            try {
-                if (!exists(path)) absent.add(file.name());
-            } catch (Exception e) {
-                absent.add(file.name());
+            if (Thread.currentThread().isInterrupted()) {
+                throw new InterruptedIOException("Gave up checking " + target.title());
             }
+            if (!exists(path)) absent.add(file.name());
         }
         return absent;
     }
 
-    /** The storage call a check makes. Package-private so tests can stand in a share that stalls. */
-    boolean exists(Path path) {
-        return Files.exists(path);
+    /**
+     * The storage call a check makes: false only when the file is not there. Package-private
+     * so tests can stand in a share that stalls.
+     *
+     * @throws IOException when storage cannot say, e.g. the share is reconnecting or failing
+     *                     reads. {@code Files.exists} makes the same {@code access} call but
+     *                     answers false for any error, which would tag healthy books.
+     */
+    boolean exists(Path path) throws IOException {
+        try {
+            path.getFileSystem().provider().checkAccess(path);
+            return true;
+        } catch (NoSuchFileException e) {
+            return false;
+        }
     }
 
     // ── persistence ───────────────────────────────────────────────────────────

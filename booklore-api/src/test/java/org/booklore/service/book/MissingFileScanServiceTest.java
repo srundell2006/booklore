@@ -24,7 +24,9 @@ import org.mockito.ArgumentCaptor;
 import org.springframework.transaction.PlatformTransactionManager;
 
 import java.io.FileInputStream;
+import java.io.IOException;
 import java.io.RandomAccessFile;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
 import java.util.ArrayList;
@@ -37,6 +39,7 @@ import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
@@ -82,17 +85,30 @@ class MissingFileScanServiceTest {
         shareAnswers.countDown();
     }
 
-    private MissingFileScanService service(Storage storage) {
+    private void loadTargets() {
         when(scanLoader.load(any(), anyString())).thenAnswer(inv -> {
             Set<Long> ids = inv.getArgument(0);
             return ids.stream().map(targets::get).toList();
         });
+    }
+
+    /** A service checking the real filesystem. */
+    private MissingFileScanService service() {
+        loadTargets();
+        return new MissingFileScanService(bookRepository, tagRepository, scanLoader, notificationService,
+                transactionManager, authenticationService, cancellationManager, magicShelfBookService);
+    }
+
+    private MissingFileScanService service(Storage storage) {
+        loadTargets();
         return new MissingFileScanService(bookRepository, tagRepository, scanLoader, notificationService,
                 transactionManager, authenticationService, cancellationManager, magicShelfBookService) {
             @Override
-            boolean exists(Path path) {
+            boolean exists(Path path) throws IOException {
                 try {
                     return storage.exists(path);
+                } catch (IOException | RuntimeException e) {
+                    throw e;
                 } catch (Exception e) {
                     throw new IllegalStateException(e);
                 }
@@ -110,7 +126,12 @@ class MissingFileScanServiceTest {
     }
 
     private static FileCheckTarget target(long id, Path file, boolean alreadyTagged) {
-        return new FileCheckTarget(id, "Book " + id, List.of(new FileRef(file.getFileName().toString(), file)), alreadyTagged);
+        return target(id, List.of(file), alreadyTagged);
+    }
+
+    private static FileCheckTarget target(long id, List<Path> files, boolean alreadyTagged) {
+        List<FileRef> refs = files.stream().map(file -> new FileRef(file.getFileName().toString(), file)).toList();
+        return new FileCheckTarget(id, "Book " + id, refs, alreadyTagged);
     }
 
     private static MissingFileScanRequest request(Set<Long> bookIds, int parallelism, boolean dryRun) {
@@ -241,6 +262,69 @@ class MissingFileScanServiceTest {
         // ...and its late return frees no second one.
         assertThat(maxActive.get()).isEqualTo(2);
         awaitNoStrandedChecks(service);
+    }
+
+    @Test
+    void abandonedCheckMakesNoMoreCallsToTheShareOnceItsStuckCallReturns() throws Exception {
+        Set<Long> ids = new LinkedHashSet<>(List.of(1L, 2L));
+        targets.put(1L, target(1L, List.of(Path.of("/library/1-stuck.epub"), Path.of("/library/1-book.pdf"),
+                Path.of("/library/1-book.mobi")), false));
+        targets.put(2L, target(2L, List.of(Path.of("/library/2-book.epub"), Path.of("/library/2-gone.pdf")), false));
+        List<Path> asked = new CopyOnWriteArrayList<>();
+        MissingFileScanService service = service(path -> {
+            asked.add(path);
+            if (path.toString().endsWith("stuck.epub")) {
+                blockUntilTheShareAnswers();
+            }
+            return !path.toString().endsWith("gone.pdf");
+        });
+
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> service.scan(request(ids, 2, true), "task-8"));
+
+        assertThat(finalProgress().getMessage()).startsWith("DRY RUN — File check complete. 1 missing (tagged "
+                + "'File Not Found'), 0 restored, 1 unresolved, 2 checked in ");
+        // The stuck call returns long after the check was given up on, and the book's other files are left alone.
+        shareAnswers.countDown();
+        awaitNoStrandedChecks(service);
+        assertThat(asked).containsExactlyInAnyOrder(Path.of("/library/1-stuck.epub"),
+                Path.of("/library/2-book.epub"), Path.of("/library/2-gone.pdf"));
+    }
+
+    @Test
+    @EnabledOnOs({OS.LINUX, OS.MAC})
+    void fileIsMissingOnlyWhenStorageSaysItIsNotThere() throws Exception {
+        Path present = Files.createFile(tempDir.resolve("present.epub"));
+        Path gone = tempDir.resolve("gone.epub");
+        // A path through a regular file: not there either.
+        Path underAFile = present.resolve("child.epub");
+        // Any other error means storage could not say, as when a CIFS mount is reconnecting (EHOSTDOWN) or failing
+        // reads (EIO). A symlink loop (ELOOP) stands in for those here.
+        Path loop = tempDir.resolve("loop.epub");
+        Path loopBack = tempDir.resolve("loop-back.epub");
+        Files.createSymbolicLink(loop, loopBack);
+        Files.createSymbolicLink(loopBack, loop);
+        targets.put(1L, target(1L, present, false));
+        targets.put(2L, target(2L, List.of(present, gone), false));
+        targets.put(3L, target(3L, underAFile, false));
+        targets.put(4L, target(4L, loop, false));
+        targets.put(5L, target(5L, List.of(present, loop), true));
+        TagEntity tag = TagEntity.builder().id(1L).name(MissingFileScanService.DEFAULT_TAG_NAME).build();
+        when(tagRepository.findByNameIgnoreCase(MissingFileScanService.DEFAULT_TAG_NAME)).thenReturn(Optional.of(tag));
+        BookEntity book2 = BookEntity.builder().id(2L).metadata(BookMetadataEntity.builder().tags(new HashSet<>()).build()).build();
+        BookEntity book3 = BookEntity.builder().id(3L).metadata(BookMetadataEntity.builder().tags(new HashSet<>()).build()).build();
+        when(bookRepository.findById(2L)).thenReturn(Optional.of(book2));
+        when(bookRepository.findById(3L)).thenReturn(Optional.of(book3));
+        MissingFileScanService service = service();
+
+        service.scan(request(new LinkedHashSet<>(List.of(1L, 2L, 3L, 4L, 5L)), 2, false), "task-9");
+
+        assertThat(finalProgress().getMessage()).startsWith("File check complete. 2 missing (tagged 'File Not Found'), "
+                + "0 restored, 2 unresolved, 5 checked in ");
+        assertThat(book2.getMetadata().getTags()).containsExactly(tag);
+        assertThat(book3.getMetadata().getTags()).containsExactly(tag);
+        // Neither tagged nor, for the book tagged already, cleared.
+        verify(bookRepository, never()).findById(4L);
+        verify(bookRepository, never()).findById(5L);
     }
 
     @Test
