@@ -33,6 +33,8 @@ public class PathPatternResolver {
     private final Pattern CONTROL_CHARACTER_PATTERN = Pattern.compile("\\p{Cntrl}");
     private final Pattern INVALID_CHARS_PATTERN = Pattern.compile("[\\\\/:*?\"<>|]");
     private final Pattern LATIN_ACCENT_PATTERN = Pattern.compile("(?<=\\p{IsLatin})\\p{M}+");
+    private final int ZERO_WIDTH_NON_JOINER = 0x200C;
+    private final int ZERO_WIDTH_JOINER = 0x200D;
     private final Pattern PLACEHOLDER_PATTERN = Pattern.compile("\\{(.*?)}");
     private final Pattern MODIFIER_PLACEHOLDER_PATTERN = Pattern.compile("\\{([^}:]+)(?::([^}]+))?}");
     private final Pattern COMMA_SPACE_PATTERN = Pattern.compile(", ");
@@ -319,26 +321,115 @@ public class PathPatternResolver {
      * <p>
      * Steps:
      * 1. NFD-decompose accented characters so combining marks become separate code points
-     *    (e.g. é → e + ́, ñ → n + ̃).
-     * 2. Strip the combining marks that sit on Latin letters, leaving the base letter, then
-     *    NFC-recompose. Every other character is kept: titles and authors in other scripts
-     *    must survive, and their marks are part of the letter (Japanese が, Devanagari vowel
-     *    signs, Cyrillic й), not an accent.
-     * 3. Remove filesystem-illegal characters (\ / : * ? " < > |).
-     * 4. Remove control characters.
-     * 5. Collapse runs of whitespace to a single space and trim.
+     *    (e.g. é → e + ́, ñ → n + ̃), and strip the marks that sit on Latin letters, leaving
+     *    the base letter.
+     * 2. Turn every Unicode space separator (no-break, ideographic, thin spaces) into a space.
+     * 3. Keep every ASCII character, and of the rest only what names are spelt with: letters,
+     *    decimal digits, the combining marks on those letters (Japanese が, Devanagari vowel
+     *    signs and Cyrillic й are a letter plus a mark, not an accent), and the zero-width
+     *    (non-)joiners between non-Latin letters that Persian and Indic text need. Punctuation
+     *    (’ – « »), symbols and emoji, control and format characters (bidi marks, zero-width
+     *    space, soft hyphen), lone surrogates and private-use or unassigned code points are
+     *    dropped. Apart from those spaces and from letters with no accent to strip (ø, ł, æ, ß),
+     *    which are now kept, Latin text so comes out as it did when every non-ASCII code point
+     *    was dropped.
+     * 4. Remove filesystem-illegal characters (\ / : * ? " < > |).
+     * 5. Remove control characters.
+     * 6. NFC-recompose.
+     * 7. Collapse runs of whitespace to a single space and strip.
+     * <p>
+     * Sanitizing an already sanitized string returns it unchanged.
      */
     private String sanitize(String input) {
         if (input == null) return "";
-        // Strip accents from Latin letters: decompose to NFD, drop their combining marks, recompose
-        String unaccented = Normalizer.normalize(
-                LATIN_ACCENT_PATTERN.matcher(Normalizer.normalize(input, Normalizer.Form.NFD)).replaceAll(""),
-                Normalizer.Form.NFC);
-        return WHITESPACE_PATTERN.matcher(
-                CONTROL_CHARACTER_PATTERN.matcher(
-                        INVALID_CHARS_PATTERN.matcher(unaccented).replaceAll("")
-                ).replaceAll("")
-        ).replaceAll(" ").trim();
+        // Strip accents from Latin letters: decompose to NFD and drop their combining marks
+        String unaccented = LATIN_ACCENT_PATTERN.matcher(Normalizer.normalize(input, Normalizer.Form.NFD)).replaceAll("");
+        String legal = CONTROL_CHARACTER_PATTERN.matcher(
+                INVALID_CHARS_PATTERN.matcher(keepNameCharacters(unaccented)).replaceAll("")
+        ).replaceAll("");
+        return WHITESPACE_PATTERN.matcher(Normalizer.normalize(legal, Normalizer.Form.NFC)).replaceAll(" ").strip();
+    }
+
+    /**
+     * Steps 2 and 3 of {@link #sanitize}, on decomposed text. A combining mark belongs to the
+     * code point before it, so it is kept only along with a letter (or the mark or joiner that
+     * follows one), never moved onto whatever came before a dropped emoji or symbol.
+     */
+    private String keepNameCharacters(String decomposed) {
+        int[] codePoints = decomposed.codePoints().toArray();
+        StringBuilder kept = new StringBuilder(decomposed.length());
+        boolean previousTakesMarks = false;
+        for (int i = 0; i < codePoints.length; i++) {
+            int codePoint = codePoints[i];
+            boolean keep;
+            if (isKeptOnItsOwn(codePoint)) {
+                codePoint = Character.isSpaceChar(codePoint) ? ' ' : codePoint;
+                keep = true;
+            } else if (isMark(codePoint)) {
+                keep = previousTakesMarks;
+            } else if (isJoiner(codePoint)) {
+                keep = joinsNonLatinLetters(kept, codePoints, i);
+            } else {
+                keep = false;
+            }
+            if (keep) {
+                kept.appendCodePoint(codePoint);
+            }
+            previousTakesMarks = keep && (Character.isLetter(codePoint) || isMark(codePoint) || isJoiner(codePoint));
+        }
+        return kept.toString();
+    }
+
+    /**
+     * Whether the zero-width (non-)joiner at {@code index} sits between non-Latin letters or
+     * marks once dropped characters are gone. Persian and Indic text need it there; anywhere
+     * else it is invisible noise that Latin names never had.
+     */
+    private boolean joinsNonLatinLetters(CharSequence kept, int[] codePoints, int index) {
+        if (kept.isEmpty()) {
+            return false;
+        }
+        int previous = Character.codePointBefore(kept, kept.length());
+        if (!isNonLatinLetter(previous) && !isMark(previous)) {
+            return false;
+        }
+        boolean skippedDropped = false;
+        for (int i = index + 1; i < codePoints.length; i++) {
+            int next = codePoints[i];
+            if (isMark(next)) {
+                if (!skippedDropped) {
+                    // The mark sits on the joiner itself (Sinhala touching letters) and is kept with it
+                    return true;
+                }
+                // Dropped along with the character it sits on
+            } else if (!isKeptOnItsOwn(next) && !isJoiner(next)) {
+                skippedDropped = true;
+            } else {
+                return isNonLatinLetter(next);
+            }
+        }
+        return false;
+    }
+
+    /** ASCII, letters, decimal digits and space separators: kept whatever surrounds them. */
+    private boolean isKeptOnItsOwn(int codePoint) {
+        return codePoint < 0x80
+                || Character.isLetter(codePoint)
+                || Character.getType(codePoint) == Character.DECIMAL_DIGIT_NUMBER
+                || Character.isSpaceChar(codePoint);
+    }
+
+    private boolean isMark(int codePoint) {
+        int type = Character.getType(codePoint);
+        return type == Character.NON_SPACING_MARK || type == Character.COMBINING_SPACING_MARK || type == Character.ENCLOSING_MARK;
+    }
+
+    private boolean isJoiner(int codePoint) {
+        return codePoint == ZERO_WIDTH_NON_JOINER || codePoint == ZERO_WIDTH_JOINER;
+    }
+
+    private boolean isNonLatinLetter(int codePoint) {
+        return Character.isLetter(codePoint) && Character.UnicodeScript.of(codePoint) != Character.UnicodeScript.LATIN;
     }
 
     private String truncateAuthorsForFilesystem(String authors) {
