@@ -21,6 +21,7 @@ import shutil
 import subprocess
 import unicodedata
 import uuid
+from email.message import Message
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
 from urllib.parse import quote
 
@@ -77,13 +78,11 @@ def parse_multipart(body: bytes, content_type: str):
         if not disposition:
             continue
 
-        name, filename = None, None
-        for chunk in disposition.split(";"):
-            chunk = chunk.strip()
-            if chunk.startswith("name="):
-                name = chunk[5:].strip('"')
-            elif chunk.startswith("filename="):
-                filename = chunk[9:].strip('"')
+        # Let the email package split the parameters: a quoted file name may contain ';'
+        params = Message()
+        params["Content-Disposition"] = disposition.split(":", 1)[1]
+        name = params.get_param("name", header="content-disposition")
+        filename = params.get_filename()
         if not name:
             continue
 
