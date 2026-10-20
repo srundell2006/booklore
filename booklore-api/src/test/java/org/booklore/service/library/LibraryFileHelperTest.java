@@ -14,6 +14,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
+import java.time.Duration;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -24,9 +25,13 @@ class LibraryFileHelperTest {
     @TempDir
     Path tempDir;
 
+    private static LibraryFileHelper newHelper() {
+        return new LibraryFileHelper(new LibraryDirectoryWalker(4, Duration.ofSeconds(30), new LibraryDirectoryWalker.FileAccess()));
+    }
+
     @Test
     void testGetLibraryFiles_HandlesInaccessibleDirectories() throws IOException {
-        LibraryFileHelper libraryFileHelper = new LibraryFileHelper();
+        LibraryFileHelper libraryFileHelper = newHelper();
 
         Files.write(tempDir.resolve("happy.epub"), new byte[]{1});
         Files.createDirectory(tempDir.resolve("some_other_random_named_dir"), PosixFilePermissions.asFileAttribute(PosixFilePermissions.fromString("---------")));
@@ -63,7 +68,7 @@ class LibraryFileHelperTest {
 
     @Test
     void testGetLibraryFiles_skipsDirectoryWithIgnoreFile() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Path ignoredDir = Files.createDirectories(tempDir.resolve("ignored-folder"));
         Files.createFile(ignoredDir.resolve(".ignore"));
@@ -78,7 +83,7 @@ class LibraryFileHelperTest {
 
     @Test
     void testGetLibraryFiles_doesNotSkipRootWithIgnoreFile() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Files.createFile(tempDir.resolve(".ignore"));
         Files.write(tempDir.resolve("root-book.epub"), new byte[]{1});
@@ -90,7 +95,7 @@ class LibraryFileHelperTest {
 
     @Test
     void testGetLibraryFiles_ignoreFileOnlyAffectsItsDirectory() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Path ignoredDir = Files.createDirectories(tempDir.resolve("ignored"));
         Files.createFile(ignoredDir.resolve(".ignore"));
@@ -106,7 +111,7 @@ class LibraryFileHelperTest {
 
     @Test
     void testGetLibraryFiles_skipsZeroByteFiles() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Files.createFile(tempDir.resolve("empty.epub"));
         Files.write(tempDir.resolve("real.epub"), new byte[]{1, 2, 3});
@@ -118,7 +123,7 @@ class LibraryFileHelperTest {
 
     @Test
     void testGetLibraryFiles_includesNonZeroByteFiles() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Files.write(tempDir.resolve("book1.epub"), new byte[]{1});
         Files.write(tempDir.resolve("book2.pdf"), new byte[]{1, 2});
@@ -129,7 +134,7 @@ class LibraryFileHelperTest {
 
     @Test
     void recognizesAllSupportedExtensions() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         for (String ext : List.of("pdf", "epub", "cbz", "cbr", "cb7", "mobi", "azw3", "azw", "fb2", "m4b", "m4a", "mp3")) {
             Files.write(tempDir.resolve("book." + ext), new byte[]{1});
@@ -141,7 +146,7 @@ class LibraryFileHelperTest {
 
     @Test
     void ignoresUnrecognizedExtensions() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Files.write(tempDir.resolve("book.lit"), new byte[]{1});
         Files.write(tempDir.resolve("book.lrf"), new byte[]{1});
@@ -156,7 +161,7 @@ class LibraryFileHelperTest {
 
     @Test
     void classifiesEbookAndAudiobookTypes() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Files.write(tempDir.resolve("book.epub"), new byte[]{1});
         Files.write(tempDir.resolve("book.m4b"), new byte[]{1});
@@ -173,7 +178,7 @@ class LibraryFileHelperTest {
 
     @Test
     void collapsesMultipleAudioFilesInSubfolderToFolderBased() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Path audioDir = Files.createDirectories(tempDir.resolve("Author/Book/audiobook"));
         for (int i = 1; i <= 5; i++) {
@@ -190,7 +195,7 @@ class LibraryFileHelperTest {
 
     @Test
     void singleAudioFileInSubfolderStaysIndividual() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Path audioDir = Files.createDirectories(tempDir.resolve("Author/Book"));
         Files.write(audioDir.resolve("standalone.m4b"), new byte[]{1});
@@ -204,7 +209,7 @@ class LibraryFileHelperTest {
 
     @Test
     void rootLevelAudioFilesNeverCollapse() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Files.write(tempDir.resolve("track1.mp3"), new byte[]{1});
         Files.write(tempDir.resolve("track2.mp3"), new byte[]{1});
@@ -218,7 +223,7 @@ class LibraryFileHelperTest {
 
     @Test
     void structure3_chapterMp3sCollapsePerSubfolder() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Path parent = Files.createDirectories(tempDir.resolve("J K Rowling - HP Audiobooks"));
         Path book1 = Files.createDirectories(parent.resolve("1 Philosopher's Stone"));
@@ -240,7 +245,7 @@ class LibraryFileHelperTest {
 
     @Test
     void structure4_ebooksAndAudiobookSubfolderDiscoveredCorrectly() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Path catchingFire = Files.createDirectories(tempDir.resolve("Suzanne Collins/Catching Fire"));
         Files.write(catchingFire.resolve("Catching Fire - Suzanne Collins.azw3"), new byte[]{1});
@@ -265,7 +270,7 @@ class LibraryFileHelperTest {
 
     @Test
     void structure1_flatRootFilesAllDiscovered() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Files.write(tempDir.resolve("Salem's Lot.epub"), new byte[]{1});
         Files.write(tempDir.resolve("Good Spirits.epub"), new byte[]{1});
@@ -281,7 +286,7 @@ class LibraryFileHelperTest {
 
     @Test
     void nestedFiles_haveCorrectSubPaths() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Path titleDir = Files.createDirectories(tempDir.resolve("Andy Weir/The Martian"));
         Files.write(titleDir.resolve("The Martian.epub"), new byte[]{1});
@@ -294,7 +299,7 @@ class LibraryFileHelperTest {
 
     @Test
     void ignoresHiddenFiles() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Files.write(tempDir.resolve(".DS_Store"), new byte[]{1});
         Files.write(tempDir.resolve(".hidden.epub"), new byte[]{1});
@@ -308,7 +313,7 @@ class LibraryFileHelperTest {
 
     @Test
     void ignoresTempFiles() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Files.write(tempDir.resolve("book.epub.part"), new byte[]{1});
         Files.write(tempDir.resolve("book.epub.tmp"), new byte[]{1});
@@ -322,7 +327,7 @@ class LibraryFileHelperTest {
 
     @Test
     void ignoresSystemDirectories() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         for (String sysDir : List.of("#recycle", "@eaDir", ".caltrash")) {
             Path dir = Files.createDirectories(tempDir.resolve(sysDir));
@@ -352,7 +357,7 @@ class LibraryFileHelperTest {
 
     @Test
     void autoDetect_collapsesAudiobookSubfolderSameAsOtherModes() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Path audioDir = Files.createDirectories(tempDir.resolve("HP Book 1"));
         for (int i = 1; i <= 5; i++) {
@@ -367,7 +372,7 @@ class LibraryFileHelperTest {
 
     @Test
     void autoDetect_singleAudioFileStaysIndividual() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Path dir = Files.createDirectories(tempDir.resolve("Book"));
         Files.write(dir.resolve("book.m4b"), new byte[]{1});
@@ -381,7 +386,7 @@ class LibraryFileHelperTest {
 
     @Test
     void deeplyNestedFilesAreDiscovered() throws IOException {
-        LibraryFileHelper helper = new LibraryFileHelper();
+        LibraryFileHelper helper = newHelper();
 
         Path deep = Files.createDirectories(tempDir.resolve("A/B/C/D/E"));
         Files.write(deep.resolve("deep.epub"), new byte[]{1});
@@ -390,5 +395,29 @@ class LibraryFileHelperTest {
 
         assertThat(files).hasSize(1);
         assertThat(files.getFirst().getFileSubPath()).isEqualTo("A/B/C/D/E");
+    }
+
+    @Test
+    void scanAllLibraryFiles_isCompleteForAReadableLibrary() throws IOException {
+        Files.write(tempDir.resolve("book.epub"), new byte[]{1});
+        Path audioDir = Files.createDirectories(tempDir.resolve("Audio"));
+        Files.write(audioDir.resolve("ch1.mp3"), new byte[]{1});
+        Files.write(audioDir.resolve("ch2.mp3"), new byte[]{1});
+
+        LibraryScanResult result = newHelper().scanAllLibraryFiles(createLibrary(tempDir));
+
+        assertThat(result.isComplete()).isTrue();
+        assertThat(result.files()).extracting(LibraryFile::getFileName).containsExactly("book.epub", "Audio");
+    }
+
+    @Test
+    void scanAllLibraryFiles_reportsAnUnreachableLibraryPath() throws IOException {
+        Path unmounted = tempDir.resolve("unmounted");
+
+        LibraryScanResult result = newHelper().scanAllLibraryFiles(createLibrary(unmounted));
+
+        assertThat(result.files()).isEmpty();
+        assertThat(result.incompletePaths()).containsExactly(unmounted);
+        assertThat(result.isUnderIncompletePath(unmounted.resolve("Author/book.epub"))).isTrue();
     }
 }
