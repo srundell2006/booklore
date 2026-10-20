@@ -261,7 +261,7 @@ export class FileMoverComponent implements OnDestroy {
       language: sanitize(meta.language || ''),
       publisher: sanitize(meta.publisher || ''),
       isbn: sanitize(meta.isbn13 || meta.isbn10 || ''),
-      currentFilename: sanitize(fileName)
+      currentFilename: fileName
     };
 
     let newPath: string;
