@@ -208,6 +208,32 @@ class LibraryScanRepositoryTest {
     }
 
     @Nested
+    class AttachingAFile {
+
+        @Test
+        void aNewFileJoinsItsBooksLoadedFilesAsSoonAsItIsBuilt() {
+            BookEntity book = book(library, libraryPath, false);
+            BookFileEntity audiobook = file(book, "Author/Title", "Title.m4b", BookFileType.AUDIOBOOK, true);
+            clear();
+
+            BookEntity loaded = bookRepository.findById(book.getId()).orElseThrow();
+            assertThat(loaded.getBookFiles()).extracting(BookFileEntity::getId).containsExactly(audiobook.getId());
+
+            // What auto-attach builds. With association management on, setting the owning side
+            // adds the file to the book's loaded list, before anything is saved.
+            BookFileEntity attached = BookFileEntity.builder()
+                    .book(loaded)
+                    .fileSubPath("Author/Title")
+                    .fileName("Title.epub")
+                    .bookType(BookFileType.EPUB)
+                    .isBookFormat(true)
+                    .build();
+
+            assertThat(loaded.getBookFiles()).hasSize(2).contains(attached);
+        }
+    }
+
+    @Nested
     class ScanRowProjection {
 
         @Test
