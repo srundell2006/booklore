@@ -24,6 +24,8 @@ public class AppProperties {
      */
     private String diskType = "LOCAL";
 
+    private Scan scan = new Scan();
+
     public boolean isLocalStorage() {
         return "LOCAL".equalsIgnoreCase(diskType);
     }
@@ -39,5 +41,23 @@ public class AppProperties {
         private String headerGroups;
         private String adminGroup;
         private String groupsDelimiter = "\\s+";  // Default to whitespace for backward compatibility
+    }
+
+    @Getter
+    @Setter
+    public static class Scan {
+        /**
+         * How many directories a library scan lists at once (clamped to 1..64). Listing is
+         * bound by filesystem round trips, so on network storage this can sit well above
+         * the core count.
+         */
+        private int walkParallelism = 16;
+
+        /**
+         * How long a directory listing may wait on one filesystem call before the scan gives
+         * up on that directory and reports it as not scanned. A large directory that keeps
+         * making progress is never cut off.
+         */
+        private int directoryTimeoutSeconds = 60;
     }
 }

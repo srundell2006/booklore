@@ -6,47 +6,52 @@ import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.BookFileExtension;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.model.enums.LibraryOrganizationMode;
+import org.booklore.service.library.LibraryDirectoryWalker.Directory;
+import org.booklore.service.library.LibraryDirectoryWalker.WalkedPath;
 import org.booklore.util.FileUtils;
+import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
-import org.jspecify.annotations.NonNull;
 import org.springframework.stereotype.Component;
 
 import java.io.IOException;
-import java.nio.file.FileVisitOption;
-import java.nio.file.FileVisitResult;
-import java.nio.file.Files;
 import java.nio.file.Path;
-import java.nio.file.SimpleFileVisitor;
-import java.nio.file.attribute.BasicFileAttributes;
 import java.util.ArrayList;
-import java.util.EnumSet;
 import java.util.HashMap;
 import java.util.HashSet;
+import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
+/**
+ * Finds a library's book files. {@link LibraryDirectoryWalker} lists the library's paths
+ * (in parallel, leaving out ignored entries); this class then visits the resulting tree
+ * the way the old {@code Files.walkFileTree} visitor did and applies the same grouping
+ * rules. Within a library path, directories are visited in name order, a directory's own
+ * files before its subdirectories, so the output order is the same from scan to scan.
+ */
 @Component
+@RequiredArgsConstructor
 @Slf4j
 public class LibraryFileHelper {
 
     private static final int MIN_AUDIO_FILES_FOR_FOLDER_AUDIOBOOK = 2;
+
+    private final LibraryDirectoryWalker directoryWalker;
 
     /**
      * Walks every path of the library (auto-detect grouping, all formats) and reports both
      * the files found and any paths the walk could not read.
      */
     public LibraryScanResult scanAllLibraryFiles(LibraryEntity libraryEntity) throws IOException {
-        return new LibraryScanResult(getAllLibraryFiles(libraryEntity), Set.of());
+        Set<Path> incompletePaths = new HashSet<>();
+        List<LibraryFile> files = walk(libraryEntity, this::findLibraryFiles, incompletePaths);
+        return new LibraryScanResult(files, incompletePaths);
     }
 
     public List<LibraryFile> getAllLibraryFiles(LibraryEntity libraryEntity) throws IOException {
-        List<LibraryFile> allFiles = new ArrayList<>();
-        for (LibraryPathEntity pathEntity : libraryEntity.getLibraryPaths()) {
-            allFiles.addAll(findLibraryFiles(pathEntity, libraryEntity));
-        }
-        return allFiles;
+        return walk(libraryEntity, this::findLibraryFiles, new HashSet<>());
     }
 
     public List<LibraryFile> getLibraryFiles(LibraryEntity libraryEntity) throws IOException {
@@ -61,66 +66,79 @@ public class LibraryFileHelper {
     }
 
     public List<LibraryFile> getAllLibraryFilesFlat(LibraryEntity libraryEntity) throws IOException {
+        return walk(libraryEntity, this::findLibraryFilesFlat, new HashSet<>());
+    }
+
+    /** Builds the library files of one walked library path. */
+    @FunctionalInterface
+    private interface TreeCollector {
+        List<LibraryFile> collect(LibraryPathEntity pathEntity, LibraryEntity libraryEntity, Directory root);
+    }
+
+    /** The callbacks of a visit over a walked tree, as in {@link java.nio.file.FileVisitor}. */
+    @FunctionalInterface
+    private interface TreeVisitor {
+        void visitFile(Path file);
+
+        default void postVisitDirectory(Path dir) {
+        }
+    }
+
+    /**
+     * Walks all of the library's paths together, then collects each path's files in turn.
+     * Whatever the walk could not read is added to {@code incompletePaths}.
+     */
+    private List<LibraryFile> walk(LibraryEntity libraryEntity, TreeCollector collector, Set<Path> incompletePaths) throws IOException {
+        List<LibraryPathEntity> pathEntities = libraryEntity.getLibraryPaths();
+        List<WalkedPath> walkedPaths = directoryWalker.walk(pathEntities.stream()
+                .map(pathEntity -> Path.of(pathEntity.getPath()))
+                .toList());
+
         List<LibraryFile> allFiles = new ArrayList<>();
-        for (LibraryPathEntity pathEntity : libraryEntity.getLibraryPaths()) {
-            allFiles.addAll(findLibraryFilesFlat(pathEntity, libraryEntity));
+        for (int i = 0; i < pathEntities.size(); i++) {
+            WalkedPath walked = walkedPaths.get(i);
+            incompletePaths.addAll(walked.incompletePaths());
+            if (walked.root() != null) {
+                allFiles.addAll(collector.collect(pathEntities.get(i), libraryEntity, walked.root()));
+            }
         }
         return allFiles;
     }
 
-    private List<LibraryFile> findLibraryFilesFlat(LibraryPathEntity pathEntity, LibraryEntity libraryEntity) throws IOException {
+    /**
+     * Calls {@code visitor} in the order Files.walkFileTree would over this tree: each book
+     * file of a directory, then each subdirectory in full, then the directory itself. The
+     * walker has already dropped everything the old visitor skipped.
+     */
+    private static void visit(Directory directory, TreeVisitor visitor) {
+        for (String fileName : directory.getBookFiles()) {
+            visitor.visitFile(directory.getPath().resolve(fileName));
+        }
+        for (Directory subdirectory : directory.getSubdirectories()) {
+            visit(subdirectory, visitor);
+        }
+        visitor.postVisitDirectory(directory.getPath());
+    }
+
+    private List<LibraryFile> findLibraryFilesFlat(LibraryPathEntity pathEntity, LibraryEntity libraryEntity, Directory root) {
         Path libraryPath = Path.of(pathEntity.getPath());
         List<LibraryFile> libraryFiles = new ArrayList<>();
-        Map<Path, List<Path>> dirAudioFiles = new HashMap<>();
+        Map<Path, List<Path>> dirAudioFiles = new LinkedHashMap<>();
 
-        Files.walkFileTree(libraryPath, EnumSet.of(FileVisitOption.FOLLOW_LINKS), Integer.MAX_VALUE, new SimpleFileVisitor<>() {
-            @Override
-            @NonNull
-            public FileVisitResult visitFile(@NonNull Path file, @NonNull BasicFileAttributes attrs) {
-                if (FileUtils.shouldIgnore(file) || !Files.isReadable(file) || !Files.isRegularFile(file) || attrs.size() == 0) {
-                    return FileVisitResult.CONTINUE;
-                }
+        visit(root, file -> {
+            String fileName = file.getFileName().toString();
+            BookFileType fileType = bookFileType(fileName);
 
-                String fileName = file.getFileName().toString();
-                Optional<BookFileExtension> bookExtension = BookFileExtension.fromFileName(fileName);
-
-                if (bookExtension.isEmpty()) {
-                    return FileVisitResult.CONTINUE;
-                }
-
-                if (bookExtension.get().getType() == BookFileType.AUDIOBOOK) {
-                    dirAudioFiles.computeIfAbsent(file.getParent(), k -> new ArrayList<>()).add(file);
-                } else {
-                    libraryFiles.add(LibraryFile.builder()
-                            .libraryEntity(libraryEntity)
-                            .libraryPathEntity(pathEntity)
-                            .fileSubPath(FileUtils.getRelativeSubPath(pathEntity.getPath(), file))
-                            .fileName(fileName)
-                            .bookFileType(bookExtension.get().getType())
-                            .build());
-                }
-
-                return FileVisitResult.CONTINUE;
-            }
-
-            @Override
-            @NonNull
-            public FileVisitResult visitFileFailed(@NonNull Path file, IOException e) {
-                log.error("Failed read path [{}]: {}", file, e.getMessage(), e);
-                return FileVisitResult.CONTINUE;
-            }
-
-            @Override
-            @NonNull
-            public FileVisitResult preVisitDirectory(@NonNull Path dir, @NonNull BasicFileAttributes attrs) throws IOException {
-                if (FileUtils.shouldIgnore(dir) || !Files.isReadable(dir)) {
-                    return FileVisitResult.SKIP_SUBTREE;
-                }
-                if (!dir.equals(libraryPath) && Files.exists(dir.resolve(".ignore"))) {
-                    log.debug("Skipping directory with .ignore file: {}", dir);
-                    return FileVisitResult.SKIP_SUBTREE;
-                }
-                return super.preVisitDirectory(dir, attrs);
+            if (fileType == BookFileType.AUDIOBOOK) {
+                dirAudioFiles.computeIfAbsent(file.getParent(), k -> new ArrayList<>()).add(file);
+            } else {
+                libraryFiles.add(LibraryFile.builder()
+                        .libraryEntity(libraryEntity)
+                        .libraryPathEntity(pathEntity)
+                        .fileSubPath(FileUtils.getRelativeSubPath(pathEntity.getPath(), file))
+                        .fileName(fileName)
+                        .bookFileType(fileType)
+                        .build());
             }
         });
 
@@ -166,7 +184,7 @@ public class LibraryFileHelper {
                 .collect(java.util.stream.Collectors.toList());
     }
 
-    private List<LibraryFile> findLibraryFiles(LibraryPathEntity pathEntity, LibraryEntity libraryEntity) throws IOException {
+    private List<LibraryFile> findLibraryFiles(LibraryPathEntity pathEntity, LibraryEntity libraryEntity, Directory root) {
         Path libraryPath = Path.of(pathEntity.getPath());
         List<LibraryFile> libraryFiles = new ArrayList<>();
 
@@ -175,23 +193,12 @@ public class LibraryFileHelper {
         Map<Path, Boolean> dirHasNonAudioBooks = new HashMap<>();
         Set<Path> processedAsFolderAudiobook = new HashSet<>();
 
-        Files.walkFileTree(libraryPath, EnumSet.of(FileVisitOption.FOLLOW_LINKS), Integer.MAX_VALUE, new SimpleFileVisitor<>() {
+        visit(root, new TreeVisitor() {
             @Override
-            @NonNull
-            public FileVisitResult visitFile(@NonNull Path file, @NonNull BasicFileAttributes attrs) {
-                if (FileUtils.shouldIgnore(file) || !Files.isReadable(file) || !Files.isRegularFile(file) || attrs.size() == 0) {
-                    return FileVisitResult.CONTINUE;
-                }
-
+            public void visitFile(Path file) {
                 String fileName = file.getFileName().toString();
-                Optional<BookFileExtension> bookExtension = BookFileExtension.fromFileName(fileName);
-
-                if (bookExtension.isEmpty()) {
-                    return FileVisitResult.CONTINUE;
-                }
-
                 Path parentDir = file.getParent();
-                BookFileType fileType = bookExtension.get().getType();
+                BookFileType fileType = bookFileType(fileName);
 
                 if (fileType == BookFileType.AUDIOBOOK) {
                     // Track audio files per directory for folder-based detection
@@ -209,13 +216,10 @@ public class LibraryFileHelper {
                             .bookFileType(fileType)
                             .build());
                 }
-
-                return FileVisitResult.CONTINUE;
             }
 
             @Override
-            @NonNull
-            public FileVisitResult postVisitDirectory(@NonNull Path dir, IOException exc) throws IOException {
+            public void postVisitDirectory(Path dir) {
                 // Check if this directory should be treated as a folder-based audiobook
                 List<Path> audioFiles = dirAudioFiles.get(dir);
                 boolean hasNonAudioBooks = dirHasNonAudioBooks.getOrDefault(dir, false);
@@ -261,8 +265,6 @@ public class LibraryFileHelper {
                         addIndividualAudioFiles(audioFiles, libraryEntity, pathEntity, libraryFiles);
                     }
                 }
-
-                return FileVisitResult.CONTINUE;
             }
 
             private void addIndividualAudioFiles(List<Path> audioFiles, LibraryEntity libraryEntity,
@@ -280,27 +282,12 @@ public class LibraryFileHelper {
                             .build());
                 }
             }
-
-            @Override
-            @NonNull
-            public FileVisitResult visitFileFailed(@NonNull Path file, IOException e) {
-                log.error("Failed read path [{}]: {}", file, e.getMessage(), e);
-                return FileVisitResult.CONTINUE;
-            }
-
-            @Override
-            @NonNull
-            public FileVisitResult preVisitDirectory(@NonNull Path dir, @NonNull BasicFileAttributes attrs) throws IOException {
-                if (FileUtils.shouldIgnore(dir) || !Files.isReadable(dir)) {
-                    return FileVisitResult.SKIP_SUBTREE;
-                }
-                if (!dir.equals(libraryPath) && Files.exists(dir.resolve(".ignore"))) {
-                    log.debug("Skipping directory with .ignore file: {}", dir);
-                    return FileVisitResult.SKIP_SUBTREE;
-                }
-                return super.preVisitDirectory(dir, attrs);
-            }
         });
         return libraryFiles;
+    }
+
+    /** The walker keeps only files with a book extension, so there always is one. */
+    private static BookFileType bookFileType(String fileName) {
+        return BookFileExtension.fromFileName(fileName).orElseThrow().getType();
     }
 }

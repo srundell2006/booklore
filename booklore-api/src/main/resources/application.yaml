@@ -21,6 +21,13 @@ app:
   force-disable-oidc: ${FORCE_DISABLE_OIDC:false}
   disk-type: ${DISK_TYPE:LOCAL}
 
+  scan:
+    # Directories listed at once while scanning a library (1-64).
+    walk-parallelism: ${SCAN_WALK_PARALLELISM:16}
+    # Seconds a directory listing may wait on one filesystem call before that directory
+    # is skipped and reported as not scanned.
+    directory-timeout-seconds: ${SCAN_DIRECTORY_TIMEOUT_SECONDS:60}
+
 server:
   max-http-header-size: 128KB
   forward-headers-strategy: native
