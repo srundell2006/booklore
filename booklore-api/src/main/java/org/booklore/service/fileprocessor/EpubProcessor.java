@@ -50,8 +50,11 @@ public class EpubProcessor extends AbstractFileProcessor implements BookFileProc
     @Override
     public BookEntity processNewFile(LibraryFile libraryFile) {
         BookEntity bookEntity = bookCreatorService.createShellBook(libraryFile, BookFileType.EPUB);
-        setBookMetadata(bookEntity);
-        boolean coverGenerated = generateCover(bookEntity);
+        // Metadata and cover from one open of the EPUB rather than one per lookup
+        EpubMetadataExtractor.MetadataAndCover extracted =
+                epubMetadataExtractor.extractMetadataAndCover(new File(bookEntity.getFullFilePath().toUri()));
+        setBookMetadata(bookEntity, extracted.metadata());
+        boolean coverGenerated = saveCover(bookEntity, bookEntity.getPrimaryBookFile(), extracted.cover());
         if (!coverGenerated) {
             var folder = getBookFolderForCoverFallback(libraryFile);
             if (folder != null) {
@@ -72,28 +75,32 @@ public class EpubProcessor extends AbstractFileProcessor implements BookFileProc
 
     @Override
     public boolean generateCover(BookEntity bookEntity, BookFileEntity bookFile) {
+        byte[] coverData;
         try {
             File epubFile = new File(FileUtils.getBookFullPath(bookEntity, bookFile));
-            byte[] coverData = epubMetadataExtractor.extractCover(epubFile);
+            coverData = epubMetadataExtractor.extractCover(epubFile);
+        } catch (Exception e) {
+            log.error("Error generating cover for EPUB '{}': {}", bookFile.getFileName(), e.getMessage(), e);
+            return false;
+        }
+        return saveCover(bookEntity, bookFile, coverData);
+    }
 
-            if (coverData == null) {
-                log.warn("No cover image found in EPUB '{}'", bookFile.getFileName());
+    private boolean saveCover(BookEntity bookEntity, BookFileEntity bookFile, byte[] coverData) {
+        if (coverData == null) {
+            log.warn("No cover image found in EPUB '{}'", bookFile.getFileName());
+            return false;
+        }
+
+        try (ByteArrayInputStream bais = new ByteArrayInputStream(coverData)) {
+            BufferedImage originalImage = ImageIO.read(bais);
+            if (originalImage == null) {
+                log.warn("Cover image found but could not be decoded (possibly SVG or unsupported format) in EPUB '{}'", bookFile.getFileName());
                 return false;
             }
-
-            boolean saved;
-            try (ByteArrayInputStream bais = new ByteArrayInputStream(coverData)) {
-                BufferedImage originalImage = ImageIO.read(bais);
-                if (originalImage == null) {
-                    log.warn("Cover image found but could not be decoded (possibly SVG or unsupported format) in EPUB '{}'", bookFile.getFileName());
-                    return false;
-                }
-                saved = fileService.saveCoverImages(originalImage, bookEntity.getId());
-                originalImage.flush();
-            }
-
+            boolean saved = fileService.saveCoverImages(originalImage, bookEntity.getId());
+            originalImage.flush();
             return saved;
-
         } catch (Exception e) {
             log.error("Error generating cover for EPUB '{}': {}", bookFile.getFileName(), e.getMessage(), e);
             return false;
@@ -105,9 +112,7 @@ public class EpubProcessor extends AbstractFileProcessor implements BookFileProc
         return List.of(BookFileType.EPUB);
     }
 
-    private void setBookMetadata(BookEntity bookEntity) {
-        File bookFile = new File(bookEntity.getFullFilePath().toUri());
-        BookMetadata epubMetadata = epubMetadataExtractor.extractMetadata(bookFile);
+    private void setBookMetadata(BookEntity bookEntity, BookMetadata epubMetadata) {
         if (epubMetadata == null) return;
 
         BookMetadataEntity metadata = bookEntity.getMetadata();
