@@ -19,8 +19,10 @@ import logging
 import os
 import shutil
 import subprocess
+import unicodedata
 import uuid
 from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+from urllib.parse import quote
 
 logging.basicConfig(level=logging.INFO, format="%(asctime)s %(levelname)s %(message)s")
 log = logging.getLogger("ebook-converter")
@@ -91,6 +93,20 @@ def parse_multipart(body: bytes, content_type: str):
             fields[name] = payload.decode("utf-8", "replace").strip()
 
     return files, fields
+
+
+def content_disposition(filename: str) -> str:
+    """Attachment header for a file name in any script (RFC 6266).
+
+    send_header() encodes headers as latin-1, so the name goes out as an ASCII
+    fallback plus the exact name, UTF-8 percent-encoded, in filename* (RFC 5987).
+    """
+    fallback = "".join(
+        c if " " <= c <= "~" and c not in '"\\' else "_"
+        for c in unicodedata.normalize("NFKD", filename)
+        if not unicodedata.combining(c)
+    )
+    return f"attachment; filename=\"{fallback}\"; filename*=UTF-8''{quote(filename, safe='')}"
 
 
 class Handler(BaseHTTPRequestHandler):
@@ -190,7 +206,7 @@ class Handler(BaseHTTPRequestHandler):
             self.send_response(200)
             self.send_header("Content-Type", "application/octet-stream")
             self.send_header("Content-Length", str(size))
-            self.send_header("Content-Disposition", f'attachment; filename="{out_name}"')
+            self.send_header("Content-Disposition", content_disposition(out_name))
             self.end_headers()
             with open(target_path, "rb") as handle:
                 shutil.copyfileobj(handle, self.wfile)
