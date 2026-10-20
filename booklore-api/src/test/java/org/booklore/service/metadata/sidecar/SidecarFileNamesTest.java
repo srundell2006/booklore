@@ -15,8 +15,11 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystems;
 import java.nio.file.Path;
+import java.util.HexFormat;
+import java.util.List;
 import java.util.Map;
 import java.util.stream.Stream;
+import java.util.zip.CRC32;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.params.provider.Arguments.arguments;
@@ -110,13 +113,54 @@ class SidecarFileNamesTest {
             assertThat(utf8Bytes(fileName)).isBetween(245, 255);
             assertThat(utf8Bytes(sidecarName)).isBetween(252, 255);
             assertThat(utf8Bytes(coverName)).isLessThanOrEqualTo(255);
-            assertThat(fileName).startsWith(baseName);
+            assertThat(baseName).matches("(?s).+~[0-9a-f]{8}");
+            assertThat(fileName).startsWith(baseName.substring(0, baseName.length() - 9));
             assertThat(baseName.codePoints()).noneMatch(codePoint -> Character.getType(codePoint) == Character.SURROGATE);
             assertThat(sidecarName).isEqualTo(baseName + ".metadata.json");
             assertThat(coverName).isEqualTo(baseName + ".cover.jpg");
             assertThat(reader.getSidecarPath(book)).isEqualTo(writer.getSidecarPath(book));
             assertThat(reader.getCoverPath(book)).isEqualTo(writer.getCoverPath(book));
             assertThat(mapper.getCoverFileName(book)).isEqualTo(coverName);
+        }
+    }
+
+    @Test
+    void longNamesThatDifferOnlyAtTheEnd_neverShareSidecars(@TempDir Path tempDir) throws IOException {
+        try (FileSystem names = FileSystems.newFileSystem(tempDir.resolve("names.zip"), Map.of("create", "true"))) {
+            // Organize numbers the second of two folders whose names were both cut to the same 245 bytes
+            String folder = "01. " + "\u4E2D".repeat(80) + "1";
+            Path dir = names.getPath("/audiobooks/Author");
+            List<Path> books = List.of(dir.resolve(folder), dir.resolve(folder + " (1)"), dir.resolve(folder + " (2)"),
+                    dir.resolve("\u4E2D".repeat(82) + "\u4E00.epub"), dir.resolve("\u4E2D".repeat(82) + "\u4E01.epub"));
+
+            assertThat(books.stream().map(writer::getSidecarPath).distinct()).hasSize(books.size());
+            assertThat(books.stream().map(writer::getCoverPath).distinct()).hasSize(books.size());
+            assertThat(books).allSatisfy(book -> assertThat(utf8Bytes(writer.getSidecarPath(book).getFileName().toString())).isLessThanOrEqualTo(255));
+        }
+    }
+
+    @Test
+    void cutName_endsInAHashOfTheWholeName(@TempDir Path tempDir) throws IOException {
+        try (FileSystem names = FileSystems.newFileSystem(tempDir.resolve("names.zip"), Map.of("create", "true"))) {
+            String folder = "01. " + "\u0628".repeat(120) + "1";
+            CRC32 hash = new CRC32();
+            hash.update(folder.getBytes(StandardCharsets.UTF_8));
+
+            String baseName = SidecarFileNames.baseName(names.getPath("/audiobooks/Author", folder));
+
+            assertThat(baseName).isEqualTo(SidecarFileNames.baseName(names.getPath("/elsewhere", folder)));
+            assertThat(baseName).endsWith("~" + HexFormat.of().toHexDigits((int) hash.getValue()));
+        }
+    }
+
+    @Test
+    void nameThatFits_isNotCut(@TempDir Path tempDir) throws IOException {
+        try (FileSystem names = FileSystems.newFileSystem(tempDir.resolve("names.zip"), Map.of("create", "true"))) {
+            // 241 bytes: ".metadata.json" makes 255
+            String folder = "01. " + "\u0628".repeat(118) + "1";
+
+            assertThat(utf8Bytes(folder)).isEqualTo(241);
+            assertThat(SidecarFileNames.baseName(names.getPath("/audiobooks/Author", folder))).isEqualTo(folder);
         }
     }
 }
