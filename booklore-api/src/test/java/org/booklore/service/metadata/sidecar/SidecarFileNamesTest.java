@@ -4,12 +4,22 @@ import org.booklore.config.AppProperties;
 import org.booklore.service.appsettings.AppSettingService;
 import org.booklore.util.FileService;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.CsvSource;
+import org.junit.jupiter.params.provider.MethodSource;
 
+import java.io.IOException;
+import java.nio.charset.StandardCharsets;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
 import java.nio.file.Path;
+import java.util.Map;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.params.provider.Arguments.arguments;
 import static org.mockito.Mockito.mock;
 
 class SidecarFileNamesTest {
@@ -62,7 +72,7 @@ class SidecarFileNamesTest {
 
     @Test
     void folderAudiobooksInOneDirectory_noLongerShareASidecar() {
-        // Both used to be cut at their first dot and write the same "01.metadata.json"
+        // All three used to be cut at their last dot (their only one) and write the same "01.metadata.json"
         Path series = Path.of("/audiobooks/R/Rick Riordan/The Kane Chronicles");
         Path first = series.resolve("01. The Red Pyramid - Rick Riordan (2010)");
         Path second = series.resolve("02. The Throne of Fire - Rick Riordan (2011)");
@@ -71,5 +81,42 @@ class SidecarFileNamesTest {
         assertThat(writer.getSidecarPath(first)).isNotEqualTo(writer.getSidecarPath(third));
         assertThat(writer.getSidecarPath(first)).isNotEqualTo(writer.getSidecarPath(second));
         assertThat(writer.getCoverPath(first)).isNotEqualTo(writer.getCoverPath(third));
+    }
+
+    private static int utf8Bytes(String name) {
+        return name.getBytes(StandardCharsets.UTF_8).length;
+    }
+
+    static Stream<Arguments> longNames() {
+        return Stream.of(
+                arguments("245-byte Arabic folder", "01. " + "\u0628".repeat(120) + "1"),
+                arguments("245-byte CJK folder", "01. " + "\u4E2D".repeat(80) + "1"),
+                arguments("245-byte folder of 4-byte characters", "0" + "\uD840\uDC00".repeat(61)),
+                arguments("251-byte CJK book file", "\u4E2D".repeat(82) + ".epub")
+        );
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("longNames")
+    void longName_sidecarNamesFitIn255Bytes(String description, String fileName, @TempDir Path tempDir) throws IOException {
+        // A zip file system holds any name, where the default one cannot under a non-UTF-8 locale
+        try (FileSystem names = FileSystems.newFileSystem(tempDir.resolve("names.zip"), Map.of("create", "true"))) {
+            Path book = names.getPath("/audiobooks/Author", fileName);
+
+            String baseName = SidecarFileNames.baseName(book);
+            String sidecarName = writer.getSidecarPath(book).getFileName().toString();
+            String coverName = writer.getCoverPath(book).getFileName().toString();
+
+            assertThat(utf8Bytes(fileName)).isBetween(245, 255);
+            assertThat(utf8Bytes(sidecarName)).isBetween(252, 255);
+            assertThat(utf8Bytes(coverName)).isLessThanOrEqualTo(255);
+            assertThat(fileName).startsWith(baseName);
+            assertThat(baseName.codePoints()).noneMatch(codePoint -> Character.getType(codePoint) == Character.SURROGATE);
+            assertThat(sidecarName).isEqualTo(baseName + ".metadata.json");
+            assertThat(coverName).isEqualTo(baseName + ".cover.jpg");
+            assertThat(reader.getSidecarPath(book)).isEqualTo(writer.getSidecarPath(book));
+            assertThat(reader.getCoverPath(book)).isEqualTo(writer.getCoverPath(book));
+            assertThat(mapper.getCoverFileName(book)).isEqualTo(coverName);
+        }
     }
 }
