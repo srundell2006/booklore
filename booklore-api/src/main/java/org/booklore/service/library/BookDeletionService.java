@@ -8,6 +8,7 @@ import org.booklore.model.enums.BookFileType;
 import org.booklore.model.websocket.Topic;
 import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
+import org.booklore.repository.projection.BookFileScanRow;
 import org.booklore.service.NotificationService;
 import org.booklore.util.FileService;
 import jakarta.persistence.EntityManager;
@@ -44,25 +45,33 @@ public class BookDeletionService {
             return;
         }
 
-        List<BookFileEntity> additionalFiles = bookAdditionalFileRepository.findAllById(additionalFileIds);
-        bookAdditionalFileRepository.deleteAll(additionalFiles);
-        entityManager.flush();
-        entityManager.clear();
+        // Nothing maps a cascade from book_file, so a bulk delete removes exactly what
+        // loading and removing each entity did, without the per-row selects.
+        bookAdditionalFileRepository.deleteAllByIdInBatch(additionalFileIds);
 
         log.info("Deleted {} additional files from database", additionalFileIds.size());
     }
 
+    /**
+     * Handles books whose primary file is gone: drops their book files that are no longer on
+     * disk and deletes the books that have no book-format file left. Files under a path the
+     * scan could not read are kept, since the scan cannot tell whether they still exist.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void processDeletedLibraryFiles(List<Long> deletedBookIds, List<LibraryFile> libraryFiles) {
+    public void processDeletedLibraryFiles(List<Long> deletedBookIds, LibraryScanResult scanResult) {
         if (deletedBookIds.isEmpty()) {
             return;
         }
+
+        Set<String> existingFileNames = scanResult.files().stream()
+                .map(LibraryFile::getFileName)
+                .collect(Collectors.toSet());
 
         List<BookEntity> books = bookRepository.findAllById(deletedBookIds);
         List<Long> booksToDelete = new ArrayList<>();
 
         for (BookEntity book : books) {
-            if (!tryPromoteAlternativeFormatToBook(book, libraryFiles)) {
+            if (!tryPromoteAlternativeFormatToBook(book, existingFileNames, scanResult)) {
                 booksToDelete.add(book.getId());
             }
         }
@@ -96,42 +105,47 @@ public class BookDeletionService {
         if (bookIds.size() > 1) log.info("Books removed: {}", bookIds);
     }
 
+    /**
+     * Deletes the book files of formats the library no longer allows, then the books left
+     * without any book-format file of an allowed format.
+     *
+     * @return whether anything was deleted
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void purgeDisallowedFormats(LibraryEntity libraryEntity) {
+    public boolean purgeDisallowedFormats(LibraryEntity libraryEntity, LibraryBookFiles bookFiles) {
         List<BookFileType> allowedFormats = libraryEntity.getAllowedFormats();
         if (allowedFormats == null || allowedFormats.isEmpty()) {
-            return;
+            return false;
         }
 
         Set<BookFileType> allowed = EnumSet.copyOf(allowedFormats);
-        List<BookFileEntity> allBookFiles = bookAdditionalFileRepository.findByLibraryId(libraryEntity.getId());
 
-        List<BookFileEntity> disallowedFiles = allBookFiles.stream()
-                .filter(BookFileEntity::isBook)
-                .filter(bf -> !allowed.contains(bf.getBookType()))
+        List<BookFileScanRow> disallowedFiles = bookFiles.rows().stream()
+                .filter(BookFileScanRow::bookFormat)
+                .filter(bf -> !allowed.contains(bf.bookType()))
                 .toList();
 
         if (disallowedFiles.isEmpty()) {
-            return;
+            return false;
         }
 
         Set<Long> affectedBookIds = disallowedFiles.stream()
-                .map(bf -> bf.getBook().getId())
+                .map(BookFileScanRow::bookId)
                 .collect(Collectors.toSet());
 
-        Map<Long, Long> remainingCounts = allBookFiles.stream()
-                .filter(BookFileEntity::isBook)
-                .filter(bf -> allowed.contains(bf.getBookType()))
-                .filter(bf -> affectedBookIds.contains(bf.getBook().getId()))
-                .collect(Collectors.groupingBy(bf -> bf.getBook().getId(), Collectors.counting()));
+        Map<Long, Long> remainingCounts = bookFiles.rows().stream()
+                .filter(BookFileScanRow::bookFormat)
+                .filter(bf -> allowed.contains(bf.bookType()))
+                .filter(bf -> affectedBookIds.contains(bf.bookId()))
+                .collect(Collectors.groupingBy(BookFileScanRow::bookId, Collectors.counting()));
 
         List<Long> booksToDelete = affectedBookIds.stream()
                 .filter(bookId -> remainingCounts.getOrDefault(bookId, 0L) == 0)
                 .toList();
 
-        bookAdditionalFileRepository.deleteAll(disallowedFiles);
-        entityManager.flush();
-        entityManager.clear();
+        bookAdditionalFileRepository.deleteAllByIdInBatch(disallowedFiles.stream()
+                .map(BookFileScanRow::bookFileId)
+                .toList());
 
         if (!booksToDelete.isEmpty()) {
             log.info("Deleting {} books with no remaining files of allowed formats in library: {}",
@@ -141,16 +155,15 @@ public class BookDeletionService {
 
         log.info("Purged {} book files of disallowed formats from library: {}",
                 disallowedFiles.size(), libraryEntity.getName());
+        return true;
     }
 
-    private boolean tryPromoteAlternativeFormatToBook(BookEntity book, List<LibraryFile> libraryFiles) {
-        Set<String> existingFileNames = libraryFiles.stream()
-                .map(LibraryFile::getFileName)
-                .collect(Collectors.toSet());
-
+    private boolean tryPromoteAlternativeFormatToBook(BookEntity book, Set<String> existingFileNames,
+                                                      LibraryScanResult scanResult) {
         List<BookFileEntity> deletedBookFiles = book.getBookFiles().stream()
                 .filter(BookFileEntity::isBook)
                 .filter(bf -> !existingFileNames.contains(bf.getFileName()))
+                .filter(bf -> !isUnderIncompletePath(bf, scanResult))
                 .toList();
 
         deletedBookFiles.forEach(bf -> {
@@ -167,6 +180,14 @@ public class BookDeletionService {
             return true;
         }
         return false;
+    }
+
+    private static boolean isUnderIncompletePath(BookFileEntity bookFile, LibraryScanResult scanResult) {
+        if (scanResult.isComplete() || bookFile.getBook().getLibraryPath() == null
+                || bookFile.getFileSubPath() == null || bookFile.getFileName() == null) {
+            return false;
+        }
+        return scanResult.isUnderIncompletePath(bookFile.getFullFilePath());
     }
 
 

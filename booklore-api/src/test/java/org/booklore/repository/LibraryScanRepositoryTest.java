@@ -10,6 +10,7 @@ import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.BookFileType;
+import org.booklore.repository.projection.BookFileScanRow;
 import org.booklore.service.task.TaskCronService;
 import org.hibernate.Session;
 import org.hibernate.stat.Statistics;
@@ -29,6 +30,7 @@ import java.util.ArrayList;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 import static org.mockito.Mockito.mock;
 
 /**
@@ -202,6 +204,58 @@ class LibraryScanRepositoryTest {
             entityManager.clear();
             assertThat(entityManager.find(BookFileEntity.class, audiobookFileId).getChapters().getFirst().getTitle())
                     .isEqualTo("Prologue");
+        }
+    }
+
+    @Nested
+    class ScanRowProjection {
+
+        @Test
+        void returnsOneRowPerBookFileOfTheLibraryWithTheBookColumns() {
+            BookEntity active = book(library, libraryPath, false);
+            BookFileEntity epub = file(active, "Author/Title", "Title.epub", BookFileType.EPUB, true);
+            BookFileEntity notes = file(active, "Author/Title", "notes.txt", BookFileType.PDF, false);
+
+            BookEntity softDeleted = book(library, libraryPath, true);
+            BookFileEntity deletedPdf = file(softDeleted, "", "Gone.pdf", BookFileType.PDF, true);
+
+            BookEntity withoutPath = book(library, null, false);
+            BookFileEntity orphan = file(withoutPath, "x", "Orphan.cbz", BookFileType.CBX, true);
+
+            book(library, libraryPath, false); // fileless: no rows
+
+            LibraryEntity otherLibrary = persist(LibraryEntity.builder().name("Other").icon("book").watch(false).build());
+            LibraryPathEntity otherPath = persist(LibraryPathEntity.builder().library(otherLibrary).path("/other").build());
+            file(book(otherLibrary, otherPath, false), "", "Elsewhere.epub", BookFileType.EPUB, true);
+            clear();
+
+            List<BookFileScanRow> rows = bookAdditionalFileRepository.findScanRowsByLibraryId(library.getId());
+
+            assertThat(rows)
+                    .extracting(BookFileScanRow::bookFileId, BookFileScanRow::bookId, BookFileScanRow::libraryPathId,
+                            BookFileScanRow::libraryPath, BookFileScanRow::fileSubPath, BookFileScanRow::fileName,
+                            BookFileScanRow::bookFormat, BookFileScanRow::bookType, BookFileScanRow::bookDeleted)
+                    .containsExactlyInAnyOrder(
+                            tuple(epub.getId(), active.getId(), libraryPath.getId(), "/books", "Author/Title", "Title.epub",
+                                    true, BookFileType.EPUB, false),
+                            tuple(notes.getId(), active.getId(), libraryPath.getId(), "/books", "Author/Title", "notes.txt",
+                                    false, BookFileType.PDF, false),
+                            tuple(deletedPdf.getId(), softDeleted.getId(), libraryPath.getId(), "/books", "", "Gone.pdf",
+                                    true, BookFileType.PDF, true),
+                            tuple(orphan.getId(), withoutPath.getId(), null, null, "x", "Orphan.cbz",
+                                    true, BookFileType.CBX, false));
+            assertThat(statistics().getPrepareStatementCount()).isEqualTo(1);
+            assertThat(statistics().getEntityLoadCount()).isZero();
+        }
+
+        @Test
+        void countIncludingDeletedCountsSoftDeletedAndFilelessBooks() {
+            file(book(library, libraryPath, false), "", "A.epub", BookFileType.EPUB, true);
+            book(library, libraryPath, true);
+            book(library, null, false);
+
+            assertThat(bookRepository.countIncludingDeletedByLibraryId(library.getId())).isEqualTo(3);
+            assertThat(bookRepository.countByLibraryId(library.getId())).isEqualTo(2);
         }
     }
 

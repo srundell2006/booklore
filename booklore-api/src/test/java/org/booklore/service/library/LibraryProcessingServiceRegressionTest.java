@@ -1,20 +1,20 @@
 package org.booklore.service.library;
 
 import org.booklore.model.dto.settings.LibraryFile;
-import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.repository.BookAdditionalFileRepository;
+import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
 import org.booklore.service.NotificationService;
 import org.booklore.task.options.RescanLibraryContext;
-import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.PlatformTransactionManager;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -22,6 +22,7 @@ import java.nio.file.Path;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -36,6 +37,8 @@ class LibraryProcessingServiceRegressionTest {
     @Mock
     private BookAdditionalFileRepository bookAdditionalFileRepository;
     @Mock
+    private BookRepository bookRepository;
+    @Mock
     private FileAsBookProcessor fileAsBookProcessor;
     @Mock
     private BookRestorationService bookRestorationService;
@@ -46,7 +49,7 @@ class LibraryProcessingServiceRegressionTest {
     @Mock
     private BookGroupingService bookGroupingService;
     @Mock
-    private EntityManager entityManager;
+    private PlatformTransactionManager transactionManager;
 
     private LibraryProcessingService libraryProcessingService;
 
@@ -56,12 +59,13 @@ class LibraryProcessingServiceRegressionTest {
                 libraryRepository,
                 notificationService,
                 bookAdditionalFileRepository,
+                bookRepository,
                 fileAsBookProcessor,
                 bookRestorationService,
                 bookDeletionService,
                 libraryFileHelper,
                 bookGroupingService,
-                entityManager
+                transactionManager
         );
     }
 
@@ -80,24 +84,17 @@ class LibraryProcessingServiceRegressionTest {
         pathEntity.setPath(accessiblePath.toString());
         libraryEntity.setLibraryPaths(List.of(pathEntity));
 
-        // Create a fileless book (e.g., physical book)
-        BookEntity filelessBook = new BookEntity();
-        filelessBook.setId(1L);
-        filelessBook.setLibraryPath(pathEntity);
-        filelessBook.setBookFiles(Collections.emptyList());
-
-        libraryEntity.setBookEntities(List.of(filelessBook));
-
         when(libraryRepository.findById(libraryId)).thenReturn(Optional.of(libraryEntity));
-        when(libraryFileHelper.getAllLibraryFiles(libraryEntity)).thenReturn(List.of(
+        when(libraryFileHelper.scanAllLibraryFiles(libraryEntity)).thenReturn(new LibraryScanResult(List.of(
             LibraryFile.builder()
                 .libraryPathEntity(pathEntity)
                 .fileName("other.epub")
                 .fileSubPath("")
                 .build()
-        ));
+        ), Set.of()));
         when(libraryFileHelper.filterByAllowedFormats(anyList(), any())).thenAnswer(inv -> inv.getArgument(0));
-        when(bookAdditionalFileRepository.findByLibraryId(libraryId)).thenReturn(Collections.emptyList());
+        // A fileless book (e.g., physical book) has no book_file rows at all
+        when(bookAdditionalFileRepository.findScanRowsByLibraryId(libraryId)).thenReturn(Collections.emptyList());
         when(bookGroupingService.groupForRescan(anyList(), any(LibraryEntity.class)))
                 .thenReturn(new BookGroupingService.GroupingResult(Collections.emptyMap(), Collections.emptyMap()));
 

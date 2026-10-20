@@ -6,18 +6,23 @@ import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.LibraryPathEntity;
+import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.BookAdditionalFileRepository;
+import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
+import org.booklore.repository.projection.BookFileScanRow;
 import org.booklore.service.NotificationService;
 import org.booklore.task.options.RescanLibraryContext;
-import jakarta.persistence.EntityManager;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -32,12 +37,16 @@ import static org.mockito.Mockito.*;
 @ExtendWith(MockitoExtension.class)
 class LibraryProcessingServiceTest {
 
+    private static final long LIBRARY_ID = 1L;
+
     @Mock
     private LibraryRepository libraryRepository;
     @Mock
     private NotificationService notificationService;
     @Mock
     private BookAdditionalFileRepository bookAdditionalFileRepository;
+    @Mock
+    private BookRepository bookRepository;
     @Mock
     private FileAsBookProcessor fileAsBookProcessor;
     @Mock
@@ -49,65 +58,89 @@ class LibraryProcessingServiceTest {
     @Mock
     private BookGroupingService bookGroupingService;
     @Mock
-    private EntityManager entityManager;
+    private PlatformTransactionManager transactionManager;
 
     private LibraryProcessingService libraryProcessingService;
 
+    @TempDir
+    Path tempDir;
+
+    private LibraryEntity libraryEntity;
+    private LibraryPathEntity pathEntity;
+
     @BeforeEach
-    void setUp() {
+    void setUp() throws IOException {
         libraryProcessingService = new LibraryProcessingService(
                 libraryRepository,
                 notificationService,
                 bookAdditionalFileRepository,
+                bookRepository,
                 fileAsBookProcessor,
                 bookRestorationService,
                 bookDeletionService,
                 libraryFileHelper,
                 bookGroupingService,
-                entityManager
+                transactionManager
         );
+
+        Path libraryRoot = Files.createDirectory(tempDir.resolve("library"));
+        pathEntity = new LibraryPathEntity();
+        pathEntity.setId(10L);
+        pathEntity.setPath(libraryRoot.toString());
+
+        libraryEntity = new LibraryEntity();
+        libraryEntity.setId(LIBRARY_ID);
+        libraryEntity.setName("Test Library");
+        libraryEntity.setLibraryPaths(List.of(pathEntity));
     }
 
-    @Test
-    void processLibrary_shouldOnlyProcessNewFiles() throws IOException {
-        long libraryId = 1L;
-        LibraryEntity libraryEntity = new LibraryEntity();
-        libraryEntity.setId(libraryId);
-        libraryEntity.setName("Test Library");
+    private LibraryFile libraryFile(String subPath, String fileName) {
+        return libraryFile(subPath, fileName, BookFileType.EPUB);
+    }
 
-        LibraryPathEntity pathEntity = new LibraryPathEntity();
-        pathEntity.setId(10L);
-        pathEntity.setPath("/library");
-
-        BookEntity existingBook = new BookEntity();
-        existingBook.setLibraryPath(pathEntity);
-        BookFileEntity existingBookFile = new BookFileEntity();
-        existingBookFile.setBook(existingBook);
-        existingBook.setBookFiles(List.of(existingBookFile));
-        existingBook.getPrimaryBookFile().setFileSubPath("");
-        existingBook.getPrimaryBookFile().setFileName("book1.epub");
-        libraryEntity.setBookEntities(List.of(existingBook));
-
-        when(libraryRepository.findById(libraryId)).thenReturn(Optional.of(libraryEntity));
-
-        LibraryFile existingFile = LibraryFile.builder()
+    private LibraryFile libraryFile(String subPath, String fileName, BookFileType type) {
+        return LibraryFile.builder()
                 .libraryEntity(libraryEntity)
                 .libraryPathEntity(pathEntity)
-                .fileSubPath("")
-                .fileName("book1.epub")
+                .fileSubPath(subPath)
+                .fileName(fileName)
+                .bookFileType(type)
                 .build();
+    }
 
-        LibraryFile newFile = LibraryFile.builder()
-                .libraryEntity(libraryEntity)
-                .libraryPathEntity(pathEntity)
-                .fileSubPath("")
-                .fileName("book2.epub")
-                .build();
+    private BookFileScanRow row(long fileId, long bookId, String subPath, String fileName) {
+        return row(fileId, bookId, subPath, fileName, BookFileType.EPUB, true, false);
+    }
 
-        when(libraryFileHelper.getLibraryFiles(libraryEntity)).thenReturn(List.of(existingFile, newFile));
-        when(bookAdditionalFileRepository.findByLibraryId(libraryId)).thenReturn(Collections.emptyList());
+    private BookFileScanRow row(long fileId, long bookId, String subPath, String fileName,
+                                BookFileType type, boolean bookFormat, boolean bookDeleted) {
+        return new BookFileScanRow(fileId, bookId, pathEntity.getId(), pathEntity.getPath(), subPath, fileName,
+                bookFormat, type, bookDeleted);
+    }
 
-        // Mock grouping service to pass through the files
+    private void givenLibrary() {
+        when(libraryRepository.findById(LIBRARY_ID)).thenReturn(Optional.of(libraryEntity));
+    }
+
+    private void givenRows(BookFileScanRow... rows) {
+        when(bookAdditionalFileRepository.findScanRowsByLibraryId(LIBRARY_ID)).thenReturn(List.of(rows));
+    }
+
+    private void givenScan(LibraryScanResult scanResult) throws IOException {
+        when(libraryFileHelper.scanAllLibraryFiles(libraryEntity)).thenReturn(scanResult);
+        when(libraryFileHelper.filterByAllowedFormats(anyList(), any())).thenAnswer(inv -> inv.getArgument(0));
+    }
+
+    private void givenScan(LibraryFile... files) throws IOException {
+        givenScan(new LibraryScanResult(List.of(files), Set.of()));
+    }
+
+    private void givenNothingToGroup() {
+        when(bookGroupingService.groupForRescan(anyList(), eq(libraryEntity)))
+                .thenReturn(new BookGroupingService.GroupingResult(Collections.emptyMap(), Collections.emptyMap()));
+    }
+
+    private void givenInitialScanGroupsPerFile() {
         when(bookGroupingService.groupForInitialScan(anyList(), eq(libraryEntity)))
                 .thenAnswer(invocation -> {
                     List<LibraryFile> files = invocation.getArgument(0);
@@ -117,145 +150,77 @@ class LibraryProcessingServiceTest {
                     }
                     return result;
                 });
+    }
 
-        libraryProcessingService.processLibrary(libraryId);
+    private void rescan() throws IOException {
+        libraryProcessingService.rescanLibrary(RescanLibraryContext.builder().libraryId(LIBRARY_ID).build());
+    }
 
+    @SuppressWarnings("unchecked")
+    private List<LibraryFile> filesPassedToRescanGrouping() {
+        ArgumentCaptor<List<LibraryFile>> captor = ArgumentCaptor.forClass(List.class);
+        verify(bookGroupingService).groupForRescan(captor.capture(), eq(libraryEntity));
+        return captor.getValue();
+    }
+
+    @SuppressWarnings("unchecked")
+    private List<LibraryFile> filesPassedToInitialGrouping() {
         ArgumentCaptor<List<LibraryFile>> captor = ArgumentCaptor.forClass(List.class);
         verify(bookGroupingService).groupForInitialScan(captor.capture(), eq(libraryEntity));
+        return captor.getValue();
+    }
 
-        List<LibraryFile> processedFiles = captor.getValue();
+    // ---- initial scan ----
 
-        assertThat(processedFiles).hasSize(1);
-        assertThat(processedFiles.getFirst().getFileName()).isEqualTo("book2.epub");
+    @Test
+    void processLibrary_shouldOnlyProcessNewFiles() throws IOException {
+        givenLibrary();
+        givenRows(row(1, 11, "", "book1.epub"));
+        when(libraryFileHelper.getLibraryFiles(libraryEntity))
+                .thenReturn(List.of(libraryFile("", "book1.epub"), libraryFile("", "book2.epub")));
+        givenInitialScanGroupsPerFile();
+
+        libraryProcessingService.processLibrary(LIBRARY_ID);
+
+        assertThat(filesPassedToInitialGrouping()).extracting(LibraryFile::getFileName).containsExactly("book2.epub");
+        verify(fileAsBookProcessor).processLibraryFilesGrouped(anyMap(), eq(libraryEntity));
     }
 
     @Test
     void processLibrary_noNewFiles_shouldProcessNothing() throws IOException {
-        long libraryId = 1L;
-        LibraryEntity libraryEntity = new LibraryEntity();
-        libraryEntity.setId(libraryId);
-        libraryEntity.setName("Test Library");
-
-        LibraryPathEntity pathEntity = new LibraryPathEntity();
-        pathEntity.setId(10L);
-        pathEntity.setPath("/library");
-
-        BookEntity existingBook = new BookEntity();
-        existingBook.setLibraryPath(pathEntity);
-        BookFileEntity existingBookFile = new BookFileEntity();
-        existingBookFile.setBook(existingBook);
-        existingBook.setBookFiles(List.of(existingBookFile));
-        existingBook.getPrimaryBookFile().setFileSubPath("");
-        existingBook.getPrimaryBookFile().setFileName("book1.epub");
-        libraryEntity.setBookEntities(List.of(existingBook));
-
-        when(libraryRepository.findById(libraryId)).thenReturn(Optional.of(libraryEntity));
-
-        LibraryFile existingFile = LibraryFile.builder()
-                .libraryEntity(libraryEntity)
-                .libraryPathEntity(pathEntity)
-                .fileSubPath("")
-                .fileName("book1.epub")
-                .build();
-
-        when(libraryFileHelper.getLibraryFiles(libraryEntity)).thenReturn(List.of(existingFile));
-        when(bookAdditionalFileRepository.findByLibraryId(libraryId)).thenReturn(Collections.emptyList());
+        givenLibrary();
+        givenRows(row(1, 11, "", "book1.epub"));
+        when(libraryFileHelper.getLibraryFiles(libraryEntity)).thenReturn(List.of(libraryFile("", "book1.epub")));
         when(bookGroupingService.groupForInitialScan(anyList(), eq(libraryEntity))).thenReturn(Collections.emptyMap());
 
-        libraryProcessingService.processLibrary(libraryId);
+        libraryProcessingService.processLibrary(LIBRARY_ID);
 
-        ArgumentCaptor<List<LibraryFile>> captor = ArgumentCaptor.forClass(List.class);
-        verify(bookGroupingService).groupForInitialScan(captor.capture(), eq(libraryEntity));
-
-        assertThat(captor.getValue()).isEmpty();
+        assertThat(filesPassedToInitialGrouping()).isEmpty();
     }
 
     @Test
     void processLibrary_allNewFiles_shouldProcessAll() throws IOException {
-        long libraryId = 1L;
-        LibraryEntity libraryEntity = new LibraryEntity();
-        libraryEntity.setId(libraryId);
-        libraryEntity.setName("Test Library");
-        libraryEntity.setBookEntities(Collections.emptyList());
+        givenLibrary();
+        givenRows();
+        when(libraryFileHelper.getLibraryFiles(libraryEntity))
+                .thenReturn(List.of(libraryFile("", "book1.epub"), libraryFile("", "book2.epub")));
+        givenInitialScanGroupsPerFile();
 
-        LibraryPathEntity pathEntity = new LibraryPathEntity();
-        pathEntity.setId(10L);
-        pathEntity.setPath("/library");
+        libraryProcessingService.processLibrary(LIBRARY_ID);
 
-        when(libraryRepository.findById(libraryId)).thenReturn(Optional.of(libraryEntity));
-
-        LibraryFile newFile1 = LibraryFile.builder()
-                .libraryEntity(libraryEntity)
-                .libraryPathEntity(pathEntity)
-                .fileSubPath("")
-                .fileName("book1.epub")
-                .build();
-        LibraryFile newFile2 = LibraryFile.builder()
-                .libraryEntity(libraryEntity)
-                .libraryPathEntity(pathEntity)
-                .fileSubPath("")
-                .fileName("book2.epub")
-                .build();
-
-        when(libraryFileHelper.getLibraryFiles(libraryEntity)).thenReturn(List.of(newFile1, newFile2));
-        when(bookAdditionalFileRepository.findByLibraryId(libraryId)).thenReturn(Collections.emptyList());
-        when(bookGroupingService.groupForInitialScan(anyList(), eq(libraryEntity)))
-                .thenAnswer(invocation -> {
-                    List<LibraryFile> files = invocation.getArgument(0);
-                    Map<String, List<LibraryFile>> result = new LinkedHashMap<>();
-                    for (LibraryFile f : files) {
-                        result.put(f.getFileName(), List.of(f));
-                    }
-                    return result;
-                });
-
-        libraryProcessingService.processLibrary(libraryId);
-
-        ArgumentCaptor<List<LibraryFile>> captor = ArgumentCaptor.forClass(List.class);
-        verify(bookGroupingService).groupForInitialScan(captor.capture(), eq(libraryEntity));
-
-        assertThat(captor.getValue()).hasSize(2);
+        assertThat(filesPassedToInitialGrouping()).hasSize(2);
     }
 
     @Test
     void processLibrary_newFileInSubdirectory_shouldProcess() throws IOException {
-        long libraryId = 1L;
-        LibraryEntity libraryEntity = new LibraryEntity();
-        libraryEntity.setId(libraryId);
-        libraryEntity.setName("Test Library");
-        libraryEntity.setBookEntities(Collections.emptyList());
+        givenLibrary();
+        givenRows(row(1, 11, "", "book1.epub"));
+        when(libraryFileHelper.getLibraryFiles(libraryEntity)).thenReturn(List.of(libraryFile("fantasy", "book1.epub")));
+        givenInitialScanGroupsPerFile();
 
-        LibraryPathEntity pathEntity = new LibraryPathEntity();
-        pathEntity.setId(10L);
-        pathEntity.setPath("/library");
+        libraryProcessingService.processLibrary(LIBRARY_ID);
 
-        when(libraryRepository.findById(libraryId)).thenReturn(Optional.of(libraryEntity));
-
-        LibraryFile newFileInSub = LibraryFile.builder()
-                .libraryEntity(libraryEntity)
-                .libraryPathEntity(pathEntity)
-                .fileSubPath("fantasy")
-                .fileName("book1.epub")
-                .build();
-
-        when(libraryFileHelper.getLibraryFiles(libraryEntity)).thenReturn(List.of(newFileInSub));
-        when(bookAdditionalFileRepository.findByLibraryId(libraryId)).thenReturn(Collections.emptyList());
-        when(bookGroupingService.groupForInitialScan(anyList(), eq(libraryEntity)))
-                .thenAnswer(invocation -> {
-                    List<LibraryFile> files = invocation.getArgument(0);
-                    Map<String, List<LibraryFile>> result = new LinkedHashMap<>();
-                    for (LibraryFile f : files) {
-                        result.put(f.getFileName(), List.of(f));
-                    }
-                    return result;
-                });
-
-        libraryProcessingService.processLibrary(libraryId);
-
-        ArgumentCaptor<List<LibraryFile>> captor = ArgumentCaptor.forClass(List.class);
-        verify(bookGroupingService).groupForInitialScan(captor.capture(), eq(libraryEntity));
-
-        List<LibraryFile> processedFiles = captor.getValue();
+        List<LibraryFile> processedFiles = filesPassedToInitialGrouping();
         assertThat(processedFiles).hasSize(1);
         assertThat(processedFiles.getFirst().getFileName()).isEqualTo("book1.epub");
         assertThat(processedFiles.getFirst().getFileSubPath()).isEqualTo("fantasy");
@@ -263,309 +228,428 @@ class LibraryProcessingServiceTest {
 
     @Test
     void processLibrary_additionalFile_shouldNotProcess() throws IOException {
-        long libraryId = 1L;
-        LibraryEntity libraryEntity = new LibraryEntity();
-        libraryEntity.setId(libraryId);
-        libraryEntity.setName("Test Library");
-        libraryEntity.setBookEntities(Collections.emptyList());
-
-        LibraryPathEntity pathEntity = new LibraryPathEntity();
-        pathEntity.setId(10L);
-        pathEntity.setPath("/library");
-
-        when(libraryRepository.findById(libraryId)).thenReturn(Optional.of(libraryEntity));
-
-        LibraryFile additionalFileAsLibraryFile = LibraryFile.builder()
-                .libraryEntity(libraryEntity)
-                .libraryPathEntity(pathEntity)
-                .fileSubPath("")
-                .fileName("extra.pdf")
-                .build();
-
-        BookEntity parentBook = new BookEntity();
-        parentBook.setLibraryPath(pathEntity);
-
-        BookFileEntity additionalFileEntity = new BookFileEntity();
-        additionalFileEntity.setBook(parentBook);
-        additionalFileEntity.setFileSubPath("");
-        additionalFileEntity.setFileName("extra.pdf");
-
-        when(libraryFileHelper.getLibraryFiles(libraryEntity)).thenReturn(List.of(additionalFileAsLibraryFile));
-        when(bookAdditionalFileRepository.findByLibraryId(libraryId)).thenReturn(List.of(additionalFileEntity));
+        givenLibrary();
+        givenRows(row(1, 11, "", "main.epub"), row(2, 11, "", "extra.pdf", BookFileType.PDF, true, false));
+        when(libraryFileHelper.getLibraryFiles(libraryEntity)).thenReturn(List.of(libraryFile("", "extra.pdf")));
         when(bookGroupingService.groupForInitialScan(anyList(), eq(libraryEntity))).thenReturn(Collections.emptyMap());
 
-        libraryProcessingService.processLibrary(libraryId);
+        libraryProcessingService.processLibrary(LIBRARY_ID);
 
-        ArgumentCaptor<List<LibraryFile>> captor = ArgumentCaptor.forClass(List.class);
-        verify(bookGroupingService).groupForInitialScan(captor.capture(), eq(libraryEntity));
-
-        assertThat(captor.getValue()).isEmpty();
+        assertThat(filesPassedToInitialGrouping()).isEmpty();
     }
 
     @Test
-    void rescanLibrary_shouldDeleteRemovedBookFormatAdditionalFiles(@TempDir Path tempDir) throws IOException {
-        long libraryId = 1L;
-        Path accessiblePath = tempDir.resolve("library");
-        Files.createDirectory(accessiblePath);
+    void processLibrary_readsExistingFilesThroughTheProjectionOnly() throws IOException {
+        givenLibrary();
+        givenRows(row(1, 11, "", "book1.epub"));
+        when(libraryFileHelper.getLibraryFiles(libraryEntity)).thenReturn(List.of(libraryFile("", "book1.epub")));
+        when(bookGroupingService.groupForInitialScan(anyList(), eq(libraryEntity))).thenReturn(Collections.emptyMap());
 
-        LibraryEntity libraryEntity = new LibraryEntity();
-        libraryEntity.setId(libraryId);
-        libraryEntity.setName("Test Library");
+        libraryProcessingService.processLibrary(LIBRARY_ID);
 
-        LibraryPathEntity pathEntity = new LibraryPathEntity();
-        pathEntity.setId(10L);
-        pathEntity.setPath(accessiblePath.toString());
-        libraryEntity.setLibraryPaths(List.of(pathEntity));
-
-        BookEntity book = new BookEntity();
-        book.setId(11L);
-        book.setLibrary(libraryEntity);
-        book.setLibraryPath(pathEntity);
-
-        BookFileEntity epub = new BookFileEntity();
-        epub.setId(1L);
-        epub.setBook(book);
-        epub.setFileSubPath("author/title");
-        epub.setFileName("book.epub");
-        epub.setBookFormat(true);
-
-        BookFileEntity pdf = new BookFileEntity();
-        pdf.setId(2L);
-        pdf.setBook(book);
-        pdf.setFileSubPath("author/title");
-        pdf.setFileName("book.pdf");
-        pdf.setBookFormat(true);
-
-        BookFileEntity image = new BookFileEntity();
-        image.setId(3L);
-        image.setBook(book);
-        image.setFileSubPath("author/title");
-        image.setFileName("image.png");
-        image.setBookFormat(false);
-
-        book.setBookFiles(List.of(epub, pdf, image));
-        libraryEntity.setBookEntities(List.of(book));
-
-        when(libraryRepository.findById(libraryId)).thenReturn(Optional.of(libraryEntity));
-
-        // Only epub exists on disk, pdf was removed
-        LibraryFile epubOnDisk = LibraryFile.builder()
-                .libraryEntity(libraryEntity)
-                .libraryPathEntity(pathEntity)
-                .fileSubPath("author/title")
-                .fileName("book.epub")
-                .build();
-
-        when(libraryFileHelper.getAllLibraryFiles(libraryEntity)).thenReturn(List.of(epubOnDisk));
-        when(libraryFileHelper.filterByAllowedFormats(anyList(), any())).thenAnswer(inv -> inv.getArgument(0));
-        when(bookAdditionalFileRepository.findByLibraryId(libraryId)).thenReturn(List.of(epub, pdf, image));
-        when(bookGroupingService.groupForRescan(anyList(), eq(libraryEntity)))
-                .thenReturn(new BookGroupingService.GroupingResult(Collections.emptyMap(), Collections.emptyMap()));
-
-        libraryProcessingService.rescanLibrary(RescanLibraryContext.builder().libraryId(libraryId).build());
-
-        // pdf (book format) should be deleted; image (non-book format) should NOT be deleted
-        ArgumentCaptor<List<Long>> captor = ArgumentCaptor.forClass(List.class);
-        verify(bookDeletionService).deleteRemovedAdditionalFiles(captor.capture());
-        assertThat(captor.getValue()).containsExactly(2L);
+        verify(bookAdditionalFileRepository).findScanRowsByLibraryId(LIBRARY_ID);
+        verifyNoMoreInteractions(bookAdditionalFileRepository);
+        verifyNoInteractions(bookRepository);
     }
 
+    // ---- rescan: guards and structure ----
+
     @Test
-    void rescanLibrary_shouldAbortWhenPathNotAccessible(@TempDir Path tempDir) {
-        long libraryId = 1L;
-        Path nonExistentPath = tempDir.resolve("non_existent_path");
+    void rescanLibrary_shouldAbortWhenPathNotAccessible() {
+        pathEntity.setPath(tempDir.resolve("non_existent_path").toString());
+        givenLibrary();
 
-        LibraryEntity libraryEntity = new LibraryEntity();
-        libraryEntity.setId(libraryId);
-        libraryEntity.setName("Test Library");
-
-        LibraryPathEntity pathEntity = new LibraryPathEntity();
-        pathEntity.setId(10L);
-        pathEntity.setPath(nonExistentPath.toString());
-        libraryEntity.setLibraryPaths(List.of(pathEntity));
-        libraryEntity.setBookEntities(Collections.emptyList());
-
-        when(libraryRepository.findById(libraryId)).thenReturn(Optional.of(libraryEntity));
-
-        RescanLibraryContext context = RescanLibraryContext.builder().libraryId(libraryId).build();
+        RescanLibraryContext context = RescanLibraryContext.builder().libraryId(LIBRARY_ID).build();
 
         assertThatThrownBy(() -> libraryProcessingService.rescanLibrary(context))
                 .isInstanceOf(APIException.class)
                 .hasMessageContaining("not accessible");
 
-        verify(bookDeletionService, never()).processDeletedLibraryFiles(any(), any());
-        verify(bookDeletionService, never()).deleteRemovedAdditionalFiles(any());
+        verifyNoInteractions(libraryFileHelper, bookDeletionService, bookRestorationService);
     }
 
     @Test
-    void rescanLibrary_shouldAbortWhenLibraryHasBooksButScanReturnsEmpty(@TempDir Path tempDir) throws IOException {
-        long libraryId = 1L;
-        Path accessiblePath = tempDir.resolve("accessible");
-        Files.createDirectory(accessiblePath);
+    void rescanLibrary_shouldAbortWhenLibraryHasBooksButScanReturnsEmpty() throws IOException {
+        givenLibrary();
+        givenScan();
+        when(bookRepository.countIncludingDeletedByLibraryId(LIBRARY_ID)).thenReturn(1L);
 
-        LibraryEntity libraryEntity = new LibraryEntity();
-        libraryEntity.setId(libraryId);
-        libraryEntity.setName("Test Library");
-
-        LibraryPathEntity pathEntity = new LibraryPathEntity();
-        pathEntity.setId(10L);
-        pathEntity.setPath(accessiblePath.toString());
-        libraryEntity.setLibraryPaths(List.of(pathEntity));
-
-        BookEntity existingBook = new BookEntity();
-        existingBook.setId(1L);
-        existingBook.setLibraryPath(pathEntity);
-        BookFileEntity existingBookFile = new BookFileEntity();
-        existingBookFile.setBook(existingBook);
-        existingBook.setBookFiles(List.of(existingBookFile));
-        existingBook.getPrimaryBookFile().setFileSubPath("");
-        existingBook.getPrimaryBookFile().setFileName("book1.epub");
-        libraryEntity.setBookEntities(List.of(existingBook));
-
-        when(libraryRepository.findById(libraryId)).thenReturn(Optional.of(libraryEntity));
-        when(libraryFileHelper.getAllLibraryFiles(libraryEntity)).thenReturn(Collections.emptyList());
-
-        RescanLibraryContext context = RescanLibraryContext.builder().libraryId(libraryId).build();
+        RescanLibraryContext context = RescanLibraryContext.builder().libraryId(LIBRARY_ID).build();
 
         assertThatThrownBy(() -> libraryProcessingService.rescanLibrary(context))
                 .isInstanceOf(APIException.class)
                 .hasMessageContaining("not accessible");
 
+        verifyNoInteractions(bookDeletionService, bookRestorationService, bookGroupingService);
+        verify(bookAdditionalFileRepository, never()).findScanRowsByLibraryId(any());
+    }
+
+    @Test
+    void rescanLibrary_shouldProceedForEmptyLibraryWithNoFilesFound() throws IOException {
+        givenLibrary();
+        givenScan();
+        when(bookRepository.countIncludingDeletedByLibraryId(LIBRARY_ID)).thenReturn(0L);
+        givenRows();
+        givenNothingToGroup();
+
+        rescan();
+
         verify(bookDeletionService, never()).processDeletedLibraryFiles(any(), any());
+        assertThat(filesPassedToRescanGrouping()).isEmpty();
+    }
+
+    @Test
+    void rescanLibrary_shouldProceedWhenLibraryHasBooksAndScanFindsThem() throws IOException {
+        givenLibrary();
+        givenScan(libraryFile("", "book1.epub"));
+        givenRows(row(1, 11, "", "book1.epub"));
+        givenNothingToGroup();
+
+        rescan();
+
+        verify(bookRepository, never()).countIncludingDeletedByLibraryId(anyLong());
         verify(bookDeletionService, never()).deleteRemovedAdditionalFiles(any());
-    }
-
-    @Test
-    void rescanLibrary_shouldProceedWhenLibraryHasBooksAndScanFindsThem(@TempDir Path tempDir) throws IOException {
-        long libraryId = 1L;
-        Path accessiblePath = tempDir.resolve("accessible");
-        Files.createDirectory(accessiblePath);
-
-        LibraryEntity libraryEntity = new LibraryEntity();
-        libraryEntity.setId(libraryId);
-        libraryEntity.setName("Test Library");
-
-        LibraryPathEntity pathEntity = new LibraryPathEntity();
-        pathEntity.setId(10L);
-        pathEntity.setPath(accessiblePath.toString());
-        libraryEntity.setLibraryPaths(List.of(pathEntity));
-
-        BookEntity existingBook = new BookEntity();
-        existingBook.setId(1L);
-        existingBook.setLibraryPath(pathEntity);
-        BookFileEntity existingBookFile = new BookFileEntity();
-        existingBookFile.setBook(existingBook);
-        existingBook.setBookFiles(List.of(existingBookFile));
-        existingBook.getPrimaryBookFile().setFileSubPath("");
-        existingBook.getPrimaryBookFile().setFileName("book1.epub");
-        libraryEntity.setBookEntities(List.of(existingBook));
-
-        LibraryFile fileOnDisk = LibraryFile.builder()
-                .libraryEntity(libraryEntity)
-                .libraryPathEntity(pathEntity)
-                .fileSubPath("")
-                .fileName("book1.epub")
-                .build();
-
-        when(libraryRepository.findById(libraryId)).thenReturn(Optional.of(libraryEntity));
-        when(libraryFileHelper.getAllLibraryFiles(libraryEntity)).thenReturn(List.of(fileOnDisk));
-        when(libraryFileHelper.filterByAllowedFormats(anyList(), any())).thenAnswer(inv -> inv.getArgument(0));
-        when(bookAdditionalFileRepository.findByLibraryId(libraryId)).thenReturn(Collections.emptyList());
-        when(bookGroupingService.groupForRescan(anyList(), eq(libraryEntity)))
-                .thenReturn(new BookGroupingService.GroupingResult(Collections.emptyMap(), Collections.emptyMap()));
-
-        RescanLibraryContext context = RescanLibraryContext.builder().libraryId(libraryId).build();
-
-        libraryProcessingService.rescanLibrary(context);
-
         verify(bookDeletionService, never()).processDeletedLibraryFiles(any(), any());
     }
 
     @Test
-    void rescanLibrary_shouldProceedForEmptyLibraryWithNoFilesFound(@TempDir Path tempDir) throws IOException {
-        long libraryId = 1L;
-        Path accessiblePath = tempDir.resolve("accessible");
-        Files.createDirectory(accessiblePath);
+    void rescanLibrary_withNothingChanged_loadsLibraryAndRowsOnce() throws IOException {
+        givenLibrary();
+        givenScan(libraryFile("", "book (with parens).epub"));
+        givenRows(row(1, 11, "", "book (with parens).epub"));
+        givenNothingToGroup();
 
-        LibraryEntity libraryEntity = new LibraryEntity();
-        libraryEntity.setId(libraryId);
-        libraryEntity.setName("Test Library");
+        rescan();
 
-        LibraryPathEntity pathEntity = new LibraryPathEntity();
-        pathEntity.setId(10L);
-        pathEntity.setPath(accessiblePath.toString());
-        libraryEntity.setLibraryPaths(List.of(pathEntity));
-        libraryEntity.setBookEntities(Collections.emptyList());
+        verify(libraryRepository, times(1)).findById(LIBRARY_ID);
+        verify(bookAdditionalFileRepository, times(1)).findScanRowsByLibraryId(LIBRARY_ID);
+        assertThat(filesPassedToRescanGrouping()).isEmpty();
+        verifyNoInteractions(transactionManager);
+    }
 
-        when(libraryRepository.findById(libraryId)).thenReturn(Optional.of(libraryEntity));
-        when(libraryFileHelper.getAllLibraryFiles(libraryEntity)).thenReturn(Collections.emptyList());
-        when(libraryFileHelper.filterByAllowedFormats(anyList(), any())).thenAnswer(inv -> inv.getArgument(0));
-        when(bookAdditionalFileRepository.findByLibraryId(libraryId)).thenReturn(Collections.emptyList());
-        when(bookGroupingService.groupForRescan(anyList(), eq(libraryEntity)))
-                .thenReturn(new BookGroupingService.GroupingResult(Collections.emptyMap(), Collections.emptyMap()));
+    @Test
+    void rescanLibrary_isNotOneBigTransaction() throws NoSuchMethodException {
+        // The walk and detection must not run inside a transaction; each phase opens its own.
+        assertThat(LibraryProcessingService.class.isAnnotationPresent(Transactional.class)).isFalse();
+        assertThat(LibraryProcessingService.class.getMethod("rescanLibrary", RescanLibraryContext.class)
+                .isAnnotationPresent(Transactional.class)).isFalse();
+        assertThat(LibraryProcessingService.class.getMethod("processLibrary", long.class)
+                .isAnnotationPresent(Transactional.class)).isFalse();
+    }
 
-        RescanLibraryContext context = RescanLibraryContext.builder().libraryId(libraryId).build();
+    // ---- rescan: removed files and books ----
 
-        libraryProcessingService.rescanLibrary(context);
+    @Test
+    void rescanLibrary_shouldDeleteRemovedBookFormatAdditionalFiles() throws IOException {
+        givenLibrary();
+        // Only epub exists on disk, pdf was removed; image is not a book format
+        givenScan(libraryFile("author/title", "book.epub"));
+        givenRows(
+                row(1, 11, "author/title", "book.epub"),
+                row(2, 11, "author/title", "book.pdf", BookFileType.PDF, true, false),
+                row(3, 11, "author/title", "image.png", BookFileType.PDF, false, false));
+        givenNothingToGroup();
 
+        rescan();
+
+        verify(bookDeletionService).deleteRemovedAdditionalFiles(List.of(2L));
         verify(bookDeletionService, never()).processDeletedLibraryFiles(any(), any());
     }
 
     @Test
-    void rescanLibrary_shouldRefetchLibraryAfterEntityManagerClear(@TempDir Path tempDir) throws IOException {
+    void rescanLibrary_bookWhoseOnlyFileVanished_isStillTreatedAsDeleted() throws IOException {
+        LibraryScanResult scan = new LibraryScanResult(List.of(libraryFile("", "kept.epub")), Set.of());
+        givenLibrary();
+        givenScan(scan);
+        // The first projection still has gone.epub; once it is deleted the reload shows book 12 fileless.
+        when(bookAdditionalFileRepository.findScanRowsByLibraryId(LIBRARY_ID))
+                .thenReturn(List.of(row(1, 11, "", "kept.epub"), row(2, 12, "", "gone.epub")))
+                .thenReturn(List.of(row(1, 11, "", "kept.epub")));
+        givenNothingToGroup();
 
-        long libraryId = 1L;
-        Path accessiblePath = tempDir.resolve("accessible");
-        Files.createDirectory(accessiblePath);
+        rescan();
 
-        LibraryPathEntity pathEntity = new LibraryPathEntity();
-        pathEntity.setId(10L);
-        pathEntity.setPath(accessiblePath.toString());
+        verify(bookDeletionService).deleteRemovedAdditionalFiles(List.of(2L));
+        verify(bookDeletionService).processDeletedLibraryFiles(List.of(12L), scan);
+    }
 
-        BookEntity existingBook = new BookEntity();
-        existingBook.setId(1L);
-        existingBook.setLibraryPath(pathEntity);
-        BookFileEntity existingBookFile = new BookFileEntity();
-        existingBookFile.setBook(existingBook);
-        existingBook.setBookFiles(new ArrayList<>(List.of(existingBookFile)));
-        existingBook.getPrimaryBookFile().setFileSubPath("");
-        existingBook.getPrimaryBookFile().setFileName("book (with parens).epub");
+    @Test
+    void rescanLibrary_reloadsRowsAfterDeletionsSoLaterPhasesSeeTheCurrentState() throws IOException {
+        givenLibrary();
+        givenScan(libraryFile("", "kept.epub"), libraryFile("", "new.epub"));
+        when(bookAdditionalFileRepository.findScanRowsByLibraryId(LIBRARY_ID))
+                .thenReturn(List.of(row(1, 11, "", "kept.epub"), row(2, 11, "", "gone.pdf", BookFileType.PDF, true, false)))
+                .thenReturn(List.of(row(1, 11, "", "kept.epub")));
+        givenNothingToGroup();
 
-        // First call returns entity with one book, second call returns fresh entity with same book
-        LibraryEntity libraryEntity = new LibraryEntity();
-        libraryEntity.setId(libraryId);
-        libraryEntity.setName("Test Library");
-        libraryEntity.setLibraryPaths(new ArrayList<>(List.of(pathEntity)));
-        libraryEntity.setBookEntities(new ArrayList<>(List.of(existingBook)));
+        rescan();
 
-        LibraryEntity freshLibraryEntity = new LibraryEntity();
-        freshLibraryEntity.setId(libraryId);
-        freshLibraryEntity.setName("Test Library");
-        freshLibraryEntity.setLibraryPaths(new ArrayList<>(List.of(pathEntity)));
-        freshLibraryEntity.setBookEntities(new ArrayList<>(List.of(existingBook)));
+        ArgumentCaptor<LibraryBookFiles> restoreRows = ArgumentCaptor.forClass(LibraryBookFiles.class);
+        verify(bookRestorationService).restoreDeletedBooks(eq(libraryEntity), restoreRows.capture(), anySet());
+        assertThat(restoreRows.getValue().rows()).extracting(BookFileScanRow::bookFileId).containsExactly(1L);
 
-        LibraryFile fileOnDisk = LibraryFile.builder()
-                .libraryEntity(libraryEntity)
-                .libraryPathEntity(pathEntity)
-                .fileSubPath("")
-                .fileName("book (with parens).epub")
-                .build();
+        ArgumentCaptor<LibraryBookFiles> purgeRows = ArgumentCaptor.forClass(LibraryBookFiles.class);
+        verify(bookDeletionService).purgeDisallowedFormats(eq(libraryEntity), purgeRows.capture());
+        assertThat(purgeRows.getValue()).isSameAs(restoreRows.getValue());
 
-        when(libraryRepository.findById(libraryId))
-                .thenReturn(Optional.of(libraryEntity))
-                .thenReturn(Optional.of(freshLibraryEntity)); // Second call returns fresh entity
-        when(libraryFileHelper.getAllLibraryFiles(any(LibraryEntity.class))).thenReturn(List.of(fileOnDisk));
-        when(libraryFileHelper.filterByAllowedFormats(anyList(), any())).thenAnswer(inv -> inv.getArgument(0));
-        when(bookAdditionalFileRepository.findByLibraryId(libraryId)).thenReturn(Collections.emptyList());
-        when(bookGroupingService.groupForRescan(anyList(), any(LibraryEntity.class)))
-                .thenReturn(new BookGroupingService.GroupingResult(Collections.emptyMap(), Collections.emptyMap()));
+        verify(bookAdditionalFileRepository, times(2)).findScanRowsByLibraryId(LIBRARY_ID);
+        assertThat(filesPassedToRescanGrouping()).extracting(LibraryFile::getFileName).containsExactly("new.epub");
+    }
 
-        RescanLibraryContext context = RescanLibraryContext.builder().libraryId(libraryId).build();
+    @Test
+    void rescanLibrary_reloadsRowsAfterAPurgeBeforeDetectingNewFiles() throws IOException {
+        LibraryFile main = libraryFile("", "main.epub");
+        LibraryFile notes = libraryFile("", "notes.pdf", BookFileType.PDF);
+        LibraryFile mobi = libraryFile("", "old.mobi", BookFileType.MOBI);
+        givenLibrary();
+        when(libraryFileHelper.scanAllLibraryFiles(libraryEntity))
+                .thenReturn(new LibraryScanResult(List.of(main, notes, mobi), Set.of()));
+        when(libraryFileHelper.filterByAllowedFormats(anyList(), any())).thenReturn(List.of(main, notes));
+        // Book 12 only had a now disallowed mobi plus a supplementary notes.pdf; the purge deletes
+        // it, so notes.pdf is no longer known and is picked up as new.
+        when(bookAdditionalFileRepository.findScanRowsByLibraryId(LIBRARY_ID))
+                .thenReturn(List.of(
+                        row(1, 11, "", "main.epub"),
+                        row(2, 12, "", "notes.pdf", BookFileType.PDF, false, false),
+                        row(3, 12, "", "old.mobi", BookFileType.MOBI, true, false)))
+                .thenReturn(List.of(row(1, 11, "", "main.epub")));
+        when(bookDeletionService.purgeDisallowedFormats(eq(libraryEntity), any())).thenReturn(true);
+        givenNothingToGroup();
 
-        libraryProcessingService.rescanLibrary(context);
+        rescan();
 
-        verify(libraryRepository, times(2)).findById(libraryId);
+        verify(bookDeletionService, never()).deleteRemovedAdditionalFiles(any());
+        verify(bookDeletionService, never()).processDeletedLibraryFiles(any(), any());
+        verify(bookAdditionalFileRepository, times(2)).findScanRowsByLibraryId(LIBRARY_ID);
+        assertThat(filesPassedToRescanGrouping()).containsExactly(notes);
+    }
 
-        verify(bookGroupingService).groupForRescan(eq(Collections.emptyList()), any(LibraryEntity.class));
+    @Test
+    void rescanLibrary_runsThePhasesInOrder() throws IOException {
+        LibraryScanResult scan = new LibraryScanResult(List.of(libraryFile("", "kept.epub")), Set.of());
+        givenLibrary();
+        givenScan(scan);
+        givenRows(row(1, 11, "", "kept.epub"), row(2, 11, "", "gone.pdf", BookFileType.PDF, true, false),
+                row(3, 12, "", "vanished.epub"));
+        givenNothingToGroup();
+
+        rescan();
+
+        InOrder inOrder = inOrder(libraryFileHelper, bookDeletionService, bookRestorationService, bookGroupingService,
+                fileAsBookProcessor);
+        inOrder.verify(libraryFileHelper).scanAllLibraryFiles(libraryEntity);
+        inOrder.verify(bookDeletionService).deleteRemovedAdditionalFiles(List.of(2L, 3L));
+        inOrder.verify(bookDeletionService).processDeletedLibraryFiles(List.of(12L), scan);
+        inOrder.verify(bookRestorationService).restoreDeletedBooks(eq(libraryEntity), any(), anySet());
+        inOrder.verify(bookDeletionService).purgeDisallowedFormats(eq(libraryEntity), any());
+        inOrder.verify(bookGroupingService).groupForRescan(anyList(), eq(libraryEntity));
+        inOrder.verify(fileAsBookProcessor).processLibraryFilesGrouped(anyMap(), eq(libraryEntity));
+    }
+
+    @Test
+    void rescanLibrary_shouldNotDeleteSoftDeletedOrFilelessBooks() throws IOException {
+        givenLibrary();
+        givenScan(libraryFile("", "present.epub"));
+        // Book 12 is already soft-deleted; fileless books have no rows at all.
+        givenRows(row(1, 11, "", "present.epub"), row(2, 12, "", "gone.epub", BookFileType.EPUB, true, true));
+        givenNothingToGroup();
+
+        rescan();
+
+        verify(bookDeletionService, never()).processDeletedLibraryFiles(any(), any());
+        // The soft-deleted book's vanished file row is still removed, as before.
+        verify(bookDeletionService).deleteRemovedAdditionalFiles(List.of(2L));
+    }
+
+    // ---- rescan: incomplete walks ----
+
+    @Test
+    void rescanLibrary_keepsBooksAndFilesUnderPathsTheScanCouldNotRead() throws IOException {
+        Path unreadable = Path.of(pathEntity.getPath(), "offline");
+        LibraryScanResult scan = new LibraryScanResult(List.of(libraryFile("", "present.epub")), Set.of(unreadable));
+        givenLibrary();
+        givenScan(scan);
+        givenRows(
+                row(1, 11, "", "present.epub"),
+                row(2, 11, "offline/deeper", "present.pdf", BookFileType.PDF, true, false),
+                row(3, 12, "offline", "unseen.epub"),
+                row(4, 13, "online", "gone.epub"),
+                row(5, 11, "online", "gone.mobi", BookFileType.MOBI, true, false));
+        givenNothingToGroup();
+
+        rescan();
+
+        verify(bookDeletionService).deleteRemovedAdditionalFiles(List.of(4L, 5L));
+        verify(bookDeletionService).processDeletedLibraryFiles(List.of(13L), scan);
+    }
+
+    @Test
+    void detectionCountsWhatItKeptForAnIncompleteScan() {
+        Path unreadable = Path.of(pathEntity.getPath(), "offline");
+        LibraryScanResult scan = new LibraryScanResult(List.of(), Set.of(unreadable));
+        LibraryBookFiles bookFiles = new LibraryBookFiles(List.of(
+                row(1, 11, "offline", "a.epub"),
+                row(2, 11, "offline", "a.pdf", BookFileType.PDF, true, false),
+                row(3, 12, "offline/x", "b.epub"),
+                row(4, 13, "", "c.epub")));
+
+        var files = libraryProcessingService.detectDeletedAdditionalFiles(Set.of(), bookFiles, scan);
+        var books = LibraryProcessingService.detectDeletedBookIds(Set.of(), bookFiles, libraryEntity, scan);
+
+        assertThat(files.ids()).containsExactly(4L);
+        assertThat(files.unverifiable()).isEqualTo(3);
+        assertThat(books.ids()).containsExactly(13L);
+        assertThat(books.unverifiable()).isEqualTo(2);
+    }
+
+    // ---- rescan: primary file selection ----
+
+    @Test
+    void detectDeletedBookIds_judgesEachBookByItsPrimaryFileUnderTheFormatPriority() {
+        Set<Path> onDisk = Set.of(Path.of(pathEntity.getPath(), "a", "a.pdf"), Path.of(pathEntity.getPath(), "b", "b.epub"));
+        LibraryBookFiles bookFiles = new LibraryBookFiles(List.of(
+                // book 11: epub (lower id) gone, pdf present
+                row(1, 11, "a", "a.epub"),
+                row(2, 11, "a", "a.pdf", BookFileType.PDF, true, false),
+                // book 12: epub present, pdf gone
+                row(3, 12, "b", "b.epub"),
+                row(4, 12, "b", "b.pdf", BookFileType.PDF, true, false)));
+        LibraryScanResult scan = new LibraryScanResult(List.of(), Set.of());
+
+        libraryEntity.setFormatPriority(List.of(BookFileType.PDF, BookFileType.EPUB));
+        assertThat(LibraryProcessingService.detectDeletedBookIds(onDisk, bookFiles, libraryEntity, scan).ids())
+                .containsExactly(12L);
+
+        libraryEntity.setFormatPriority(List.of());
+        assertThat(LibraryProcessingService.detectDeletedBookIds(onDisk, bookFiles, libraryEntity, scan).ids())
+                .containsExactly(11L);
+    }
+
+    @Test
+    void detectDeletedBookIds_aBookWithoutLibraryPathCountsAsGone() {
+        LibraryBookFiles bookFiles = new LibraryBookFiles(List.of(
+                new BookFileScanRow(1L, 11L, null, null, "", "a.epub", true, BookFileType.EPUB, false)));
+
+        var books = LibraryProcessingService.detectDeletedBookIds(
+                Set.of(Path.of(pathEntity.getPath(), "a.epub")), bookFiles, libraryEntity,
+                new LibraryScanResult(List.of(), Set.of()));
+
+        assertThat(books.ids()).containsExactly(11L);
+    }
+
+    // ---- rescan: restore and new files ----
+
+    @Test
+    void rescanLibrary_restoresAReappearedBookWithoutReimportingItsFile() throws IOException {
+        givenLibrary();
+        givenScan(libraryFile("returned", "back.epub"), libraryFile("returned", "back.pdf"));
+        // Book 12 was soft-deleted while its file was away; now back.epub is on disk again.
+        givenRows(row(1, 12, "returned", "back.epub", BookFileType.EPUB, true, true));
+        givenNothingToGroup();
+
+        rescan();
+
+        ArgumentCaptor<LibraryBookFiles> rows = ArgumentCaptor.forClass(LibraryBookFiles.class);
+        @SuppressWarnings("unchecked")
+        ArgumentCaptor<Set<Path>> paths = ArgumentCaptor.forClass(Set.class);
+        verify(bookRestorationService).restoreDeletedBooks(eq(libraryEntity), rows.capture(), paths.capture());
+        assertThat(rows.getValue().rows()).extracting(BookFileScanRow::bookId).containsExactly(12L);
+        assertThat(paths.getValue()).contains(Path.of(pathEntity.getPath(), "returned", "back.epub"));
+
+        // Not deleted again, and its file is not new: only the pdf next to it goes to grouping,
+        // which runs after the restore so it can attach the pdf to the restored book.
+        verify(bookDeletionService, never()).deleteRemovedAdditionalFiles(any());
+        verify(bookDeletionService, never()).processDeletedLibraryFiles(any(), any());
+        assertThat(filesPassedToRescanGrouping()).extracting(LibraryFile::getFileName).containsExactly("back.pdf");
+        InOrder inOrder = inOrder(bookRestorationService, bookGroupingService);
+        inOrder.verify(bookRestorationService).restoreDeletedBooks(any(), any(), anySet());
+        inOrder.verify(bookGroupingService).groupForRescan(anyList(), any());
+    }
+
+    @Test
+    void detectNewBookPaths_treatsEveryKnownRowAsExisting() {
+        LibraryBookFiles bookFiles = new LibraryBookFiles(List.of(
+                row(1, 11, "", "primary.epub"),
+                row(2, 11, "", "alternate.pdf", BookFileType.PDF, true, false),
+                row(3, 11, "", "notes.pdf", BookFileType.PDF, false, false),
+                row(4, 12, "deleted", "old.epub", BookFileType.EPUB, true, true),
+                new BookFileScanRow(5L, 13L, 99L, "/elsewhere", "", "new.epub", true, BookFileType.EPUB, false)));
+
+        List<LibraryFile> newFiles = libraryProcessingService.detectNewBookPaths(List.of(
+                libraryFile("", "primary.epub"),
+                libraryFile("", "alternate.pdf"),
+                libraryFile("", "notes.pdf"),
+                libraryFile("deleted", "old.epub"),
+                libraryFile("", "new.epub"),
+                libraryFile(null, "root.epub")), bookFiles);
+
+        // new.epub is known under another library path only; root.epub is unknown.
+        assertThat(newFiles).extracting(LibraryFile::getFileName).containsExactly("new.epub", "root.epub");
+    }
+
+    // ---- rescan: auto-attach ----
+
+    @Test
+    void rescanLibrary_attachesFilesToAReloadedBookInATransactionPerBook() throws IOException {
+        Files.writeString(Path.of(pathEntity.getPath(), "book.epub"), "epub");
+        Files.writeString(Path.of(pathEntity.getPath(), "book.pdf"), "pdf");
+        LibraryFile pdf = libraryFile("", "book.pdf", BookFileType.PDF);
+
+        BookFileEntity epubFile = BookFileEntity.builder().id(1L).fileSubPath("").fileName("book.epub")
+                .isBookFormat(true).bookType(BookFileType.EPUB).build();
+        BookEntity detached = BookEntity.builder().id(11L).build();
+        BookEntity managed = BookEntity.builder().id(11L).library(libraryEntity).libraryPath(pathEntity)
+                .bookFiles(new ArrayList<>(List.of(epubFile))).build();
+        epubFile.setBook(managed);
+
+        givenLibrary();
+        givenScan(libraryFile("", "book.epub"), pdf);
+        givenRows(row(1, 11, "", "book.epub"));
+        when(bookGroupingService.groupForRescan(anyList(), eq(libraryEntity)))
+                .thenReturn(new BookGroupingService.GroupingResult(Map.of(detached, List.of(pdf)), Collections.emptyMap()));
+        when(bookRepository.findById(11L)).thenReturn(Optional.of(managed));
+
+        rescan();
+
+        InOrder inOrder = inOrder(transactionManager, bookRepository, bookAdditionalFileRepository);
+        inOrder.verify(transactionManager).getTransaction(any());
+        inOrder.verify(bookRepository).findById(11L);
+        ArgumentCaptor<BookFileEntity> saved = ArgumentCaptor.forClass(BookFileEntity.class);
+        inOrder.verify(bookAdditionalFileRepository).save(saved.capture());
+        inOrder.verify(transactionManager).commit(any());
+        assertThat(saved.getValue().getBook()).isSameAs(managed);
+        assertThat(saved.getValue().getFileName()).isEqualTo("book.pdf");
+        assertThat(saved.getValue().getCurrentHash()).isNotNull();
+        verify(fileAsBookProcessor).generateCoverFromAdditionalFile(managed, pdf);
+    }
+
+    @Test
+    void rescanLibrary_aFailedAttachDoesNotStopTheRest() throws IOException {
+        Files.writeString(Path.of(pathEntity.getPath(), "ok.pdf"), "pdf");
+        LibraryFile missing = libraryFile("", "missing.pdf", BookFileType.PDF);
+        LibraryFile ok = libraryFile("", "ok.pdf", BookFileType.PDF);
+        Map<BookEntity, List<LibraryFile>> toAttach = new LinkedHashMap<>();
+        toAttach.put(BookEntity.builder().id(11L).build(), List.of(missing));
+        toAttach.put(BookEntity.builder().id(12L).build(), List.of(ok));
+        BookEntity secondManaged = BookEntity.builder().id(12L).build();
+
+        givenLibrary();
+        givenScan(missing, ok);
+        givenRows();
+        when(bookGroupingService.groupForRescan(anyList(), eq(libraryEntity)))
+                .thenReturn(new BookGroupingService.GroupingResult(toAttach, Collections.emptyMap()));
+        when(bookRepository.findById(11L)).thenReturn(Optional.of(BookEntity.builder().id(11L).build()));
+        when(bookRepository.findById(12L)).thenReturn(Optional.of(secondManaged));
+
+        rescan();
+
+        // Hashing missing.pdf throws: that book's transaction rolls back, the next one still runs.
+        verify(transactionManager).rollback(any());
+        verify(transactionManager).commit(any());
+        ArgumentCaptor<BookFileEntity> saved = ArgumentCaptor.forClass(BookFileEntity.class);
+        verify(bookAdditionalFileRepository).save(saved.capture());
+        assertThat(saved.getValue().getBook()).isSameAs(secondManaged);
+        assertThat(secondManaged.getLibraryPath()).isSameAs(pathEntity);
+        verify(fileAsBookProcessor).processLibraryFilesGrouped(anyMap(), eq(libraryEntity));
     }
 }
