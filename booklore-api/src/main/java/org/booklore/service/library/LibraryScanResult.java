@@ -5,21 +5,25 @@ import org.booklore.model.dto.settings.LibraryFile;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.Set;
+import java.util.stream.Collectors;
 
 /**
  * Outcome of walking a library's paths.
  *
  * @param files           the book files found
  * @param incompletePaths directories or files the walk could not read (listing failed,
- *                        timed out, or an entry could not be inspected). Anything at or
- *                        below one of these paths was not seen, so its absence from
- *                        {@code files} says nothing about whether it still exists on disk.
+ *                        timed out, or an entry could not be inspected), held absolute and
+ *                        normalized. Anything at or below one of these paths may not have
+ *                        been seen, or not seen whole, so its absence from {@code files}
+ *                        says nothing about whether it still exists on disk.
  */
 public record LibraryScanResult(List<LibraryFile> files, Set<Path> incompletePaths) {
 
     public LibraryScanResult {
         files = List.copyOf(files);
-        incompletePaths = Set.copyOf(incompletePaths);
+        incompletePaths = incompletePaths.stream()
+                .map(path -> path.toAbsolutePath().normalize())
+                .collect(Collectors.toUnmodifiableSet());
     }
 
     public boolean isComplete() {
@@ -28,15 +32,15 @@ public record LibraryScanResult(List<LibraryFile> files, Set<Path> incompletePat
 
     /**
      * True when {@code path} is one of the incomplete paths or lies underneath one,
-     * i.e. the walk cannot vouch for whether it exists.
+     * i.e. the walk cannot vouch for whether it exists. Looks up the path and each of
+     * its ancestors, so the cost does not grow with the number of incomplete paths.
      */
     public boolean isUnderIncompletePath(Path path) {
         if (path == null || incompletePaths.isEmpty()) {
             return false;
         }
-        Path normalized = path.toAbsolutePath().normalize();
-        for (Path incomplete : incompletePaths) {
-            if (normalized.startsWith(incomplete.toAbsolutePath().normalize())) {
+        for (Path candidate = path.toAbsolutePath().normalize(); candidate != null; candidate = candidate.getParent()) {
+            if (incompletePaths.contains(candidate)) {
                 return true;
             }
         }
