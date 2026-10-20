@@ -14,6 +14,7 @@ import org.booklore.repository.LibraryRepository;
 import org.booklore.repository.projection.BookFileScanRow;
 import org.booklore.service.NotificationService;
 import org.booklore.service.file.FileFingerprint;
+import org.booklore.service.library.importer.ImportSummary;
 import org.booklore.task.options.RescanLibraryContext;
 import org.booklore.util.FileUtils;
 import lombok.AllArgsConstructor;
@@ -80,7 +81,7 @@ public class LibraryProcessingService {
 
             // Use BookGroupingService for consistent grouping based on organization mode
             Map<String, List<LibraryFile>> groups = bookGroupingService.groupForInitialScan(newFiles, libraryEntity);
-            fileAsBookProcessor.processLibraryFilesGrouped(groups, libraryEntity);
+            notifySkipped(libraryEntity, fileAsBookProcessor.processLibraryFilesGrouped(groups, libraryEntity));
 
             notificationService.sendMessage(Topic.LOG, LogNotification.info("Finished processing library: " + libraryEntity.getName()));
         } catch (IOException e) {
@@ -170,7 +171,7 @@ public class LibraryProcessingService {
         groupingResult.filesToAttach().forEach(this::autoAttachFiles);
 
         // Process new book groups
-        fileAsBookProcessor.processLibraryFilesGrouped(groupingResult.newBookGroups(), libraryEntity);
+        notifySkipped(libraryEntity, fileAsBookProcessor.processLibraryFilesGrouped(groupingResult.newBookGroups(), libraryEntity));
 
         notificationService.sendMessage(Topic.LOG, LogNotification.info("Finished refreshing library: " + libraryEntity.getName()));
     }
@@ -186,6 +187,30 @@ public class LibraryProcessingService {
 
     public void processLibraryFiles(List<LibraryFile> libraryFiles, LibraryEntity libraryEntity) {
         fileAsBookProcessor.processLibraryFiles(libraryFiles, libraryEntity);
+    }
+
+    /**
+     * Tells the user when an import left new files for the next scan. The sequential import keeps no counts, so it
+     * never does.
+     */
+    private void notifySkipped(LibraryEntity libraryEntity, ImportSummary summary) {
+        if (summary == null || summary.legacy()) {
+            return;
+        }
+        String name = libraryEntity.getName();
+        int skipped = summary.skippedForRetry();
+        if (summary.stoppedStorageStuck()) {
+            notificationService.sendMessage(Topic.LOG, LogNotification.error("Storage for library '" + name + "' stopped responding; "
+                    + skipped + " new files were not added. They will be retried on the next scan. "
+                    + "Check the share, or restart Booklore if it stays stuck."));
+        } else if (summary.stoppedDatabaseErrors()) {
+            notificationService.sendMessage(Topic.LOG, LogNotification.error("Saving new books in library '" + name
+                    + "' kept failing, so the import stopped; " + skipped + " new files were not added. "
+                    + "They will be retried on the next scan."));
+        } else if (skipped > 0) {
+            notificationService.sendMessage(Topic.LOG, LogNotification.warn(skipped + " new files in library '" + name
+                    + "' were not added because storage did not respond in time; they will be retried on the next scan."));
+        }
     }
 
     private void validateLibraryPathsAccessible(LibraryEntity libraryEntity) {
