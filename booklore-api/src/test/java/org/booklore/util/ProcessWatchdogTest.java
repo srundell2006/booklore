@@ -109,6 +109,22 @@ class ProcessWatchdogTest {
         assertThat(registered).containsExactly(inside);
     }
 
+    @Test
+    void processWatchedIndependentlyIsNotRegisteredWithThePreparationAndKeepsItsTimeout() throws Exception {
+        List<Process> registered = new ArrayList<>();
+        Process process = new ProcessBuilder("sh", "-c", "sleep 60").start();
+
+        boolean killed = ScopedValue.where(PrepareContext.CURRENT, TestProcesses.importContext(registered::add)).call(() -> {
+            try (ProcessWatchdog.WatchedProcess watched = ProcessWatchdog.watchIndependently(process, Duration.ofMillis(200))) {
+                process.waitFor(5, TimeUnit.SECONDS);
+                return watched.killed();
+            }
+        });
+
+        assertThat(killed).isTrue();
+        assertThat(registered).isEmpty();
+    }
+
     private static void awaitPids(Path pids) throws Exception {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (!Files.exists(pids) || Files.readAllLines(pids).size() < 2) {

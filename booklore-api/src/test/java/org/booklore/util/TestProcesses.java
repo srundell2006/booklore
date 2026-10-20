@@ -1,10 +1,15 @@
 package org.booklore.util;
 
+import org.booklore.service.fileprocessor.prepare.HeapReservation;
+import org.booklore.service.fileprocessor.prepare.IoCallable;
+import org.booklore.service.fileprocessor.prepare.PrepareContext;
+
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
+import java.util.function.Consumer;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
@@ -26,6 +31,35 @@ public final class TestProcesses {
                 Thread.sleep(10);
             }
         }
+    }
+
+    /**
+     * A context for running code as a file being prepared for import runs, bound as {@link PrepareContext#CURRENT}: it
+     * hands each process registered with it to {@code onRegister}, such as a list, or {@link ProcessWatchdog#kill} as
+     * the context of an import that has given up on its file does. It sets no limits.
+     */
+    public static PrepareContext importContext(Consumer<Process> onRegister) {
+        return new PrepareContext() {
+            @Override
+            public void checkpoint() {
+            }
+
+            @Override
+            public <T> T render(long estimatedBytes, IoCallable<T> work) throws Exception {
+                return work.call();
+            }
+
+            @Override
+            public HeapReservation reserveHeap(long bytes) {
+                return () -> {
+                };
+            }
+
+            @Override
+            public void registerProcess(Process process) {
+                onRegister.accept(process);
+            }
+        };
     }
 
     /**

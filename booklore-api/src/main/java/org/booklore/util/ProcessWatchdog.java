@@ -36,10 +36,21 @@ public final class ProcessWatchdog {
      */
     public static WatchedProcess watch(Process process, Duration timeout) {
         WatchedProcess watched = new WatchedProcess(process);
-        watched.timer = TIMER.schedule(watched::timeOut, timeout.toNanos(), TimeUnit.NANOSECONDS);
+        watched.startTimer(timeout);
         if (PrepareContext.CURRENT.isBound()) {
             PrepareContext.CURRENT.get().registerProcess(process);
         }
+        return watched;
+    }
+
+    /**
+     * As {@link #watch} outside an import, wherever it is called: for a process that is not part of the file being
+     * prepared, such as a check of which tools are installed whose answer the whole application keeps. Giving up on the
+     * file being prepared does not kill it.
+     */
+    public static WatchedProcess watchIndependently(Process process, Duration timeout) {
+        WatchedProcess watched = new WatchedProcess(process);
+        watched.startTimer(timeout);
         return watched;
     }
 
@@ -66,6 +77,10 @@ public final class ProcessWatchdog {
         /** Whether the timeout passed with the process still running, so it was killed. */
         public boolean killed() {
             return killed;
+        }
+
+        private void startTimer(Duration timeout) {
+            timer = TIMER.schedule(this::timeOut, timeout.toNanos(), TimeUnit.NANOSECONDS);
         }
 
         private void timeOut() {

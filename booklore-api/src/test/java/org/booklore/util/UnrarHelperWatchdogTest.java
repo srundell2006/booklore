@@ -1,5 +1,6 @@
 package org.booklore.util;
 
+import org.booklore.service.fileprocessor.prepare.PrepareContext;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -42,6 +43,8 @@ class UnrarHelperWatchdogTest {
     void tearDown() {
         UnrarHelper.unrarBinOverride = null;
         UnrarHelper.processTimeout = Duration.ofSeconds(120);
+        // Checked again with the real binary by whoever asks next
+        UnrarHelper.cachedAvailability = null;
     }
 
     @Test
@@ -94,5 +97,30 @@ class UnrarHelperWatchdogTest {
         UnrarHelper.unrarBinOverride = script.toString();
 
         assertThat(UnrarHelper.listEntries(tempDir.resolve("book.cbr"))).containsExactly("ComicInfo.xml", "page_001.jpg");
+    }
+
+    @Test
+    void availabilityFirstAskedByAnImportThatWasGivenUpOnIsStillTheBinarysOwn() throws Exception {
+        Path script = tempDir.resolve("usage-unrar");
+        Files.writeString(script, "#!/bin/sh\necho 'UNRAR 7.01 freeware'\n");
+        Files.setPosixFilePermissions(script, PosixFilePermissions.fromString("rwx------"));
+        UnrarHelper.unrarBinOverride = script.toString();
+        UnrarHelper.cachedAvailability = null;
+        // As on the thread of an import task that was given up on: it is interrupted, and its context kills every
+        // process registered with it at once
+        PrepareContext givenUp = TestProcesses.importContext(ProcessWatchdog::kill);
+        Thread.currentThread().interrupt();
+        boolean available;
+        boolean stillInterrupted;
+        try {
+            available = ScopedValue.where(PrepareContext.CURRENT, givenUp).call(UnrarHelper::isAvailable);
+        } finally {
+            stillInterrupted = Thread.interrupted();
+        }
+
+        assertThat(available).isTrue();
+        assertThat(stillInterrupted).isTrue();
+        // What is kept for good is the binary's answer
+        assertThat(UnrarHelper.isAvailable()).isTrue();
     }
 }

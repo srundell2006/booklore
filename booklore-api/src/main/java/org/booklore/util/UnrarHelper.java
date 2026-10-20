@@ -21,11 +21,11 @@ public class UnrarHelper {
     private static final String DEFAULT_UNRAR_BIN = "unrar";
     private static final int PROCESS_TIMEOUT_SECONDS = 120;
     private static final Duration AVAILABILITY_TIMEOUT = Duration.ofSeconds(5);
-    private static volatile Boolean cachedAvailability;
 
-    // Test seams: the binary in place of BOOKLORE_UNRAR_BIN, and a shorter process timeout
+    // Test seams: the binary in place of BOOKLORE_UNRAR_BIN, a shorter process timeout, and the cached availability
     static volatile String unrarBinOverride;
     static volatile Duration processTimeout = Duration.ofSeconds(PROCESS_TIMEOUT_SECONDS);
+    static volatile Boolean cachedAvailability;
 
     public static boolean isAvailable() {
         if (cachedAvailability != null) {
@@ -35,11 +35,14 @@ public class UnrarHelper {
             if (cachedAvailability != null) {
                 return cachedAvailability;
             }
+            // The answer is kept for good, so it must not depend on who asks first: an import thread that was given up
+            // on is still interrupted, and the processes of the file it was reading are killed
+            boolean interrupted = Thread.interrupted();
             try {
                 Process process = new ProcessBuilder(getUnrarBin())
                         .redirectErrorStream(true)
                         .start();
-                try (ProcessWatchdog.WatchedProcess watched = ProcessWatchdog.watch(process, AVAILABILITY_TIMEOUT)) {
+                try (ProcessWatchdog.WatchedProcess watched = ProcessWatchdog.watchIndependently(process, AVAILABILITY_TIMEOUT)) {
                     try (InputStream is = process.getInputStream()) {
                         is.readAllBytes();
                     }
@@ -49,6 +52,10 @@ public class UnrarHelper {
             } catch (Exception e) {
                 log.debug("unrar binary not available: {}", e.getMessage());
                 cachedAvailability = false;
+            } finally {
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
             }
             if (cachedAvailability) {
                 log.info("unrar CLI detected, RAR5 fallback enabled");
