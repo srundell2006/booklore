@@ -102,18 +102,21 @@ public class LibraryOrganizeService {
 
         Path targetPath = Paths.get(libraryPath.getPath(), newRelativePathStr);
 
-        // Resolve name conflicts: if target exists and isn't the current file, suffix (1), (2), …
-        targetPath = resolveConflict(targetPath, currentPath, bookFile.isFolderBased());
+        // No other move may take the target between finding it free and moving there
+        synchronized (FileMoveHelper.MOVE_LOCK) {
+            // Resolve name conflicts: if target exists and isn't the current file, suffix (1), (2), …
+            targetPath = resolveConflict(targetPath, currentPath, bookFile.isFolderBased());
 
-        // Already in the right place? A name stored decomposed (by a macOS client) is the same name
-        if (FileMoveHelper.isSamePathIgnoringNormalization(currentPath.toAbsolutePath().normalize(), targetPath.toAbsolutePath().normalize())) {
-            return false;
-        }
+            // Already in the right place? A name stored decomposed (by a macOS client) is the same name
+            if (FileMoveHelper.isAlreadyInPlace(currentPath.toAbsolutePath().normalize(), targetPath.toAbsolutePath().normalize())) {
+                return false;
+            }
 
-        // Move the file
-        Files.createDirectories(targetPath.getParent());
-        if (!moveFile(currentPath, targetPath)) {
-            return false;
+            // Move the file
+            Files.createDirectories(targetPath.getParent());
+            if (!moveFile(currentPath, targetPath)) {
+                return false;
+            }
         }
         log.debug("Moved '{}' -> '{}'", currentPath, targetPath);
 
@@ -167,23 +170,24 @@ public class LibraryOrganizeService {
      * instead another link to the same file.
      */
     private boolean moveFile(Path currentPath, Path targetPath) throws IOException {
-        if (!Files.exists(targetPath)) {
+        if (FileMoveHelper.isAbsent(targetPath)) {
             Files.move(currentPath, targetPath);
             return true;
         }
         Path tempPath = currentPath.resolveSibling(currentPath.getFileName() + ".tmp_move");
         Files.move(currentPath, tempPath);
-        if (Files.exists(targetPath)) {
-            Files.move(tempPath, currentPath);
-            return false;
-        }
+        boolean moved = false;
         try {
-            Files.move(tempPath, targetPath);
-        } catch (IOException e) {
-            Files.move(tempPath, currentPath);
-            throw e;
+            if (FileMoveHelper.isAbsent(targetPath)) {
+                Files.move(tempPath, targetPath);
+                moved = true;
+            }
+        } finally {
+            if (!moved) {
+                Files.move(tempPath, currentPath);
+            }
         }
-        return true;
+        return moved;
     }
 
     /**
@@ -216,9 +220,10 @@ public class LibraryOrganizeService {
      * Whether nothing but the source is at {@code path}: a case-insensitive or
      * normalization-insensitive share finds the source itself under another
      * spelling, and a source already numbered by an earlier run keeps its number.
+     * A path that cannot be read throws rather than counting as free.
      */
     private boolean isFreeFor(Path path, Path sourcePath) throws IOException {
-        return !Files.exists(path) || Files.isSameFile(path, sourcePath);
+        return FileMoveHelper.isAbsent(path) || Files.isSameFile(path, sourcePath);
     }
 
     /** The length of a file name without its book extension, or without its last extension for other files. */

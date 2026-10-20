@@ -23,14 +23,24 @@ import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.text.Normalizer;
 import java.util.HashSet;
+import java.util.Objects;
 import java.util.Set;
 
 @Slf4j
 @Component
 @AllArgsConstructor
 public class FileMoveHelper {
+
+    /**
+     * Held from checking a move's targets until its files are moved or put back. Java cannot rename
+     * without replacing whatever is at the target, so two books moved at the same time (metadata
+     * refreshes run in parallel) could otherwise both find a target free and the second replace the
+     * first.
+     */
+    public static final Object MOVE_LOCK = new Object();
 
     private final MonitoringRegistrationService monitoringRegistrationService;
     private final AppSettingService appSettingService;
@@ -86,7 +96,8 @@ public class FileMoveHelper {
 
         Path tempPath = source.resolveSibling(source.getFileName().toString() + ".tmp_move");
         log.info("Moving file from {} to temporary location {}", source, tempPath);
-        executeWithRetry(() -> Files.move(source, tempPath, StandardCopyOption.REPLACE_EXISTING));
+        // A file already there is one a failed rollback left behind, and may be the only copy of a book
+        executeWithRetry(() -> Files.move(source, tempPath));
         return tempPath;
     }
 
@@ -96,7 +107,21 @@ public class FileMoveHelper {
      * name that finds the decomposed file on a normalization-insensitive one.
      */
     public boolean isTakenByAnotherFile(Path target, Path source) throws IOException {
-        return Files.exists(target) && !Files.isSameFile(source, target);
+        return !isAbsent(target) && !Files.isSameFile(source, target);
+    }
+
+    /**
+     * Whether nothing at all is at {@code path}, not even a dangling link. Files.exists reads an
+     * error (a share dropping out for a moment) as "no file"; this throws it instead, so that a
+     * target is never taken to be free only because it could not be read.
+     */
+    public static boolean isAbsent(Path path) throws IOException {
+        try {
+            Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
+            return false;
+        } catch (NoSuchFileException e) {
+            return true;
+        }
     }
 
     /**
@@ -107,6 +132,21 @@ public class FileMoveHelper {
     public static boolean isSamePathIgnoringNormalization(Path first, Path second) {
         return Normalizer.normalize(first.toString(), Normalizer.Form.NFC)
                 .equals(Normalizer.normalize(second.toString(), Normalizer.Form.NFC));
+    }
+
+    /**
+     * Whether one of a book's files is already at its target: the same path once both are
+     * NFC-composed, in the directory the rest of the book goes to. On a normalization-insensitive
+     * share a decomposed directory is the composed one; on a sensitive file system the composed
+     * directory is another one, and the file moves there with the rest of its book.
+     */
+    public static boolean isAlreadyInPlace(Path source, Path target) throws IOException {
+        if (!isSamePathIgnoringNormalization(source, target)) {
+            return false;
+        }
+        Path sourceDir = source.getParent();
+        Path targetDir = target.getParent();
+        return Objects.equals(sourceDir, targetDir) || (!isAbsent(targetDir) && Files.isSameFile(sourceDir, targetDir));
     }
 
     /**
@@ -125,13 +165,17 @@ public class FileMoveHelper {
         log.info("Committing move from temporary location {} to {}", tempPath, target);
         executeWithRetry(() -> {
             // Files.move alone would also do nothing, without failing, when the target is another link to the same file
-            if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+            if (!isAbsent(target)) {
                 throw new FileAlreadyExistsException(target.toString(), null, "Not replacing an existing file");
             }
             Files.move(tempPath, target);
         });
     }
 
+    /**
+     * Moves a staged or committed file or folder back to its source. Whatever has taken the
+     * source's place since is never replaced: the file is then left where it is, and logged.
+     */
     public void rollbackMove(Path tempPath, Path originalSource) {
         if (!Files.exists(tempPath)) {
             return;
@@ -140,7 +184,14 @@ public class FileMoveHelper {
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             try {
                 log.info("Rolling back move from {} to {}", tempPath, originalSource);
-                Files.move(tempPath, originalSource, StandardCopyOption.REPLACE_EXISTING);
+                if (originalSource.getParent() != null) {
+                    Files.createDirectories(originalSource.getParent());
+                }
+                Files.move(tempPath, originalSource);
+                return;
+            } catch (FileAlreadyExistsException e) {
+                log.error("Failed to rollback file move from {} to {}: another file has taken its place. " +
+                        "The moved file may need moving back by hand: {}", tempPath, originalSource, tempPath);
                 return;
             } catch (IOException e) {
                 if (attempt == MAX_ATTEMPTS) {

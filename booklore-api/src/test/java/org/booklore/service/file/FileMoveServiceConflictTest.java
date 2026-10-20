@@ -18,8 +18,10 @@ import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
 import org.booklore.service.NotificationService;
 import org.booklore.service.appsettings.AppSettingService;
+import org.booklore.service.metadata.sidecar.SidecarMetadataMapper;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
 import org.booklore.service.monitoring.MonitoringRegistrationService;
+import org.booklore.util.FileService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -29,6 +31,8 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import org.mockito.junit.jupiter.MockitoSettings;
 import org.mockito.quality.Strictness;
 import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.IOException;
@@ -49,8 +53,8 @@ import static org.mockito.ArgumentMatchers.*;
 import static org.mockito.Mockito.*;
 
 /**
- * Moves on real files: a move never replaces another book's file or folder, and a book already in place, under
- * whatever spelling the share stores it, stays where it is.
+ * Moves on real files: a move never replaces another book's file or folder, never leaves a book half moved, and a
+ * book already in place, under whatever spelling the share stores it, stays where it is.
  */
 @ExtendWith(MockitoExtension.class)
 @MockitoSettings(strictness = Strictness.LENIENT)
@@ -95,6 +99,10 @@ class FileMoveServiceConflictTest {
     }
 
     private FileMoveService service(FileMoveHelper fileMoveHelper) {
+        return service(fileMoveHelper, sidecarMetadataWriter);
+    }
+
+    private FileMoveService service(FileMoveHelper fileMoveHelper, SidecarMetadataWriter sidecarMetadataWriter) {
         return new FileMoveService(appProperties, bookRepository, bookFileRepository, libraryRepository, fileMoveHelper,
                 monitoringRegistrationService, libraryMapper, bookMapper, notificationService, entityManager,
                 transactionTemplate, sidecarMetadataWriter) {
@@ -187,6 +195,18 @@ class FileMoveServiceConflictTest {
         verify(bookFileRepository, never()).updateFileNameAndSubPath(eq(secondBook.getBookFiles().getFirst().getId()), any(), any());
     }
 
+    private FileMoveRequest moveToLibrary2(BookEntity... books) {
+        FileMoveRequest request = new FileMoveRequest();
+        request.setMoves(Stream.of(books).map(book -> {
+            FileMoveRequest.Move move = new FileMoveRequest.Move();
+            move.setBookId(book.getId());
+            move.setTargetLibraryId(2L);
+            move.setTargetLibraryPathId(20L);
+            return move;
+        }).toList());
+        return request;
+    }
+
     @Test
     void twoBooksMovedToTheSameNameInABulkMove_secondStaysWhereItIs() throws IOException {
         Path targetRoot = Files.createDirectories(tempDir.resolve("target"));
@@ -197,15 +217,7 @@ class FileMoveServiceConflictTest {
         BookEntity firstBook = book("Same Title", "", "first.epub", false);
         BookEntity secondBook = book("Same Title", "", "second.epub", false);
 
-        FileMoveRequest request = new FileMoveRequest();
-        request.setMoves(Stream.of(firstBook, secondBook).map(book -> {
-            FileMoveRequest.Move move = new FileMoveRequest.Move();
-            move.setBookId(book.getId());
-            move.setTargetLibraryId(2L);
-            move.setTargetLibraryPathId(20L);
-            return move;
-        }).toList());
-        service.bulkMoveFiles(request);
+        service.bulkMoveFiles(moveToLibrary2(firstBook, secondBook));
 
         assertThat(Files.readString(targetRoot.resolve("Same Title.epub"))).isEqualTo("first book");
         assertThat(first).doesNotExist();
@@ -295,6 +307,8 @@ class FileMoveServiceConflictTest {
         String decomposedAuthor = Normalizer.normalize("한강", Normalizer.Form.NFD);
         write(libraryRoot.resolve(decomposedAuthor).resolve("old name.epub"), "the book");
         Path notes = write(libraryRoot.resolve(decomposedAuthor).resolve("notes.txt"), "notes");
+        // A share that finds the decomposed folder under the composed name, as a link does here
+        Files.createSymbolicLink(libraryRoot.resolve("한강"), libraryRoot.resolve(decomposedAuthor));
         BookEntity book = book("소년이 온다", decomposedAuthor, "old name.epub", false);
         book.getMetadata().setAuthors(List.of(AuthorEntity.builder().name("한강").build()));
         BookFileEntity notesFile = addFile(book, decomposedAuthor, "notes.txt", false, false);
@@ -302,7 +316,191 @@ class FileMoveServiceConflictTest {
         assertThat(service.moveSingleFile(book).isMoved()).isTrue();
 
         assertThat(Files.readString(notes)).isEqualTo("notes");
+        assertThat(Files.readString(libraryRoot.resolve(decomposedAuthor).resolve("소년이 온다.epub"))).isEqualTo("the book");
         verify(bookFileRepository).updateFileNameAndSubPath(book.getBookFiles().getFirst().getId(), "소년이 온다.epub", "한강");
         verify(bookFileRepository).updateFileNameAndSubPath(notesFile.getId(), "notes.txt", decomposedAuthor);
+    }
+
+    @Test
+    void bookInADecomposedFolderOnASensitiveFileSystem_movesTogether() throws IOException {
+        assumeUnicodeFileNames();
+        library.setFileNamingPattern("{authors}/{title}");
+        String decomposedAuthor = Normalizer.normalize("한강", Normalizer.Form.NFD);
+        write(libraryRoot.resolve(decomposedAuthor).resolve("old name.epub"), "the book");
+        write(libraryRoot.resolve(decomposedAuthor).resolve("notes.txt"), "notes");
+        BookEntity book = book("소년이 온다", decomposedAuthor, "old name.epub", false);
+        book.getMetadata().setAuthors(List.of(AuthorEntity.builder().name("한강").build()));
+        BookFileEntity notesFile = addFile(book, decomposedAuthor, "notes.txt", false, false);
+
+        assertThat(service.moveSingleFile(book).isMoved()).isTrue();
+
+        // The composed folder is another folder here: the notes go into it with the book, not stay behind
+        assertThat(Files.readString(libraryRoot.resolve("한강/소년이 온다.epub"))).isEqualTo("the book");
+        assertThat(Files.readString(libraryRoot.resolve("한강/notes.txt"))).isEqualTo("notes");
+        assertThat(libraryRoot.resolve(decomposedAuthor)).doesNotExist();
+        verify(bookFileRepository).updateFileNameAndSubPath(book.getBookFiles().getFirst().getId(), "소년이 온다.epub", "한강");
+        verify(bookFileRepository).updateFileNameAndSubPath(notesFile.getId(), "notes.txt", "한강");
+    }
+
+    @Test
+    void twoFilesOfOneBookResolvingToTheSameName_bookStaysWhereItIs() throws IOException {
+        // An attached second EPUB is named "Dune_1.epub", and "{title}" names both files "Dune Messiah.epub"
+        Path first = write(libraryRoot.resolve("incoming/Dune.epub"), "first file");
+        Path second = write(libraryRoot.resolve("incoming/Dune_1.epub"), "second file");
+        BookEntity book = book("Dune Messiah", "incoming", "Dune.epub", false);
+        addFile(book, "incoming", "Dune_1.epub", true, false);
+
+        FileMoveResult result = service.moveSingleFile(book);
+
+        assertThat(result.isMoved()).isFalse();
+        assertThat(Files.readString(first)).isEqualTo("first file");
+        assertThat(Files.readString(second)).isEqualTo("second file");
+        assertThat(libraryRoot.resolve("Dune Messiah.epub")).doesNotExist();
+        assertThat(leftoverTempFiles()).isEmpty();
+        verify(bookFileRepository, never()).updateFileNameAndSubPath(anyLong(), any(), any());
+    }
+
+    @Test
+    void twoFilesOfOneBookResolvingToNamesThatDifferOnlyInCase_bookStaysWhereItIs() throws IOException {
+        // "Title.EPUB" and "Title.epub" are one name on a case-insensitive share
+        Path first = write(libraryRoot.resolve("incoming/a.EPUB"), "first file");
+        Path second = write(libraryRoot.resolve("incoming/b.epub"), "second file");
+        BookEntity book = book("Title", "incoming", "a.EPUB", false);
+        addFile(book, "incoming", "b.epub", true, false);
+
+        assertThat(service.moveSingleFile(book).isMoved()).isFalse();
+
+        assertThat(Files.readString(first)).isEqualTo("first file");
+        assertThat(Files.readString(second)).isEqualTo("second file");
+        verify(bookFileRepository, never()).updateFileNameAndSubPath(anyLong(), any(), any());
+    }
+
+    @Test
+    void twoFilesOfOneBookResolvingToTheSameNameInABulkMove_bookStaysWhereItIs() throws IOException {
+        Path targetRoot = Files.createDirectories(tempDir.resolve("target"));
+        when(libraryRepository.findById(2L)).thenReturn(Optional.of(library(2L, targetRoot)));
+        Path first = write(libraryRoot.resolve("Dune.epub"), "first file");
+        Path second = write(libraryRoot.resolve("Dune_1.epub"), "second file");
+        BookEntity book = book("Dune Messiah", "", "Dune.epub", false);
+        addFile(book, "", "Dune_1.epub", true, false);
+
+        service.bulkMoveFiles(moveToLibrary2(book));
+
+        assertThat(Files.readString(first)).isEqualTo("first file");
+        assertThat(Files.readString(second)).isEqualTo("second file");
+        assertThat(targetRoot.resolve("Dune Messiah.epub")).doesNotExist();
+        assertThat(leftoverTempFiles()).isEmpty();
+        verify(bookRepository, never()).updateLibrary(anyLong(), anyLong(), any());
+    }
+
+    @Test
+    void targetAppearingForTheSecondFileOfABook_putsBothFilesBack() throws IOException {
+        Path epub = write(libraryRoot.resolve("incoming/book.epub"), "the epub");
+        Path pdf = write(libraryRoot.resolve("incoming/book.pdf"), "the pdf");
+        BookEntity book = book("Title", "incoming", "book.epub", false);
+        addFile(book, "incoming", "book.pdf", true, false);
+        Path pdfTarget = libraryRoot.resolve("Title.pdf");
+        FileMoveService racingService = service(new FileMoveHelper(monitoringRegistrationService, appSettingService) {
+            @Override
+            public Path moveFileWithBackup(Path source) throws IOException {
+                Path tempPath = super.moveFileWithBackup(source);
+                if (source.equals(pdf)) {
+                    write(pdfTarget, "another book");
+                }
+                return tempPath;
+            }
+        });
+
+        FileMoveResult result = racingService.moveSingleFile(book);
+
+        // The EPUB was already at its new name when the PDF could not follow: it is moved back too
+        assertThat(result.isMoved()).isFalse();
+        assertThat(Files.readString(epub)).isEqualTo("the epub");
+        assertThat(Files.readString(pdf)).isEqualTo("the pdf");
+        assertThat(libraryRoot.resolve("Title.epub")).doesNotExist();
+        assertThat(Files.readString(pdfTarget)).isEqualTo("another book");
+        assertThat(leftoverTempFiles()).isEmpty();
+        verify(bookFileRepository, never()).updateFileNameAndSubPath(anyLong(), any(), any());
+    }
+
+    private void completeTransaction(int status, Runnable work) {
+        TransactionSynchronizationManager.initSynchronization();
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            work.run();
+            TransactionSynchronizationManager.getSynchronizations().forEach(synchronization -> synchronization.afterCompletion(status));
+        } finally {
+            TransactionSynchronizationManager.setActualTransactionActive(false);
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+    }
+
+    @Test
+    void callersTransactionRollingBackAfterTheMove_putsTheFilesBack() throws IOException {
+        Path source = write(libraryRoot.resolve("incoming/old/book.epub"), "the book");
+        Path notes = write(libraryRoot.resolve("incoming/old/notes.txt"), "notes");
+        BookEntity book = book("Title", "incoming/old", "book.epub", false);
+        addFile(book, "incoming/old", "notes.txt", false, false);
+
+        completeTransaction(TransactionSynchronization.STATUS_ROLLED_BACK, () -> {
+            assertThat(service.moveSingleFile(book).isMoved()).isTrue();
+            assertThat(source).doesNotExist();
+        });
+
+        // The rows went back to the old names with the transaction, and so do the files, folder and all
+        assertThat(Files.readString(source)).isEqualTo("the book");
+        assertThat(Files.readString(notes)).isEqualTo("notes");
+        assertThat(libraryRoot.resolve("Title.epub")).doesNotExist();
+        assertThat(libraryRoot.resolve("notes.txt")).doesNotExist();
+    }
+
+    @Test
+    void callersTransactionCommitting_leavesTheFilesMoved() throws IOException {
+        Path source = write(libraryRoot.resolve("incoming/book.epub"), "the book");
+        BookEntity book = book("Title", "incoming", "book.epub", false);
+
+        completeTransaction(TransactionSynchronization.STATUS_COMMITTED,
+                () -> assertThat(service.moveSingleFile(book).isMoved()).isTrue());
+
+        assertThat(source).doesNotExist();
+        assertThat(Files.readString(libraryRoot.resolve("Title.epub"))).isEqualTo("the book");
+    }
+
+    private FileMoveService serviceWithSidecars() {
+        SidecarMetadataWriter writer = new SidecarMetadataWriter(appProperties, new SidecarMetadataMapper(), mock(FileService.class), appSettingService);
+        return service(new FileMoveHelper(monitoringRegistrationService, appSettingService), writer);
+    }
+
+    @Test
+    void sidecarFiles_moveWithTheBook() throws IOException {
+        write(libraryRoot.resolve("incoming/book.pdf"), "the book");
+        write(libraryRoot.resolve("incoming/book.metadata.json"), "sidecar");
+        write(libraryRoot.resolve("incoming/book.cover.jpg"), "cover");
+        BookEntity book = book("Title", "incoming", "book.pdf", false);
+
+        assertThat(serviceWithSidecars().moveSingleFile(book).isMoved()).isTrue();
+
+        assertThat(Files.readString(libraryRoot.resolve("Title.metadata.json"))).isEqualTo("sidecar");
+        assertThat(Files.readString(libraryRoot.resolve("Title.cover.jpg"))).isEqualTo("cover");
+    }
+
+    @Test
+    void anotherBooksSidecarFilesAtTheNewNames_areNotReplaced() throws IOException {
+        // "Title.epub" and "Title.pdf" are different books, but both have sidecars named "Title.metadata.json"
+        write(libraryRoot.resolve("Title.epub"), "book A");
+        Path sidecarA = write(libraryRoot.resolve("Title.metadata.json"), "sidecar A");
+        Path coverA = write(libraryRoot.resolve("Title.cover.jpg"), "cover A");
+        Path sidecarB = write(libraryRoot.resolve("incoming/book.metadata.json"), "sidecar B");
+        Path coverB = write(libraryRoot.resolve("incoming/book.cover.jpg"), "cover B");
+        write(libraryRoot.resolve("incoming/book.pdf"), "book B");
+        BookEntity bookB = book("Title", "incoming", "book.pdf", false);
+
+        assertThat(serviceWithSidecars().moveSingleFile(bookB).isMoved()).isTrue();
+
+        assertThat(Files.readString(libraryRoot.resolve("Title.pdf"))).isEqualTo("book B");
+        assertThat(Files.readString(sidecarA)).isEqualTo("sidecar A");
+        assertThat(Files.readString(coverA)).isEqualTo("cover A");
+        assertThat(Files.readString(sidecarB)).isEqualTo("sidecar B");
+        assertThat(Files.readString(coverB)).isEqualTo("cover B");
     }
 }

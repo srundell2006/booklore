@@ -1,5 +1,6 @@
 package org.booklore.service.library;
 
+import org.booklore.model.entity.AuthorEntity;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.BookMetadataEntity;
@@ -97,6 +98,25 @@ class LibraryOrganizeServiceTest {
         return file;
     }
 
+    private BookFileEntity addFile(BookEntity book, String subPath, String fileName) {
+        BookFileEntity file = new BookFileEntity();
+        file.setId(nextId++);
+        file.setBook(book);
+        file.setFileName(fileName);
+        file.setFileSubPath(subPath);
+        file.setBookFormat(true);
+        file.setBookType(BookFileType.PDF);
+        if (!book.getBookFiles().contains(file)) {
+            book.getBookFiles().add(file);
+        }
+        return file;
+    }
+
+    private static void assumeUnicodeFileNames() {
+        assumeTrue(Charset.forName(System.getProperty("sun.jnu.encoding", "UTF-8")).newEncoder().canEncode("한강ガ"),
+                "File names are not encoded as UTF-8 here: run under a UTF-8 locale");
+    }
+
     private Path write(String relativePath, String content) throws IOException {
         Path file = libraryRoot.resolve(relativePath);
         Files.createDirectories(file.getParent());
@@ -183,8 +203,7 @@ class LibraryOrganizeServiceTest {
 
     @Test
     void bookStoredDecomposed_isAlreadyInPlace() throws IOException {
-        assumeTrue(Charset.forName(System.getProperty("sun.jnu.encoding", "UTF-8")).newEncoder().canEncode("ガ"),
-                "File names are not encoded as UTF-8 here: run under a UTF-8 locale");
+        assumeUnicodeFileNames();
         String title = "ガイドがある";
         String decomposed = Normalizer.normalize(title, Normalizer.Form.NFD) + ".epub";
         write(decomposed, "the book");
@@ -194,5 +213,48 @@ class LibraryOrganizeServiceTest {
 
         assertThat(namesIn(libraryRoot)).containsExactly(decomposed);
         verify(bookFileRepository, never()).save(any());
+    }
+
+    /** A book by 한강 in a folder whose name is stored decomposed: one file to rename, one already named right. */
+    private BookFileEntity[] bookInADecomposedFolder() throws IOException {
+        library.setFileNamingPattern("{authors}/{title}");
+        String decomposedAuthor = Normalizer.normalize("한강", Normalizer.Form.NFD);
+        write(decomposedAuthor + "/old name.epub", "the epub");
+        write(decomposedAuthor + "/소년이 온다.pdf", "the pdf");
+        BookFileEntity epub = book("소년이 온다", decomposedAuthor, "old name.epub", false);
+        BookEntity book = epub.getBook();
+        book.getMetadata().setAuthors(List.of(AuthorEntity.builder().name("한강").build()));
+        return new BookFileEntity[]{epub, addFile(book, decomposedAuthor, "소년이 온다.pdf")};
+    }
+
+    @Test
+    void bookInADecomposedFolderOnASensitiveFileSystem_movesTogether() throws IOException {
+        assumeUnicodeFileNames();
+        BookFileEntity[] files = bookInADecomposedFolder();
+
+        service.organizeLibrary(1L);
+
+        // The composed folder is another folder here: the PDF goes into it with the EPUB, not stay behind
+        assertThat(namesIn(libraryRoot)).containsExactly("한강");
+        assertThat(namesIn(libraryRoot.resolve("한강"))).containsExactly("소년이 온다.epub", "소년이 온다.pdf");
+        assertThat(files[1].getFileSubPath()).isEqualTo("한강");
+        verify(bookFileRepository).save(files[0]);
+        verify(bookFileRepository).save(files[1]);
+    }
+
+    @Test
+    void fileInADecomposedFolderTheShareFindsUnderTheComposedName_isAlreadyInPlace() throws IOException {
+        assumeUnicodeFileNames();
+        BookFileEntity[] files = bookInADecomposedFolder();
+        String decomposedAuthor = files[1].getFileSubPath();
+        // A share that finds the decomposed folder under the composed name, as a link does here
+        Files.createSymbolicLink(libraryRoot.resolve("한강"), libraryRoot.resolve(decomposedAuthor));
+
+        service.organizeLibrary(1L);
+
+        assertThat(namesIn(libraryRoot.resolve(decomposedAuthor))).containsExactly("소년이 온다.epub", "소년이 온다.pdf");
+        assertThat(files[1].getFileSubPath()).isEqualTo(decomposedAuthor);
+        verify(bookFileRepository).save(files[0]);
+        verify(bookFileRepository, never()).save(files[1]);
     }
 }

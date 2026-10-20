@@ -12,8 +12,10 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
+import java.nio.charset.Charset;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystem;
+import java.nio.file.FileSystemException;
 import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
@@ -26,6 +28,7 @@ import java.util.concurrent.ScheduledExecutorService;
 import java.util.concurrent.TimeUnit;
 
 import static org.junit.jupiter.api.Assertions.*;
+import static org.junit.jupiter.api.Assumptions.assumeTrue;
 
 @ExtendWith(MockitoExtension.class)
 @DisplayName("FileMoveHelper Tests")
@@ -45,6 +48,12 @@ class FileMoveHelperTest {
     @BeforeEach
     void setUp() {
         fileMoveHelper = new FileMoveHelper(monitoringRegistrationService, appSettingService);
+    }
+
+    /** Non-ASCII file names need the JVM to encode them as UTF-8, as it does under a UTF-8 locale (LANG=C.UTF-8). */
+    private static void assumeUnicodeFileNames() {
+        assumeTrue(Charset.forName(System.getProperty("sun.jnu.encoding", "UTF-8")).newEncoder().canEncode("한강"),
+                "File names are not encoded as UTF-8 here: run under a UTF-8 locale");
     }
 
     @Nested
@@ -264,6 +273,86 @@ class FileMoveHelperTest {
                 assertFalse(FileMoveHelper.isSamePathIgnoringNormalization(names.getPath(composed), names.getPath("/books/한강/채식주의자.epub")));
                 assertFalse(FileMoveHelper.isSamePathIgnoringNormalization(names.getPath("/books/a.epub"), names.getPath("/books/A.epub")));
             }
+        }
+
+        @Test
+        @DisplayName("isAlreadyInPlace: a decomposed name is in place only in the directory the book goes to")
+        void isAlreadyInPlace_decomposedNameInTheTargetDirectoryOnly() throws Exception {
+            assumeUnicodeFileNames();
+            String composedAuthor = "한강";
+            String decomposedAuthor = Normalizer.normalize(composedAuthor, Normalizer.Form.NFD);
+            Path decomposedDir = Files.createDirectories(tempDir.resolve(decomposedAuthor));
+            Path source = Files.writeString(decomposedDir.resolve("notes.txt"), "notes");
+            Path target = tempDir.resolve(composedAuthor).resolve("notes.txt");
+
+            assertTrue(FileMoveHelper.isAlreadyInPlace(source, source));
+            // A sensitive file system: the composed directory is another one, and the book moves there
+            assertFalse(FileMoveHelper.isAlreadyInPlace(source, target));
+            // A share that finds the decomposed directory under the composed name, as a link does here
+            Files.createSymbolicLink(tempDir.resolve(composedAuthor), decomposedDir);
+            assertTrue(FileMoveHelper.isAlreadyInPlace(source, target));
+            assertFalse(FileMoveHelper.isAlreadyInPlace(source, tempDir.resolve(composedAuthor).resolve("other.txt")));
+        }
+
+        @Test
+        @DisplayName("isAbsent: only a missing path is absent, a dangling link is not")
+        void isAbsent_onlyAMissingPath() throws Exception {
+            Path file = Files.writeString(tempDir.resolve("book.epub"), "the book");
+            Path link = Files.createSymbolicLink(tempDir.resolve("link.epub"), tempDir.resolve("gone.epub"));
+
+            assertTrue(FileMoveHelper.isAbsent(tempDir.resolve("missing.epub")));
+            assertFalse(FileMoveHelper.isAbsent(file));
+            assertFalse(FileMoveHelper.isAbsent(tempDir));
+            assertFalse(FileMoveHelper.isAbsent(link));
+        }
+
+        @Test
+        @DisplayName("A target that cannot be read is never taken to be free")
+        void unreadableTarget_isNotFree() throws Exception {
+            // Reading a path through a link loop fails, as reading one on a share that drops out fails with an I/O error
+            Path loop = Files.createSymbolicLink(tempDir.resolve("Author"), tempDir.resolve("Author"));
+            Path source = Files.writeString(tempDir.resolve("book.epub"), "the book");
+            Path unreadable = loop.resolve("Title.epub");
+
+            assertFalse(Files.exists(unreadable), "Files.exists takes it to be free");
+            assertThrows(FileSystemException.class, () -> FileMoveHelper.isAbsent(unreadable));
+            assertThrows(FileSystemException.class, () -> fileMoveHelper.isTakenByAnotherFile(unreadable, source));
+        }
+
+        @Test
+        @DisplayName("rollbackMove never replaces a file that has taken the source's place")
+        void rollbackMove_sourceTaken_leavesBothFiles() throws Exception {
+            Path tempPath = Files.writeString(tempDir.resolve("Title.epub.tmp_move"), "moving book");
+            Path originalSource = Files.writeString(tempDir.resolve("Title.epub"), "another book");
+
+            assertDoesNotThrow(() -> fileMoveHelper.rollbackMove(tempPath, originalSource));
+
+            assertEquals("moving book", Files.readString(tempPath));
+            assertEquals("another book", Files.readString(originalSource));
+        }
+
+        @Test
+        @DisplayName("rollbackMove recreates a source directory removed since the move")
+        void rollbackMove_sourceDirectoryGone_isRecreated() throws Exception {
+            Path moved = Files.writeString(tempDir.resolve("Title.epub"), "the book");
+            Path originalSource = tempDir.resolve("incoming/old/book.epub");
+
+            fileMoveHelper.rollbackMove(moved, originalSource);
+
+            assertFalse(Files.exists(moved));
+            assertEquals("the book", Files.readString(originalSource));
+        }
+
+        @Test
+        @DisplayName("moveFileWithBackup never replaces a temporary file left behind by a failed rollback")
+        void moveFileWithBackup_leftoverTempFile_throws() throws Exception {
+            Path source = Files.writeString(tempDir.resolve("Title.epub"), "the book");
+            Path leftover = Files.writeString(tempDir.resolve("Title.epub.tmp_move"), "another book");
+
+            assertThrows(FileAlreadyExistsException.class, () -> fileMoveHelper.moveFileWithBackup(source));
+
+            assertEquals("the book", Files.readString(source));
+            assertEquals("another book", Files.readString(leftover));
         }
     }
 
