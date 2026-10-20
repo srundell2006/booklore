@@ -5,8 +5,6 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.io.RandomAccessReadBufferedFile;
 import org.apache.pdfbox.pdmodel.PDDocument;
-import org.apache.pdfbox.rendering.ImageType;
-import org.apache.pdfbox.rendering.PDFRenderer;
 import org.booklore.mapper.BookMapper;
 import org.booklore.model.dto.BookMetadata;
 import org.booklore.model.dto.settings.LibraryFile;
@@ -28,12 +26,16 @@ import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.util.List;
+import java.util.function.Consumer;
 
 import static org.booklore.util.FileService.truncate;
 
 @Slf4j
 @Service
 public class PdfProcessor extends AbstractFileProcessor implements BookFileProcessor {
+
+    // Only pages too small to fill the stored cover render this sharp; larger pages render just big enough
+    private static final float MAX_COVER_DPI = 150f;
 
     private final PdfMetadataExtractor pdfMetadataExtractor;
 
@@ -52,7 +54,8 @@ public class PdfProcessor extends AbstractFileProcessor implements BookFileProce
     @Override
     public BookEntity processNewFile(LibraryFile libraryFile) {
         BookEntity bookEntity = bookCreatorService.createShellBook(libraryFile, BookFileType.PDF);
-        boolean coverGenerated = generateCover(bookEntity);
+        // Metadata is read from the document loaded for the cover, so the file is only loaded once
+        boolean coverGenerated = generateCover(bookEntity, bookEntity.getPrimaryBookFile(), pdf -> extractAndSetMetadata(bookEntity, pdf));
         if (!coverGenerated) {
             var folder = getBookFolderForCoverFallback(libraryFile);
             if (folder != null) {
@@ -63,7 +66,6 @@ public class PdfProcessor extends AbstractFileProcessor implements BookFileProce
             FileService.setBookCoverPath(bookEntity.getMetadata());
             bookEntity.setBookCoverHash(BookCoverUtils.generateCoverHash());
         }
-        extractAndSetMetadata(bookEntity);
         return bookEntity;
     }
 
@@ -74,9 +76,14 @@ public class PdfProcessor extends AbstractFileProcessor implements BookFileProce
 
     @Override
     public boolean generateCover(BookEntity bookEntity, BookFileEntity bookFile) {
+        return generateCover(bookEntity, bookFile, pdf -> {});
+    }
+
+    private boolean generateCover(BookEntity bookEntity, BookFileEntity bookFile, Consumer<PDDocument> beforeRender) {
         File pdfFile = new File(FileUtils.getBookFullPath(bookEntity, bookFile));
         try (RandomAccessReadBufferedFile randomAccessRead = new RandomAccessReadBufferedFile(pdfFile);
              PDDocument pdf = Loader.loadPDF(randomAccessRead)) {
+            beforeRender.accept(pdf);
             return generateCoverImageAndSave(bookEntity.getId(), pdf);
         } catch (OutOfMemoryError e) {
             // Note: Catching OOM is generally discouraged, but for batch processing
@@ -102,9 +109,9 @@ public class PdfProcessor extends AbstractFileProcessor implements BookFileProce
         return List.of(BookFileType.PDF);
     }
 
-    private void extractAndSetMetadata(BookEntity bookEntity) {
+    private void extractAndSetMetadata(BookEntity bookEntity, PDDocument pdf) {
         try {
-            BookMetadata extracted = pdfMetadataExtractor.extractMetadata(new File(FileUtils.getBookFullPath(bookEntity)));
+            BookMetadata extracted = pdfMetadataExtractor.extractMetadata(pdf, new File(FileUtils.getBookFullPath(bookEntity)));
 
             if (StringUtils.isNotBlank(extracted.getTitle())) {
                 bookEntity.getMetadata().setTitle(truncate(extracted.getTitle(), 1000));
@@ -211,7 +218,7 @@ public class PdfProcessor extends AbstractFileProcessor implements BookFileProce
     private boolean generateCoverImageAndSave(Long bookId, PDDocument document) throws IOException {
         BufferedImage coverImage = null;
         try {
-            coverImage = new PDFRenderer(document).renderImageWithDPI(0, 150, ImageType.RGB);
+            coverImage = pdfMetadataExtractor.renderCover(document, MAX_COVER_DPI);
             return fileService.saveCoverImages(coverImage, bookId);
         } catch (OutOfMemoryError e) {
             log.error("Out of memory (heap space exhausted) while generating cover for bookId {}. Skipping cover generation.", bookId);

@@ -1,5 +1,6 @@
 package org.booklore.service.metadata.extractor;
 
+import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.cos.COSString;
@@ -9,12 +10,15 @@ import org.apache.pdfbox.pdmodel.PDDocumentInformation;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDMetadata;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.booklore.model.dto.BookMetadata;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.InputStream;
@@ -25,6 +29,7 @@ import java.util.GregorianCalendar;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 class PdfMetadataExtractorTest {
 
@@ -879,6 +884,197 @@ class PdfMetadataExtractorTest {
             File nonExistent = new File("/tmp/no_such_file_ever.pdf");
             byte[] cover = extractor.extractCover(nonExistent);
             assertThat(cover).isNull();
+        }
+
+        @Test
+        void extractCover_rendersOnlyAsLargeAsTheStoredCover() throws Exception {
+            File pdf = createPdf(_ -> {});
+            BufferedImage cover = ImageIO.read(new ByteArrayInputStream(extractor.extractCover(pdf)));
+            // A Letter page used to render at 300 DPI (2550x3299) only for saveCoverImages to scale it to 1000 wide
+            assertThat(cover.getWidth()).isEqualTo(1000);
+            assertThat(cover.getHeight()).isEqualTo(1294);
+        }
+    }
+
+    // --- Cover render size ---
+
+    @Nested
+    class CoverRenderSizeTests {
+
+        private static final PDRectangle LETTER_LANDSCAPE = new PDRectangle(PDRectangle.LETTER.getHeight(), PDRectangle.LETTER.getWidth());
+
+        @Test
+        void letterPage_rendersTheWidthAtTheCap() throws Exception {
+            assertCoverRender(PDRectangle.LETTER, 0, 150, 117.706f, 1000, 1294);
+        }
+
+        @Test
+        void a4Page_rendersTheWidthAtTheCap() throws Exception {
+            assertCoverRender(PDRectangle.A4, 0, 150, 121.013f, 1000, 1414);
+        }
+
+        @Test
+        void squarePage_rendersTheWidthAtTheCap() throws Exception {
+            assertCoverRender(new PDRectangle(576, 576), 0, 150, 125.063f, 1000, 1000);
+        }
+
+        @Test
+        void landscapePage_rendersTheHeightAtTheCap() throws Exception {
+            assertCoverRender(new PDRectangle(1224, 792), 0, 150, 136.409f, 2318, 1500);
+        }
+
+        @Test
+        void landscapePage_tooSmallToReachTheCap_rendersAtMaxDpi() throws Exception {
+            // 1500 px tall would need 176.5 DPI; at 150 DPI the render is the same as before
+            assertCoverRender(LETTER_LANDSCAPE, 0, 150, 150f, 1649, 1275);
+            assertCoverRender(LETTER_LANDSCAPE, 0, 300, 176.529f, 1941, 1500);
+        }
+
+        @Test
+        void quarterTurnRotation_swapsTheEdges() throws Exception {
+            // A landscape crop box turned 90 degrees displays, and renders, as a portrait page
+            assertCoverRender(LETTER_LANDSCAPE, 90, 150, 117.706f, 1000, 1294);
+            // A portrait crop box turned 270 degrees renders as a landscape page
+            assertCoverRender(PDRectangle.LETTER, 270, 150, 150f, 1649, 1275);
+        }
+
+        @Test
+        void halfTurnRotation_keepsTheEdges() throws Exception {
+            assertCoverRender(PDRectangle.LETTER, 180, 150, 117.706f, 1000, 1294);
+        }
+
+        @Test
+        void posterPage_rendersFarBelowMaxDpi() throws Exception {
+            // 150 DPI used to render 4966x7021 here
+            assertCoverRender(PDRectangle.A0, 0, 150, 30.217f, 1000, 1414);
+        }
+
+        @Test
+        void tinyPage_rendersAtMaxDpi() throws Exception {
+            PDRectangle twoByThreeInches = new PDRectangle(144, 216);
+            assertCoverRender(twoByThreeInches, 0, 150, 150f, 300, 449);
+            assertCoverRender(twoByThreeInches, 0, 300, 300f, 600, 899);
+        }
+
+        @Test
+        void usesTheCropBoxRatherThanTheMediaBox() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDPage page = new PDPage(new PDRectangle(1224, 1584));
+                page.setCropBox(new PDRectangle(306, 396, 612, 792));
+                doc.addPage(page);
+                assertThat(PdfMetadataExtractor.coverDpi(page, 150)).isCloseTo(117.706f, within(0.001f));
+                BufferedImage image = extractor.renderCover(doc, 150);
+                assertThat(image.getWidth()).isEqualTo(1000);
+                assertThat(image.getHeight()).isEqualTo(1294);
+            }
+        }
+
+        private void assertCoverRender(PDRectangle box, int rotation, float maxDpi,
+                                       float expectedDpi, int expectedWidth, int expectedHeight) throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDPage page = new PDPage(box);
+                page.setRotation(rotation);
+                doc.addPage(page);
+                assertThat(PdfMetadataExtractor.coverDpi(page, maxDpi)).isCloseTo(expectedDpi, within(0.001f));
+                BufferedImage image = extractor.renderCover(doc, maxDpi);
+                assertThat(image.getWidth()).isEqualTo(expectedWidth);
+                assertThat(image.getHeight()).isEqualTo(expectedHeight);
+            }
+        }
+    }
+
+    // --- Already loaded document ---
+
+    @Nested
+    class LoadedDocumentTests {
+
+        @Test
+        void matchesFileOverload_forDocumentInfo() throws Exception {
+            File pdf = createPdf(doc -> {
+                PDDocumentInformation info = new PDDocumentInformation();
+                info.setTitle("Info Title");
+                info.setAuthor("Author One, Author Two & Author Three");
+                info.setSubject("Info subject");
+                info.setKeywords("Fantasy; Adventure");
+                info.setCreationDate(new GregorianCalendar(2020, Calendar.MARCH, 15));
+                info.setCustomMetadataValue("Language", "fr");
+                info.getCOSObject().setString(COSName.getPDFName("EBX_PUBLISHER"), "Ebx House");
+                doc.setDocumentInformation(info);
+                doc.addPage(new PDPage());
+            });
+
+            BookMetadata meta = assertLoadedDocumentMatchesFile(pdf);
+
+            assertThat(meta.getTitle()).isEqualTo("Info Title");
+            assertThat(meta.getAuthors()).containsExactly("Author One", "Author Two", "Author Three");
+            assertThat(meta.getDescription()).isEqualTo("Info subject");
+            assertThat(meta.getCategories()).containsExactlyInAnyOrder("Fantasy", "Adventure");
+            assertThat(meta.getPublishedDate()).isNotNull();
+            assertThat(meta.getLanguage()).isEqualTo("fr");
+            assertThat(meta.getPublisher()).isEqualTo("Ebx House");
+            assertThat(meta.getPageCount()).isEqualTo(2);
+        }
+
+        @Test
+        void matchesFileOverload_forXmp() throws Exception {
+            File pdf = createPdfWithXmp("""
+                <dc:title><rdf:Alt><rdf:li xml:lang="x-default">Xmp Title</rdf:li></rdf:Alt></dc:title>
+                <dc:creator><rdf:Seq><rdf:li>Xmp Author</rdf:li><rdf:li>Second Author</rdf:li></rdf:Seq></dc:creator>
+                <dc:subject><rdf:Bag><rdf:li>Sci-Fi</rdf:li></rdf:Bag></dc:subject>
+                <calibre:series><rdf:value>Calibre Series</rdf:value><calibreSI:series_index>2</calibreSI:series_index></calibre:series>
+                <booklore:subtitle>Xmp Subtitle</booklore:subtitle>
+                <booklore:seriesTotal>5</booklore:seriesTotal>
+                <booklore:goodreadsRating>4.5</booklore:goodreadsRating>
+                <booklore:tags><rdf:Bag><rdf:li>Favorites</rdf:li></rdf:Bag></booklore:tags>
+                <xmp:Identifier>
+                  <rdf:Bag>
+                    <rdf:li><xmpidq:Scheme>ISBN</xmpidq:Scheme><rdf:value>978-0-306-40615-7</rdf:value></rdf:li>
+                    <rdf:li><xmpidq:Scheme>GOOGLE</xmpidq:Scheme><rdf:value>gid123</rdf:value></rdf:li>
+                  </rdf:Bag>
+                </xmp:Identifier>
+                """);
+
+            BookMetadata meta = assertLoadedDocumentMatchesFile(pdf);
+
+            assertThat(meta.getTitle()).isEqualTo("Xmp Title");
+            assertThat(meta.getAuthors()).containsExactly("Xmp Author", "Second Author");
+            assertThat(meta.getSubtitle()).isEqualTo("Xmp Subtitle");
+            assertThat(meta.getSeriesName()).isEqualTo("Calibre Series");
+            assertThat(meta.getSeriesNumber()).isEqualTo(2.0f);
+            assertThat(meta.getSeriesTotal()).isEqualTo(5);
+            assertThat(meta.getGoodreadsRating()).isEqualTo(4.5);
+            assertThat(meta.getTags()).containsExactly("Favorites");
+            assertThat(meta.getIsbn13()).isEqualTo("9780306406157");
+            assertThat(meta.getGoogleId()).isEqualTo("gid123");
+        }
+
+        @Test
+        void matchesFileOverload_forFileNameTitleFallback() throws Exception {
+            File pdf = createPdf(_ -> {});
+
+            BookMetadata meta = assertLoadedDocumentMatchesFile(pdf);
+
+            assertThat(meta.getTitle()).isEqualTo("test");
+            assertThat(meta.getPageCount()).isEqualTo(1);
+        }
+
+        @Test
+        void takesTheTitleFallbackFromTheFileNameWithoutReadingTheFile() throws Exception {
+            File pdf = createPdf(_ -> {});
+            try (PDDocument doc = Loader.loadPDF(pdf)) {
+                BookMetadata meta = extractor.extractMetadata(doc, new File("/no/such/folder/Some Book.pdf"));
+                assertThat(meta.getTitle()).isEqualTo("Some Book");
+                assertThat(meta.getPageCount()).isEqualTo(1);
+            }
+        }
+
+        private BookMetadata assertLoadedDocumentMatchesFile(File pdf) throws Exception {
+            BookMetadata fromFile = extractor.extractMetadata(pdf);
+            try (PDDocument doc = Loader.loadPDF(pdf)) {
+                BookMetadata fromDocument = extractor.extractMetadata(doc, pdf);
+                assertThat(fromDocument).usingRecursiveComparison().isEqualTo(fromFile);
+                return fromDocument;
+            }
         }
     }
 
