@@ -220,13 +220,56 @@ public class FileService {
         throw new IOException("Unable to decode image, likely unsupported format");
     }
 
+    /**
+     * Scales to exactly {@code width} x {@code height} and returns a new TYPE_INT_RGB image.
+     * <p>
+     * Downscaling halves the image with bilinear interpolation while it is more than twice the target in a
+     * dimension, then takes one bilinear step to the exact size. A halving step is a 2x2 box average, so the
+     * result stays close to the area averaging of {@code Image.SCALE_SMOOTH} at a fraction of its cost. The last
+     * step is bilinear rather than bicubic because it stays closer to SCALE_SMOOTH and costs less.
+     * Upscaling in either dimension is a single bicubic step. Transparent pixels end up on the black background
+     * of the new RGB image, as with the old getScaledInstance path; callers that want white flatten first.
+     */
     public static BufferedImage resizeImage(BufferedImage originalImage, int width, int height) {
-        Image tmp = originalImage.getScaledInstance(width, height, Image.SCALE_SMOOTH);
-        BufferedImage resizedImage = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
-        Graphics2D g2d = resizedImage.createGraphics();
-        g2d.drawImage(tmp, 0, 0, null);
-        g2d.dispose();
-        return resizedImage;
+        if (width <= 0 || height <= 0) {
+            throw new IllegalArgumentException("Target size must be positive, got " + width + "x" + height);
+        }
+        BufferedImage current = originalImage;
+        int currentWidth = originalImage.getWidth();
+        int currentHeight = originalImage.getHeight();
+        while (currentWidth > 2L * width || currentHeight > 2L * height) {
+            // Round up so no step shrinks by more than half, otherwise bilinear would skip source pixels
+            if (currentWidth > 2L * width) {
+                currentWidth = (currentWidth + 1) / 2;
+            }
+            if (currentHeight > 2L * height) {
+                currentHeight = (currentHeight + 1) / 2;
+            }
+            BufferedImage halved = drawScaled(current, currentWidth, currentHeight, RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+            if (current != originalImage) {
+                current.flush();
+            }
+            current = halved;
+        }
+        boolean upscaling = width > currentWidth || height > currentHeight;
+        BufferedImage resized = drawScaled(current, width, height,
+                upscaling ? RenderingHints.VALUE_INTERPOLATION_BICUBIC : RenderingHints.VALUE_INTERPOLATION_BILINEAR);
+        if (current != originalImage) {
+            current.flush();
+        }
+        return resized;
+    }
+
+    private static BufferedImage drawScaled(BufferedImage source, int width, int height, Object interpolation) {
+        BufferedImage scaled = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+        Graphics2D g2d = scaled.createGraphics();
+        try {
+            g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, interpolation);
+            g2d.drawImage(source, 0, 0, width, height, null);
+        } finally {
+            g2d.dispose();
+        }
+        return scaled;
     }
 
     public static void saveImage(byte[] imageData, String filePath) throws IOException {
