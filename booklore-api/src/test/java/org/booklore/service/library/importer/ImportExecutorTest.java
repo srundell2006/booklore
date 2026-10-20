@@ -104,6 +104,12 @@ class ImportExecutorTest {
         }
     }
 
+    /** A task's slot is given back just after its outcome is published, so a test that has seen the outcome waits. */
+    private static void awaitIoPermits(ImportExecutor executor, int permits) throws InterruptedException {
+        awaitUntil("the IO slots to be given back", () -> executor.availableIoPermits() >= permits);
+        assertThat(executor.availableIoPermits()).isEqualTo(permits);
+    }
+
     @Test
     void runsAtMostIoParallelismTasksAtOnce() throws Exception {
         ImportExecutor executor = executor(4, Duration.ofSeconds(30));
@@ -133,7 +139,7 @@ class ImportExecutorTest {
             assertThat(valueOf(tasks.get(i))).isEqualTo(i);
         }
         assertThat(peak).hasValue(4);
-        assertThat(executor.availableIoPermits()).isEqualTo(4);
+        awaitIoPermits(executor, 4);
     }
 
     @Test
@@ -166,14 +172,14 @@ class ImportExecutorTest {
                 assertThat(Duration.ofNanos(timedOut.elapsedNanos())).isBetween(timeout, timeout.plusMillis(250)));
         assertThat(wedged.state()).isEqualTo(State.ABANDONED);
         assertThat(executor.stuckThreads()).isEqualTo(1);
-        assertThat(executor.availableIoPermits()).isEqualTo(1);
+        awaitIoPermits(executor, 1);
         // The only slot went to the next task while the wedged thread is still stuck
         FileTask<String> next = submit(executor, "next", ctx -> "ran");
         assertThat(valueOf(next)).isEqualTo("ran");
 
         release.countDown();
         awaitUntil("the stuck thread to return", () -> executor.stuckThreads() == 0);
-        assertThat(executor.availableIoPermits()).isEqualTo(1);
+        awaitIoPermits(executor, 1);
         assertThat(executor.breakerOpen()).isFalse();
         // What it returned late is dropped
         assertThat(outcome(wedged)).isSameAs(outcome);
@@ -240,7 +246,7 @@ class ImportExecutorTest {
         assertThat(outcome(task)).isInstanceOf(Outcome.TimedOut.class);
         awaitUntil("the abandoned thread to return", () -> executor.stuckThreads() == 0);
         assertThat(thrown.get()).isInstanceOf(PrepareAbandonedException.class);
-        assertThat(executor.availableIoPermits()).isEqualTo(1);
+        awaitIoPermits(executor, 1);
     }
 
     @Test
@@ -254,7 +260,7 @@ class ImportExecutorTest {
 
         assertThat(outcome).isEqualTo(new Outcome.Failed<>("broken", failure));
         assertThat(executor.stuckThreads()).isZero();
-        assertThat(executor.availableIoPermits()).isEqualTo(1);
+        awaitIoPermits(executor, 1);
     }
 
     @Test
@@ -297,7 +303,7 @@ class ImportExecutorTest {
         assertThat(executor.breakerOpen()).isFalse();
         FileTask<String> after = submit(executor, "after", ctx -> "ran");
         assertThat(valueOf(after)).isEqualTo("ran");
-        assertThat(executor.availableIoPermits()).isEqualTo(3);
+        awaitIoPermits(executor, 3);
     }
 
     @Test
@@ -370,7 +376,7 @@ class ImportExecutorTest {
         assertThat(executor.stuckThreads()).isZero();
         assertThat(valueOf(holder)).isInstanceOf(Outcome.Failed.class);
         assertThat(executor.availableRenderPermits()).isEqualTo(1);
-        assertThat(executor.availableIoPermits()).isEqualTo(2);
+        awaitIoPermits(executor, 2);
         assertThat(executor.availableHeapBytes()).isEqualTo(64 * MIB);
     }
 
@@ -467,7 +473,7 @@ class ImportExecutorTest {
         release.countDown();
         assertThat(valueOf(holder)).isEqualTo("late");
         assertThat(ran).isFalse();
-        assertThat(executor.availableIoPermits()).isEqualTo(1);
+        awaitIoPermits(executor, 1);
     }
 
     @Test
@@ -491,7 +497,41 @@ class ImportExecutorTest {
         assertThat(valueOf(holder)).isEqualTo("late");
         assertThat(outcome(waiting)).isEqualTo(new Outcome.Skipped<>("attachment", SkipReason.GROUP_FAILED));
         assertThat(ran).isFalse();
-        assertThat(executor.availableIoPermits()).isEqualTo(1);
+        awaitIoPermits(executor, 1);
+    }
+
+    @Test
+    void aFileWaitingForTheSlotOfItsGroupsFailedFileIsSkipped() throws Exception {
+        // As the importer submits a group: the primary file, then an additional format skipped once the primary has
+        // not been read. With one slot, the additional format always waits for the primary's.
+        ImportExecutor executor = executor(1, Duration.ofMillis(50), 128, 2, 64 * MIB);
+        AtomicInteger readAfterItsPrimary = new AtomicInteger();
+        for (int i = 0; i < 300; i++) {
+            boolean timesOut = i % 10 == 0;
+            AtomicBoolean doomed = new AtomicBoolean();
+            FileTask<String> primary = submit(executor, "primary " + i, ctx -> {
+                if (timesOut) {
+                    while (true) {
+                        ctx.checkpoint();
+                        LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
+                    }
+                }
+                throw new IllegalStateException("corrupt");
+            });
+            primary.result().thenAccept(outcome -> {
+                if (!(outcome instanceof Outcome.Done)) {
+                    doomed.set(true);
+                }
+            });
+            String label = "additional " + i;
+            FileTask<String> additional = executor.submit(label, ctx -> {
+                readAfterItsPrimary.incrementAndGet();
+                return "read";
+            }, doomed::get);
+
+            assertThat(outcome(additional)).isEqualTo(new Outcome.Skipped<>(label, SkipReason.GROUP_FAILED));
+        }
+        assertThat(readAfterItsPrimary).hasValue(0);
     }
 
     @Test
@@ -514,7 +554,7 @@ class ImportExecutorTest {
         release.countDown();
         assertThat(valueOf(running)).isEqualTo("late");
         assertThat(ran).isFalse();
-        assertThat(executor.availableIoPermits()).isEqualTo(1);
+        awaitIoPermits(executor, 1);
     }
 
     @Test

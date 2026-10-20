@@ -251,22 +251,23 @@ public class ImportExecutor {
 
     /**
      * Cleans up after a task whose thread has returned, or could not be started. {@code finished} says whether it
-     * ended the task itself; if not, the task was abandoned first, which already released its slot and published its
-     * outcome.
+     * ended the task itself; if not, the task was abandoned first, which already published its outcome and released
+     * its slot.
      */
     private <T> void settle(FileTask<T> task, boolean finished, Outcome<T> outcome) {
         try {
             task.context().releaseAll();
             task.cancelDeadline();
             live.remove(task);
-            if (finished) {
-                ioPermits.release();
-            } else {
+            if (!finished) {
                 returnedAfterAbandon(task);
             }
         } finally {
             if (finished) {
+                // Published before the slot is given up: the dispatcher may be waiting for it to start the next file of
+                // this task's group, and must see in its skipBeforeStart that the group failed
                 task.complete(outcome);
+                ioPermits.release();
             }
         }
     }
@@ -295,15 +296,16 @@ public class ImportExecutor {
                 return; // it ended first
             }
             stuck.incrementAndGet();
-            // The slot is forfeited so scans keep their parallelism; the worker will not release it again
-            ioPermits.release();
             orphanedHeapBytes.addAndGet(task.context().revokeAll());
         }
         log.debug("Gave up on import task {} after {} ms; {} import threads stuck",
                 task.label(), TimeUnit.NANOSECONDS.toMillis(task.elapsedNanos()), stuck.get());
+        // Published before the slot is given up, as in settle()
         task.complete(shutdown
                 ? new Outcome.Skipped<>(task.label(), SkipReason.SHUTDOWN)
                 : new Outcome.TimedOut<>(task.label(), task.elapsedNanos()));
+        // The slot is forfeited so scans keep their parallelism; the worker will not release it again
+        ioPermits.release();
         task.context().destroyProcesses();
         interruptElsewhere(task);
     }
