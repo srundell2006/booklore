@@ -108,6 +108,19 @@ public class PdfMetadataExtractor implements FileMetadataExtractor {
         return Math.min(dpi, maxDpi);
     }
 
+    /**
+     * How many pixels {@link #renderCover} renders the page with at {@code maxDpi}: PDFRenderer's raster for the crop
+     * box at {@link #coverDpi}, each side rounded down and at least one pixel. A quarter-turn rotation swaps the sides,
+     * which leaves the count alone. Lets a caller budget memory for the render before running it.
+     */
+    public static long coverPixels(PDPage page, float maxDpi) {
+        PDRectangle cropBox = page.getCropBox();
+        float scale = coverDpi(page, maxDpi) / 72f;
+        long width = (long) Math.max(Math.floor(cropBox.getWidth() * scale), 1);
+        long height = (long) Math.max(Math.floor(cropBox.getHeight() * scale), 1);
+        return width * height;
+    }
+
     @Override
     public BookMetadata extractMetadata(File file) {
         if (!file.exists() || !file.isFile()) {
