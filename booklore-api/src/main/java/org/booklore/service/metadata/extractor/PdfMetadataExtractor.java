@@ -10,7 +10,9 @@ import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.io.RandomAccessReadBufferedFile;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDDocumentInformation;
+import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.common.PDMetadata;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
 import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
 import org.booklore.model.dto.BookMetadata;
@@ -30,6 +32,7 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
@@ -46,12 +49,17 @@ public class PdfMetadataExtractor implements FileMetadataExtractor {
     private static final Pattern COMMA_AMPERSAND_PATTERN = Pattern.compile("[,&]");
     private static final Pattern ISBN_CLEANUP_PATTERN = Pattern.compile("[^0-9Xx]");
 
+    // FileService.saveCoverImages scales stored covers down to fit within this box
+    private static final int STORED_COVER_MAX_WIDTH = 1000;
+    private static final int STORED_COVER_MAX_HEIGHT = 1500;
+    private static final float EXTRACTED_COVER_MAX_DPI = 300f;
+
     @Override
     public byte[] extractCover(File file) {
         BufferedImage coverImage = null;
         try (RandomAccessReadBufferedFile randomAccessRead = new RandomAccessReadBufferedFile(file);
              PDDocument pdf = Loader.loadPDF(randomAccessRead)) {
-            coverImage = new PDFRenderer(pdf).renderImageWithDPI(0, 300, ImageType.RGB);
+            coverImage = renderCover(pdf, EXTRACTED_COVER_MAX_DPI);
             try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
                 ImageIO.write(coverImage, "jpg", baos);
                 return baos.toByteArray();
@@ -66,6 +74,33 @@ public class PdfMetadataExtractor implements FileMetadataExtractor {
         }
     }
 
+    /**
+     * Renders the first page only as large as the cover FileService.saveCoverImages stores from it, and no sharper
+     * than {@code maxDpi}. Rendering is the expensive part of a PDF cover, and saveCoverImages discards extra pixels.
+     */
+    public BufferedImage renderCover(PDDocument pdf, float maxDpi) throws IOException {
+        return new PDFRenderer(pdf).renderImageWithDPI(0, coverDpi(pdf.getPage(0), maxDpi), ImageType.RGB);
+    }
+
+    /**
+     * The DPI at which the page just fills the edge of the stored cover that saveCoverImages keeps whole, capped at
+     * {@code maxDpi}. saveCoverImages scales covers down to fit 1000x1500, and its optional cover cropping trims tall
+     * images to 2:3 keeping their width and wide images keeping their height, so portrait pages render 1000 wide and
+     * landscape pages 1500 tall. Pages too small for that render at {@code maxDpi}, exactly as before.
+     */
+    static float coverDpi(PDPage page, float maxDpi) {
+        PDRectangle cropBox = page.getCropBox();
+        // PDFRenderer sizes the image from the crop box, swapping its sides for a quarter-turn rotation
+        boolean quarterTurn = page.getRotation() == 90 || page.getRotation() == 270;
+        float widthPt = quarterTurn ? cropBox.getHeight() : cropBox.getWidth();
+        float heightPt = quarterTurn ? cropBox.getWidth() : cropBox.getHeight();
+        // Half a pixel past the cap, so PDFRenderer rounding the size down cannot leave the edge a pixel short
+        float dpi = heightPt >= widthPt
+                ? (STORED_COVER_MAX_WIDTH + 0.5f) * 72 / widthPt
+                : (STORED_COVER_MAX_HEIGHT + 0.5f) * 72 / heightPt;
+        return Math.min(dpi, maxDpi);
+    }
+
     @Override
     public BookMetadata extractMetadata(File file) {
         if (!file.exists() || !file.isFile()) {
@@ -73,10 +108,24 @@ public class PdfMetadataExtractor implements FileMetadataExtractor {
             return BookMetadata.builder().build();
         }
 
-        BookMetadata.BookMetadataBuilder metadataBuilder = BookMetadata.builder();
-
+        BookMetadata metadata = BookMetadata.builder().build();
         try (RandomAccessReadBufferedFile randomAccessRead = new RandomAccessReadBufferedFile(file);
              PDDocument pdf = Loader.loadPDF(randomAccessRead)) {
+            metadata = extractMetadata(pdf, file);
+        } catch (Exception e) {
+            log.error("Failed to load PDF file: {}", file.getPath(), e);
+        }
+        return metadata;
+    }
+
+    /**
+     * Extracts metadata from a document the caller has already loaded, so a caller that also renders the cover loads
+     * the file once. The file is not read: it only supplies the name used as the title fallback and in log messages.
+     */
+    public BookMetadata extractMetadata(PDDocument pdf, File file) {
+        BookMetadata.BookMetadataBuilder metadataBuilder = BookMetadata.builder();
+
+        try {
             PDDocumentInformation info = pdf.getDocumentInformation();
 
             if (info != null) {
@@ -244,7 +293,7 @@ public class PdfMetadataExtractor implements FileMetadataExtractor {
             }
 
         } catch (Exception e) {
-            log.error("Failed to load PDF file: {}", file.getPath(), e);
+            log.error("Failed to read PDF metadata: {}", file.getPath(), e);
         }
 
         return metadataBuilder.build();
