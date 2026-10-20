@@ -348,6 +348,30 @@ class ParallelBookImporterTest {
     }
 
     @Test
+    void aGroupWhoseAdditionalFormatDoesNotFinishReadingInTimeIsSkippedWholeForTheNextScan() throws Exception {
+        // Saved without it, dune.m4b would be new on the next scan, and at a library path's root a rescan makes it a
+        // book of its own instead of attaching it
+        LibraryFile audiobook = fileOnDisk("dune.m4b", BookFileType.AUDIOBOOK);
+        // An audiobook added to an ebook makes a cover, read from the audio file; that read wedges
+        when(audiobookMetadataExtractor.extractCover(any())).thenAnswer(inv -> wedge());
+
+        ImportSummary summary = importer(executor(4, 8, Duration.ofMillis(300), 16))
+                .importGroups(groups(List.of(epub("dune"), audiobook), List.of(epub("next"))), library);
+
+        assertThat(summary.added()).isEqualTo(1);
+        assertThat(summary.timedOut()).isEqualTo(1);
+        assertThat(summary.skippedForRetry()).isEqualTo(1);
+        assertThat(summary.attachmentsSkipped()).isZero();
+        verify(processor, never()).persistPrepared(eq(epub("dune")), any());
+        verify(processor).persistPrepared(eq(epub("next")), any());
+        verify(bookAdditionalFileRepository, never()).save(any());
+        assertThat(logged(Level.WARN)).singleElement().asString()
+                .startsWith("Skipped [dune.epub, dune.m4b]: its additional format dune.m4b was not read (reading from storage "
+                        + "did not finish within ")
+                .endsWith("it will be retried on the next scan (1 import threads stuck)");
+    }
+
+    @Test
     void aFailingBroadcastOrKoboShelfLeavesTheRestOfTheGroupAlone() throws Exception {
         doThrow(new IllegalStateException("no websocket")).when(bookEventBroadcaster).broadcastBookAddEvent(argThat(book -> book.getId() == 1L));
         doThrow(new IllegalStateException("no shelf")).when(koboAutoShelfService).autoAddBookToKoboShelves(2L);

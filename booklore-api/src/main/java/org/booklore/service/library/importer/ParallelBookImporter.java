@@ -75,7 +75,8 @@ import java.util.concurrent.locks.ReentrantLock;
  * files and reads its file while saving it, as all of them did before.
  *
  * <p>A group whose primary file fails, or does not finish reading within its deadline, is skipped and stays new for
- * the next scan; one whose additional format does is saved without it, and the next rescan attaches it. When storage
+ * the next scan, and so is one whose additional format does not finish reading in time; one whose additional format
+ * cannot be read is saved without it. When storage
  * wedges (see {@link ImportExecutor#breakerOpen()}), or saving fails {@value #MAX_CONSECUTIVE_SAVE_FAILURES} times in
  * a row, the scan stops planning, saves what has been read and returns; what it did not get to is new again on the
  * next scan. The returned {@link ImportSummary} counts all of this.
@@ -246,10 +247,14 @@ public class ParallelBookImporter {
                 scan.fileRead(done.elapsedNanos());
                 prepared = done.value();
             }
-            for (FileTask<PreparedAttachment> task : group.attachments) {
-                Outcome<PreparedAttachment> outcome = await(task, scan);
+            for (int i = 0; i < group.attachments.size(); i++) {
+                Outcome<PreparedAttachment> outcome = await(group.attachments.get(i), scan);
                 if (outcome instanceof Outcome.Done<PreparedAttachment> done) {
                     scan.fileRead(done.elapsedNanos());
+                } else if (mayBeReadNextTime(outcome)) {
+                    group.cancel();
+                    skipGroupForAdditionalFormat(plan, plan.additional().get(i), outcome, scan);
+                    return;
                 }
                 attachments.add(outcome);
             }
@@ -293,15 +298,41 @@ public class ParallelBookImporter {
                 log.error("Failed to process file group {}: {}", plan.names(), messageOf(failed.cause()));
                 scan.failed++;
             }
-            case Outcome.Skipped<PreparedBookFile> skipped -> {
-                scan.notStarted++;
-                if (skipped.reason() == SkipReason.STORAGE_STUCK) {
-                    scan.stopForStuckStorage();
-                } else if (skipped.reason() == SkipReason.SHUTDOWN) {
-                    scan.stopForShutdown();
-                }
-            }
+            case Outcome.Skipped<PreparedBookFile> skipped -> notStarted(skipped.reason(), scan);
             case Outcome.Done<PreparedBookFile> done -> throw new IllegalArgumentException("Group " + plan.names() + " was read");
+        }
+    }
+
+    /**
+     * Skips a group whose primary file was read but one of whose additional formats was not, for want of time or
+     * capacity. Saved without it, the format would come back on the next scan as a new file that is not always attached
+     * to the book: one at the root of a library path, or one a full scan finds, becomes a book of its own. Skipped whole,
+     * the group stays new and is read together again. A format that cannot be read at all is left out instead, so it
+     * does not keep its book out for good.
+     */
+    private void skipGroupForAdditionalFormat(GroupPlan plan, LibraryFile file, Outcome<PreparedAttachment> outcome, Scan scan) {
+        if (outcome instanceof Outcome.Skipped<PreparedAttachment> skipped) {
+            notStarted(skipped.reason(), scan);
+            return;
+        }
+        log.warn("Skipped {}: its additional format {} was not read ({}); it will be retried on the next scan ({} import threads stuck)",
+                plan.names(), file.getFileName(), describe(outcome), executor.stuckThreads());
+        scan.timedOut++;
+    }
+
+    /** Whether a file was not read for want of time or capacity, rather than because it cannot be read. */
+    private static boolean mayBeReadNextTime(Outcome<?> outcome) {
+        return outcome instanceof Outcome.TimedOut
+                || outcome instanceof Outcome.Skipped
+                || outcome instanceof Outcome.Failed<?> failed && failed.cause() instanceof PrepareDeadlineException;
+    }
+
+    private static void notStarted(SkipReason reason, Scan scan) {
+        scan.notStarted++;
+        if (reason == SkipReason.STORAGE_STUCK) {
+            scan.stopForStuckStorage();
+        } else if (reason == SkipReason.SHUTDOWN) {
+            scan.stopForShutdown();
         }
     }
 
