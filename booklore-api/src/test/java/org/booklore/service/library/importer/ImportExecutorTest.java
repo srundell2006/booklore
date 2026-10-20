@@ -1,5 +1,6 @@
 package org.booklore.service.library.importer;
 
+import org.booklore.service.fileprocessor.prepare.CoverMaker;
 import org.booklore.service.fileprocessor.prepare.HeapReservation;
 import org.booklore.service.fileprocessor.prepare.PrepareAbandonedException;
 import org.booklore.service.fileprocessor.prepare.PrepareContext;
@@ -8,6 +9,9 @@ import org.booklore.service.library.importer.FileTask.State;
 import org.booklore.service.library.importer.Outcome.SkipReason;
 import org.booklore.util.ProcessWatchdog;
 import org.booklore.util.TestProcesses;
+import org.booklore.util.cover.CoverKind;
+import org.booklore.util.cover.CropPolicy;
+import org.booklore.util.cover.RenderedCover;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
@@ -15,6 +19,7 @@ import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 import org.springframework.transaction.support.TransactionSynchronizationManager;
 
+import java.awt.image.BufferedImage;
 import java.io.IOException;
 import java.io.InputStream;
 import java.nio.channels.spi.AbstractInterruptibleChannel;
@@ -378,6 +383,34 @@ class ImportExecutorTest {
         assertThat(executor.availableRenderPermits()).isEqualTo(1);
         awaitIoPermits(executor, 2);
         assertThat(executor.availableHeapBytes()).isEqualTo(64 * MIB);
+    }
+
+    @Test
+    void aPdfPageRenderReadingFromStorageLeavesTheRenderPermitsToOtherCovers() throws Exception {
+        ImportExecutor executor = executor(2, Duration.ofSeconds(30), 16, 1, 64 * MIB);
+        CountDownLatch drawing = new CountDownLatch(1);
+        FileTask<RenderedCover> pdf = submit(executor, "book.pdf", ctx -> new CoverMaker(ctx, CoverKind.BOOK, CropPolicy.NONE)
+                .fromPixels(100 * 150, MIB, () -> {
+                    // As PDFBox reading the page's fonts and images from slow storage while it draws
+                    drawing.countDown();
+                    wedge();
+                    return new BufferedImage(100, 150, BufferedImage.TYPE_INT_RGB);
+                }));
+        assertThat(drawing.await(5, TimeUnit.SECONDS)).isTrue();
+
+        // The only render permit is free for another file's cover meanwhile
+        Outcome<String> epub = outcome(submit(executor, "book.epub", ctx -> ctx.render(MIB, () -> "rendered")));
+        assertThat(epub).isInstanceOfSatisfying(Outcome.Done.class, done -> {
+            assertThat(done.value()).isEqualTo("rendered");
+            assertThat(Duration.ofNanos(done.elapsedNanos())).isLessThan(Duration.ofSeconds(1));
+        });
+        // The PDF's heap is still reserved while it draws
+        assertThat(executor.availableHeapBytes()).isLessThan(64 * MIB);
+
+        release.countDown();
+        assertThat(valueOf(pdf).kind()).isEqualTo(CoverKind.BOOK);
+        assertThat(executor.availableHeapBytes()).isEqualTo(64 * MIB);
+        assertThat(executor.availableRenderPermits()).isEqualTo(1);
     }
 
     @Test

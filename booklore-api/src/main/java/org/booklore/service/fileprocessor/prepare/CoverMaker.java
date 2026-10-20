@@ -11,7 +11,7 @@ import java.io.IOException;
 /**
  * Renders one file's cover, from encoded image bytes or from a rasteriser, into the cover and thumbnail stored for it.
  * Decoding, rendering and encoding run inside {@link PrepareContext#render}, so the decoded image only exists while
- * the file holds a render permit and heap for it.
+ * the file holds a render permit and heap for it. A rasteriser holds only heap: see {@link #fromPixels}.
  */
 public final class CoverMaker {
 
@@ -49,13 +49,16 @@ public final class CoverMaker {
     }
 
     /**
-     * The cover rendered from an image a rasteriser draws, such as a PDF page.
+     * The cover rendered from an image a rasteriser draws, such as a PDF page. It runs under a heap reservation for the
+     * whole of it, but takes no render permit: PDFBox reads the page's fonts and images from the file as it draws, which
+     * on slow storage takes far longer than the drawing, and the few render permits would sit idle with it while every
+     * other file's cover waited.
      *
      * @param rasterPixels the size of the image the rasteriser draws
      * @param extraBytes   heap the rasteriser needs beyond the image itself
      */
     public RenderedCover fromPixels(long rasterPixels, long extraBytes, IoCallable<BufferedImage> rasterise) throws Exception {
-        return ctx.render(12 * rasterPixels + extraBytes, () -> {
+        try (HeapReservation ignored = ctx.reserveHeap(12 * rasterPixels + extraBytes)) {
             BufferedImage image = rasterise.call();
             if (image == null) {
                 return null;
@@ -65,7 +68,7 @@ public final class CoverMaker {
             } finally {
                 image.flush();
             }
-        });
+        }
     }
 
     private RenderedCover render(byte[] encoded, boolean limitPixels, boolean nullIfUndecodable) throws Exception {

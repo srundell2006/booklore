@@ -103,7 +103,9 @@ class CoverMakerTest {
         RenderedCover cover = new CoverMaker(ctx, CoverKind.BOOK, CropPolicy.NONE).fromPixels(60_000, 1000, () -> page);
 
         assertThat(cover.cover()).isEqualTo(CoverImages.renderBookCover(image(200, 300), CropPolicy.NONE).cover());
-        assertThat(ctx.estimates).containsExactly(12 * 60_000L + 1000);
+        // Heap only: a PDF page render reads the file as it draws, and must not hold a render permit while it does
+        assertThat(ctx.reservations).containsExactly(12 * 60_000L + 1000);
+        assertThat(ctx.estimates).isEmpty();
     }
 
     @Test
@@ -125,7 +127,10 @@ class CoverMakerTest {
     }
 
     private static class RecordingContext implements PrepareContext {
+        /** What each render reserved. */
         final List<Long> estimates = new ArrayList<>();
+        /** What each heap reservation outside a render reserved. */
+        final List<Long> reservations = new ArrayList<>();
 
         @Override
         public void checkpoint() {
@@ -139,6 +144,7 @@ class CoverMakerTest {
 
         @Override
         public HeapReservation reserveHeap(long bytes) {
+            reservations.add(bytes);
             return () -> {
             };
         }

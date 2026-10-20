@@ -37,7 +37,8 @@ app:
     import-file-timeout-seconds: ${SCAN_IMPORT_FILE_TIMEOUT_SECONDS:180}
     # Abandoned import threads still blocked on storage, process-wide, at which imports stop (1-128).
     import-max-stuck-threads: ${SCAN_IMPORT_MAX_STUCK_THREADS:16}
-    # Concurrent cover decode/render/encode jobs. 0 = max(1, min(4, cores/2)) (clamped 1..16).
+    # Concurrent cover decode/render/encode jobs. 0 = max(1, min(4, cores/2)) (clamped 1..16). PDF page renders read
+    # the file as they draw, so only the heap budget bounds them.
     import-render-parallelism: ${SCAN_IMPORT_RENDER_PARALLELISM:0}
     # Heap reserved for decoding and FB2 parsing, MiB. 0 = maxHeap/4 clamped 128..1024; explicit values clamped 64..maxHeap/2.
     import-heap-budget-mb: ${SCAN_IMPORT_HEAP_BUDGET_MB:0}

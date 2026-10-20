@@ -46,7 +46,8 @@ import java.util.function.BooleanSupplier;
  *       up: there are never more than max-stuck-threads + io-parallelism - 1, each with at most one more thread
  *       blocked interrupting it.</li>
  *   <li>Cover decodes, renders and encodes share {@code app.scan.import-render-parallelism} permits and a heap
- *       budget, through each task's {@link PrepareContext}. Waits for them end at the task's deadline.</li>
+ *       budget, through each task's {@link PrepareContext}; a PDF page render, which reads the file as it draws, takes
+ *       only heap. Waits for them end at the task's deadline.</li>
  * </ul>
  *
  * <p>Nothing here waits for a worker thread to end, shutdown included, because a thread wedged in IO may never end.

@@ -93,7 +93,8 @@ public class AppProperties {
 
         /**
          * How many cover decodes, renders and encodes run at once. 0 means half the cores,
-         * between 1 and 4; other values are clamped to 1..16.
+         * between 1 and 4; other values are clamped to 1..16. PDF page renders read the file as
+         * they draw, so they are bounded by the heap budget alone.
          */
         private int importRenderParallelism = 0;
 
