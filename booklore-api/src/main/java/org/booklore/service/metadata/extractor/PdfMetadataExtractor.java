@@ -76,7 +76,11 @@ public class PdfMetadataExtractor implements FileMetadataExtractor {
 
     /**
      * Renders the first page only as large as the cover FileService.saveCoverImages stores from it, and no sharper
-     * than {@code maxDpi}. Rendering is the expensive part of a PDF cover, and saveCoverImages discards extra pixels.
+     * than {@code maxDpi}, since saveCoverImages discards extra pixels. That saves render time on text, vector and
+     * large pages. A page that is one scanned image at more than twice the render DPI gains nothing and can take a few
+     * percent longer: PDFBox then area-averages the whole scan, which costs about what rendering at {@code maxDpi}
+     * and downscaling did. Its faster options, subsampling or a lower imageDownscalingOptimizationThreshold, leave
+     * the cover visibly aliased.
      */
     public BufferedImage renderCover(PDDocument pdf, float maxDpi) throws IOException {
         return new PDFRenderer(pdf).renderImageWithDPI(0, coverDpi(pdf.getPage(0), maxDpi), ImageType.RGB);
@@ -86,7 +90,10 @@ public class PdfMetadataExtractor implements FileMetadataExtractor {
      * The DPI at which the page just fills the edge of the stored cover that saveCoverImages keeps whole, capped at
      * {@code maxDpi}. saveCoverImages scales covers down to fit 1000x1500, and its optional cover cropping trims tall
      * images to 2:3 keeping their width and wide images keeping their height, so portrait pages render 1000 wide and
-     * landscape pages 1500 tall. Pages too small for that render at {@code maxDpi}, exactly as before.
+     * landscape pages 1500 tall. Pages too small for that render at {@code maxDpi}, exactly as before. Other pages
+     * round differently from a downscaled {@code maxDpi} render: each side of the stored cover can differ by a pixel,
+     * and a page whose aspect ratio sits on one of saveCoverImages' thresholds (square thumbnail, cover cropping) can
+     * land on the other side of it.
      */
     static float coverDpi(PDPage page, float maxDpi) {
         PDRectangle cropBox = page.getCropBox();

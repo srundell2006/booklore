@@ -52,6 +52,7 @@ import java.util.List;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyFloat;
 import static org.mockito.ArgumentMatchers.anyLong;
@@ -236,7 +237,8 @@ class PdfProcessorTest {
 
     /**
      * The stored cover and thumbnail must come out as they did when every page rendered at 150 DPI. Both paths round
-     * pixel sizes down at several steps, so the cover may differ by a pixel, but it is never smaller.
+     * pixel sizes down at several steps, so each side of the cover may differ by a pixel either way. Pages whose
+     * aspect ratio sits on one of saveCoverImages' thresholds are the exception, tested separately below.
      */
     @Nested
     class StoredCoverTests {
@@ -253,7 +255,10 @@ class PdfProcessorTest {
                     Arguments.of("A2 poster", PDRectangle.A2, 0),
                     Arguments.of("Tiny page", new PDRectangle(144, 216), 0),
                     Arguments.of("6x9 trade", new PDRectangle(432, 648), 0),
-                    Arguments.of("Tall strip", new PDRectangle(500, 1600), 0)
+                    Arguments.of("Tall strip", new PDRectangle(500, 1600), 0),
+                    // saveCoverImages still downscales these renders and rounds their free edge a pixel short of before
+                    Arguments.of("A2 landscape", new PDRectangle(PDRectangle.A2.getHeight(), PDRectangle.A2.getWidth()), 0),
+                    Arguments.of("8.5x13 in", new PDRectangle(612, 936), 0)
             );
         }
 
@@ -275,27 +280,62 @@ class PdfProcessorTest {
         @ParameterizedTest(name = "{0}")
         @MethodSource("croppedPages")
         void matchesThe150DpiCover_withCoverCropping(String name, PDRectangle box, int rotation) throws Exception {
-            // The lowest threshold the settings page allows, so the most pages get cropped
+            cropAtTheLowestThreshold();
+            assertStoredCoverMatches150Dpi(writePdf("book.pdf", box, rotation, PdfProcessorTest::drawFrame));
+        }
+
+        @Test
+        void pageOnTheSquareThumbnailBound_mayGetTheOtherThumbnailShape() throws Exception {
+            // 8.5x10 in is exactly the 0.85 aspect ratio at which saveCoverImages starts making square thumbnails.
+            // The 150 DPI cover rounded to 1000x1176, just above it; rendered at the stored size it is 1000x1177,
+            // just below.
+            Path pdf = writePdf("book.pdf", new PDRectangle(612, 720), 0, PdfProcessorTest::drawFrame);
+
+            assertCoverMatches150Dpi(pdf);
+            assertThat(imageSize(fileService.getThumbnailFile(BASELINE_BOOK_ID))).isEqualTo(new Dimension(250, 250));
+            assertThat(imageSize(fileService.getThumbnailFile(BOOK_ID))).isEqualTo(new Dimension(250, 350));
+        }
+
+        @Test
+        void pageOnTheCoverCroppingThreshold_mayNoLongerBeCropped() throws Exception {
+            // A 3:2 spread is exactly on the threshold. Its 150 DPI render rounded to 2275x1516, just past it, so it
+            // was cropped to 2:3; rendered 1500 tall it is 2250x1500, exactly 3:2 like the page, so it is not cropped.
+            cropAtTheLowestThreshold();
+            storeNewAnd150DpiCovers(writePdf("book.pdf", new PDRectangle(1092, 728), 0, PdfProcessorTest::drawFrame));
+
+            assertThat(imageSize(fileService.getCoverFile(BASELINE_BOOK_ID))).isEqualTo(new Dimension(999, 1500));
+            assertThat(imageSize(fileService.getCoverFile(BOOK_ID))).isEqualTo(new Dimension(1000, 666));
+        }
+
+        // The lowest threshold the settings page allows, so the most pages get cropped
+        private void cropAtTheLowestThreshold() {
             coverCroppingSettings = CoverCroppingSettings.builder()
                     .verticalCroppingEnabled(true)
                     .horizontalCroppingEnabled(true)
                     .aspectRatioThreshold(1.5)
                     .build();
-            assertStoredCoverMatches150Dpi(writePdf("book.pdf", box, rotation, PdfProcessorTest::drawFrame));
         }
 
         private void assertStoredCoverMatches150Dpi(Path pdf) throws Exception {
+            assertCoverMatches150Dpi(pdf);
+            assertThat(imageSize(fileService.getThumbnailFile(BOOK_ID))).isEqualTo(imageSize(fileService.getThumbnailFile(BASELINE_BOOK_ID)));
+        }
+
+        private void assertCoverMatches150Dpi(Path pdf) throws Exception {
+            storeNewAnd150DpiCovers(pdf);
+            Dimension cover = imageSize(fileService.getCoverFile(BOOK_ID));
+            Dimension coverBefore = imageSize(fileService.getCoverFile(BASELINE_BOOK_ID));
+            assertThat(cover.width).isCloseTo(coverBefore.width, within(1));
+            assertThat(cover.height).isCloseTo(coverBefore.height, within(1));
+        }
+
+        // Stores the cover generateCover makes as BOOK_ID and the one a 150 DPI render made as BASELINE_BOOK_ID
+        private void storeNewAnd150DpiCovers(Path pdf) throws Exception {
             assertThat(pdfProcessor.generateCover(bookFor(pdf, BOOK_ID))).isTrue();
             try (PDDocument doc = Loader.loadPDF(pdf.toFile())) {
                 BufferedImage before = new PDFRenderer(doc).renderImageWithDPI(0, 150, ImageType.RGB);
                 assertThat(fileService.saveCoverImages(before, BASELINE_BOOK_ID)).isTrue();
             }
-
-            Dimension cover = imageSize(fileService.getCoverFile(BOOK_ID));
-            Dimension coverBefore = imageSize(fileService.getCoverFile(BASELINE_BOOK_ID));
-            assertThat(cover.width).isBetween(coverBefore.width, coverBefore.width + 1);
-            assertThat(cover.height).isBetween(coverBefore.height, coverBefore.height + 1);
-            assertThat(imageSize(fileService.getThumbnailFile(BOOK_ID))).isEqualTo(imageSize(fileService.getThumbnailFile(BASELINE_BOOK_ID)));
         }
     }
 
