@@ -37,15 +37,20 @@ import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.Callable;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.regex.Matcher;
+import java.util.regex.Pattern;
 import java.util.stream.LongStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.assertj.core.api.Assertions.catchThrowable;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyString;
@@ -75,9 +80,17 @@ class MissingFileScanServiceTest {
     /** Checks of a "stuck" file block, ignoring interrupts, until this opens: a stat call on a dead share. */
     private final CountDownLatch shareAnswers = new CountDownLatch(1);
 
+    /** How long a scan waits for stuck checks to return before it stops. */
+    private Duration recoveryWait = Duration.ofMillis(500);
+
     /** What one check asks of storage, in place of the filesystem. */
     private interface Storage {
         boolean exists(Path path) throws Exception;
+
+        /** Whether a library path has anything in it: the share is mounted, unless a test says otherwise. */
+        default boolean hasEntries(Path dir) throws Exception {
+            return true;
+        }
     }
 
     @AfterEach
@@ -105,15 +118,29 @@ class MissingFileScanServiceTest {
                 transactionManager, authenticationService, cancellationManager, magicShelfBookService) {
             @Override
             boolean exists(Path path) throws IOException {
-                try {
-                    return storage.exists(path);
-                } catch (IOException | RuntimeException e) {
-                    throw e;
-                } catch (Exception e) {
-                    throw new IllegalStateException(e);
-                }
+                return ask(() -> storage.exists(path));
+            }
+
+            @Override
+            boolean hasEntries(Path dir) throws IOException {
+                return ask(() -> storage.hasEntries(dir));
+            }
+
+            @Override
+            Duration storageRecoveryWait() {
+                return recoveryWait;
             }
         };
+    }
+
+    private static boolean ask(Callable<Boolean> call) throws IOException {
+        try {
+            return call.call();
+        } catch (IOException | RuntimeException e) {
+            throw e;
+        } catch (Exception e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private Set<Long> books(long fromId, int count, String fileName) {
@@ -130,8 +157,12 @@ class MissingFileScanServiceTest {
     }
 
     private static FileCheckTarget target(long id, List<Path> files, boolean alreadyTagged) {
+        return target(id, Path.of("/library"), files, alreadyTagged);
+    }
+
+    private static FileCheckTarget target(long id, Path libraryPath, List<Path> files, boolean alreadyTagged) {
         List<FileRef> refs = files.stream().map(file -> new FileRef(file.getFileName().toString(), file)).toList();
-        return new FileCheckTarget(id, "Book " + id, refs, alreadyTagged);
+        return new FileCheckTarget(id, "Book " + id, libraryPath, refs, alreadyTagged);
     }
 
     private static MissingFileScanRequest request(Set<Long> bookIds, int parallelism, boolean dryRun) {
@@ -303,11 +334,11 @@ class MissingFileScanServiceTest {
         Path loopBack = tempDir.resolve("loop-back.epub");
         Files.createSymbolicLink(loop, loopBack);
         Files.createSymbolicLink(loopBack, loop);
-        targets.put(1L, target(1L, present, false));
-        targets.put(2L, target(2L, List.of(present, gone), false));
-        targets.put(3L, target(3L, underAFile, false));
-        targets.put(4L, target(4L, loop, false));
-        targets.put(5L, target(5L, List.of(present, loop), true));
+        targets.put(1L, target(1L, tempDir, List.of(present), false));
+        targets.put(2L, target(2L, tempDir, List.of(present, gone), false));
+        targets.put(3L, target(3L, tempDir, List.of(underAFile), false));
+        targets.put(4L, target(4L, tempDir, List.of(loop), false));
+        targets.put(5L, target(5L, tempDir, List.of(present, loop), true));
         TagEntity tag = TagEntity.builder().id(1L).name(MissingFileScanService.DEFAULT_TAG_NAME).build();
         when(tagRepository.findByNameIgnoreCase(MissingFileScanService.DEFAULT_TAG_NAME)).thenReturn(Optional.of(tag));
         BookEntity book2 = BookEntity.builder().id(2L).metadata(BookMetadataEntity.builder().tags(new HashSet<>()).build()).build();
@@ -343,7 +374,7 @@ class MissingFileScanServiceTest {
     }
 
     @Test
-    void stopsWhenTooManyChecksAreStuckAndStartsNoMoreUntilTheyReturn() throws Exception {
+    void stopsWhenTooManyChecksStayStuckAndStartsNoMoreUntilTheyReturn() throws Exception {
         int limit = MissingFileScanService.MAX_STRANDED_CHECKS;
         int parallelism = limit;
         Set<Long> dead = books(1, limit + parallelism + 36, "stuck.epub");
@@ -357,8 +388,12 @@ class MissingFileScanServiceTest {
             return true;
         });
 
-        // Every check gets stuck and is given up on, until so many are stuck that the scan stops starting them.
-        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> service.scan(request(dead, parallelism, true), "task-4"));
+        // Every check gets stuck and is given up on, until so many are stuck that the scan stops starting them. It
+        // waits for them to return and, as they do not, stops.
+        long started = System.nanoTime();
+        Throwable failure = assertTimeoutPreemptively(Duration.ofSeconds(10),
+                () -> catchThrowable(() -> service.scan(request(dead, parallelism, true), "task-4")));
+        assertThat(Duration.ofNanos(System.nanoTime() - started)).isGreaterThanOrEqualTo(recoveryWait);
 
         int stuck = calls.get();
         assertThat(stuck).isBetween(limit, limit + parallelism - 1).isLessThan(dead.size());
@@ -366,15 +401,20 @@ class MissingFileScanServiceTest {
         MetadataBatchProgressNotification stopped = finalProgress();
         assertThat(stopped.getStatus()).isEqualTo(MetadataFetchTaskStatus.ERROR.name());
         assertThat(stopped.getMessage()).startsWith("DRY RUN — Storage is not responding: " + stuck
-                + " file checks are stuck waiting on it, so the scan stopped. 0 missing (tagged 'File Not Found'), "
-                + "0 restored, " + stuck + " unresolved, " + stuck + " checked in ");
+                + " file checks got stuck waiting on it and did not return, so the scan stopped. 0 missing (tagged "
+                + "'File Not Found'), 0 restored, " + stuck + " unresolved, " + stuck + " checked in ");
         assertThat(stopped.getCompleted()).isEqualTo(stuck);
         assertThat(stopped.getTotal()).isEqualTo(dead.size());
+        // The task running the scan fails with the same message, rather than completing.
+        assertThat(failure).isInstanceOf(MissingFileScanService.StorageNotRespondingException.class)
+                .hasMessage(stopped.getMessage());
 
         // No more threads are put at risk while they are stuck, not even for books on healthy storage.
-        assertTimeoutPreemptively(Duration.ofSeconds(5), () -> service.scan(request(healthy, 4, true), "task-5"));
+        assertThat(assertTimeoutPreemptively(Duration.ofSeconds(5),
+                () -> catchThrowable(() -> service.scan(request(healthy, 4, true), "task-5"))))
+                .isInstanceOf(MissingFileScanService.StorageNotRespondingException.class);
         assertThat(finalProgress().getStatus()).isEqualTo(MetadataFetchTaskStatus.ERROR.name());
-        assertThat(finalProgress().getMessage()).contains("Storage is not responding");
+        assertThat(finalProgress().getMessage()).contains("Storage is not responding: " + stuck + " file checks");
         assertThat(calls.get()).isEqualTo(stuck);
 
         // Once the share answers again the stuck threads return, and scans check again.
@@ -383,6 +423,163 @@ class MissingFileScanServiceTest {
         service.scan(request(healthy, 4, true), "task-6");
         assertThat(finalProgress().getStatus()).isEqualTo(MetadataFetchTaskStatus.COMPLETED.name());
         assertThat(calls.get()).isEqualTo(stuck + healthy.size());
+    }
+
+    @Test
+    void carriesOnWhenStuckChecksReturnWhileItWaitsForThem() throws Exception {
+        // The share drops out for a while, as when it reconnects: every check started meanwhile gets stuck.
+        int limit = MissingFileScanService.MAX_STRANDED_CHECKS;
+        Set<Long> ids = books(1, limit + limit + 36, "stuck.epub");
+        ids.addAll(books(1000, 40, "book.epub"));
+        recoveryWait = Duration.ofSeconds(30);
+        AtomicInteger calls = new AtomicInteger();
+        MissingFileScanService service = service(path -> {
+            calls.incrementAndGet();
+            if (path.toString().endsWith("stuck.epub")) {
+                blockUntilTheShareAnswers();
+            }
+            return true;
+        });
+
+        CompletableFuture<Void> scan =
+                CompletableFuture.runAsync(() -> service.scan(request(ids, limit, true), "task-10"));
+        // So many get stuck that the scan stops starting checks; then the share answers again.
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10);
+        while (service.strandedChecks() < limit && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(service.strandedChecks()).isGreaterThanOrEqualTo(limit);
+        shareAnswers.countDown();
+
+        // The scan carries on long before its wait runs out, and checks every book.
+        scan.get(10, TimeUnit.SECONDS);
+        MetadataBatchProgressNotification done = finalProgress();
+        assertThat(done.getStatus()).isEqualTo(MetadataFetchTaskStatus.COMPLETED.name());
+        Matcher counts = Pattern.compile("0 restored, (\\d+) unresolved, (\\d+) checked in ")
+                .matcher(done.getMessage());
+        assertThat(counts.find()).isTrue();
+        assertThat(Integer.parseInt(counts.group(1))).isBetween(limit, limit + limit - 1);
+        assertThat(Integer.parseInt(counts.group(2))).isEqualTo(ids.size());
+        assertThat(calls.get()).isEqualTo(ids.size());
+        awaitNoStrandedChecks(service);
+    }
+
+    @Test
+    void cancellingWhileItWaitsForStuckChecksEndsTheScan() throws Exception {
+        int limit = MissingFileScanService.MAX_STRANDED_CHECKS;
+        Set<Long> ids = books(1, 3 * limit, "stuck.epub");
+        recoveryWait = Duration.ofSeconds(30);
+        // Cancelled once the scan is waiting.
+        when(cancellationManager.isTaskCancelled("task-11")).thenReturn(false, true);
+        MissingFileScanService service = service(path -> {
+            blockUntilTheShareAnswers();
+            return true;
+        });
+
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> service.scan(request(ids, limit, true), "task-11"));
+
+        MetadataBatchProgressNotification done = finalProgress();
+        assertThat(done.getStatus()).isEqualTo(MetadataFetchTaskStatus.CANCELLED.name());
+        assertThat(done.getMessage()).startsWith("Scan cancelled. DRY RUN — File check complete. 0 missing");
+        assertThat(done.getCompleted()).isEqualTo(service.strandedChecks()).isLessThan(ids.size());
+    }
+
+    @Test
+    @EnabledOnOs({OS.LINUX, OS.MAC})
+    void booksUnderALibraryPathThatIsMissingOrEmptyAreLeftUnchanged() throws Exception {
+        // A share that is not mounted leaves an empty mount point, or none, under which every file is "not there".
+        Path mounted = Files.createDirectory(tempDir.resolve("mounted"));
+        Path present = Files.createFile(mounted.resolve("present.epub"));
+        Path unmounted = Files.createDirectory(tempDir.resolve("unmounted"));
+        Path noMountPoint = tempDir.resolve("no-mount-point");
+        targets.put(1L, target(1L, mounted, List.of(present, mounted.resolve("gone.epub")), false));
+        targets.put(2L, target(2L, unmounted, List.of(unmounted.resolve("Author/book.epub")), false));
+        targets.put(3L, target(3L, noMountPoint, List.of(noMountPoint.resolve("Author/book.epub")), false));
+        // Tagged by an earlier scan, while the share was there.
+        targets.put(4L, target(4L, unmounted, List.of(unmounted.resolve("Author/gone.epub")), true));
+        TagEntity tag = TagEntity.builder().id(1L).name(MissingFileScanService.DEFAULT_TAG_NAME).build();
+        when(tagRepository.findByNameIgnoreCase(MissingFileScanService.DEFAULT_TAG_NAME)).thenReturn(Optional.of(tag));
+        BookEntity book1 = BookEntity.builder().id(1L).metadata(BookMetadataEntity.builder().tags(new HashSet<>()).build()).build();
+        when(bookRepository.findById(1L)).thenReturn(Optional.of(book1));
+
+        service().scan(request(new LinkedHashSet<>(List.of(1L, 2L, 3L, 4L)), 2, false), "task-12");
+
+        assertThat(finalProgress().getMessage()).startsWith("File check complete. 1 missing (tagged 'File Not Found'), "
+                + "0 restored, 3 unresolved, 4 checked in ");
+        assertThat(book1.getMetadata().getTags()).containsExactly(tag);
+        // Neither tagged nor, for the book tagged already, cleared.
+        verify(bookRepository, never()).findById(2L);
+        verify(bookRepository, never()).findById(3L);
+        verify(bookRepository, never()).findById(4L);
+    }
+
+    @Test
+    void libraryPathIsLookedUpOncePerChunkAndOnlyWhenAFileIsMissing() throws Exception {
+        // More than one chunk's worth, checked one at a time so that no two look it up at once.
+        Set<Long> ids = books(1, 600, "gone.epub");
+        ids.addAll(books(1000, 5, "book.epub"));
+        List<Path> listed = new CopyOnWriteArrayList<>();
+        MissingFileScanService service = service(new Storage() {
+            @Override
+            public boolean exists(Path path) {
+                return !path.toString().endsWith("gone.epub");
+            }
+
+            @Override
+            public boolean hasEntries(Path dir) {
+                listed.add(dir);
+                return true;
+            }
+        });
+
+        service.scan(request(ids, 1, true), "task-13");
+
+        assertThat(finalProgress().getMessage()).startsWith("DRY RUN — File check complete. 600 missing (tagged "
+                + "'File Not Found'), 0 restored, 0 unresolved, 605 checked in ");
+        assertThat(listed).containsExactly(Path.of("/library"), Path.of("/library"));
+
+        listed.clear();
+        service.scan(request(books(2000, 5, "book.epub"), 1, true), "task-14");
+        assertThat(listed).isEmpty();
+    }
+
+    @Test
+    void libraryPathLookupThatNeverReturnsLeavesTheBookUnresolved() throws Exception {
+        Set<Long> ids = books(1, 1, "gone.epub");
+        ids.addAll(books(2, 3, "book.epub"));
+        MissingFileScanService service = service(new Storage() {
+            @Override
+            public boolean exists(Path path) {
+                return !path.toString().endsWith("gone.epub");
+            }
+
+            @Override
+            public boolean hasEntries(Path dir) {
+                blockUntilTheShareAnswers();
+                return true;
+            }
+        });
+
+        assertTimeoutPreemptively(Duration.ofSeconds(10), () -> service.scan(request(ids, 2, true), "task-15"));
+
+        assertThat(finalProgress().getMessage()).startsWith("DRY RUN — File check complete. 0 missing (tagged "
+                + "'File Not Found'), 0 restored, 1 unresolved, 4 checked in ");
+        shareAnswers.countDown();
+        awaitNoStrandedChecks(service);
+    }
+
+    @Test
+    void fatalErrorFailsTheScanAfterReportingIt() {
+        MissingFileScanRequest request = MissingFileScanRequest.builder()
+                .refreshType(MissingFileScanRequest.RefreshType.LIBRARY)
+                .build();
+
+        assertThatThrownBy(() -> service().scan(request, "task-16"))
+                .isInstanceOf(IllegalArgumentException.class)
+                .hasMessage("libraryId required for LIBRARY scope");
+        MetadataBatchProgressNotification failed = finalProgress();
+        assertThat(failed.getStatus()).isEqualTo(MetadataFetchTaskStatus.ERROR.name());
+        assertThat(failed.getMessage()).isEqualTo("Fatal error: libraryId required for LIBRARY scope");
     }
 
     @Test
