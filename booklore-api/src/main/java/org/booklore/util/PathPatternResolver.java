@@ -32,7 +32,7 @@ public class PathPatternResolver {
     private final Pattern WHITESPACE_PATTERN = Pattern.compile("\\s+");
     private final Pattern CONTROL_CHARACTER_PATTERN = Pattern.compile("\\p{Cntrl}");
     private final Pattern INVALID_CHARS_PATTERN = Pattern.compile("[\\\\/:*?\"<>|]");
-    private final Pattern NON_ASCII_PATTERN = Pattern.compile("[^\\p{ASCII}]");
+    private final Pattern LATIN_ACCENT_PATTERN = Pattern.compile("(?<=\\p{IsLatin})\\p{M}+");
     private final Pattern PLACEHOLDER_PATTERN = Pattern.compile("\\{(.*?)}");
     private final Pattern MODIFIER_PLACEHOLDER_PATTERN = Pattern.compile("\\{([^}:]+)(?::([^}]+))?}");
     private final Pattern COMMA_SPACE_PATTERN = Pattern.compile(", ");
@@ -320,18 +320,23 @@ public class PathPatternResolver {
      * Steps:
      * 1. NFD-decompose accented characters so combining marks become separate code points
      *    (e.g. é → e + ́, ñ → n + ̃).
-     * 2. Strip all non-ASCII code points (removing the combining marks, leaving the base letter).
+     * 2. Strip the combining marks that sit on Latin letters, leaving the base letter, then
+     *    NFC-recompose. Every other character is kept: titles and authors in other scripts
+     *    must survive, and their marks are part of the letter (Japanese が, Devanagari vowel
+     *    signs, Cyrillic й), not an accent.
      * 3. Remove filesystem-illegal characters (\ / : * ? " < > |).
      * 4. Remove control characters.
      * 5. Collapse runs of whitespace to a single space and trim.
      */
     private String sanitize(String input) {
         if (input == null) return "";
-        // Strip accents: decompose to NFD, then remove all non-ASCII code points
-        String ascii = NON_ASCII_PATTERN.matcher(Normalizer.normalize(input, Normalizer.Form.NFD)).replaceAll("");
+        // Strip accents from Latin letters: decompose to NFD, drop their combining marks, recompose
+        String unaccented = Normalizer.normalize(
+                LATIN_ACCENT_PATTERN.matcher(Normalizer.normalize(input, Normalizer.Form.NFD)).replaceAll(""),
+                Normalizer.Form.NFC);
         return WHITESPACE_PATTERN.matcher(
                 CONTROL_CHARACTER_PATTERN.matcher(
-                        INVALID_CHARS_PATTERN.matcher(ascii).replaceAll("")
+                        INVALID_CHARS_PATTERN.matcher(unaccented).replaceAll("")
                 ).replaceAll("")
         ).replaceAll(" ").trim();
     }
