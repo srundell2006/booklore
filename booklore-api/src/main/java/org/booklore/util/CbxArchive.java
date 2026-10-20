@@ -14,6 +14,11 @@ import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.channels.ClosedChannelException;
+import java.nio.channels.NonWritableChannelException;
+import java.nio.channels.SeekableByteChannel;
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collections;
 import java.util.LinkedHashMap;
@@ -59,16 +64,34 @@ public abstract class CbxArchive implements AutoCloseable {
     private static CbxArchive openZip(File file) throws IOException {
         // Fast path: read only the central directory
         try {
-            return new Zip(zipBuilder(file).setIgnoreLocalFileHeader(true).get());
+            return new Zip(readZip(Files.newByteChannel(file.toPath()), true));
         } catch (Exception e) {
             log.debug("Fast path failed for ZIP {}: {}", file.getName(), e.getMessage());
         }
         // Slow path: also read every local file header
-        return new Zip(zipBuilder(file).setIgnoreLocalFileHeader(false).get());
+        return new Zip(readZip(Files.newByteChannel(file.toPath()), false));
     }
 
-    private static ZipFile.Builder zipBuilder(File file) {
-        return ZipFile.builder().setFile(file).setUseUnicodeExtraFields(true);
+    /**
+     * Opens the ZIP in {@code file}, reading it through a {@link BlockReadChannel}. The ZipFile
+     * owns {@code file} from here on, and it is closed if the ZIP cannot be read. Package-private
+     * so tests can count the reads that reach the file.
+     */
+    static ZipFile readZip(SeekableByteChannel file, boolean ignoreLocalFileHeader) throws IOException {
+        try {
+            return ZipFile.builder()
+                    .setSeekableByteChannel(new BlockReadChannel(file))
+                    .setUseUnicodeExtraFields(true)
+                    .setIgnoreLocalFileHeader(ignoreLocalFileHeader)
+                    .get();
+        } catch (IOException | RuntimeException e) {
+            try {
+                file.close();
+            } catch (IOException closeFailure) {
+                e.addSuppressed(closeFailure);
+            }
+            throw e;
+        }
     }
 
     private static CbxArchive openRar(File file) throws IOException {
@@ -237,6 +260,104 @@ public abstract class CbxArchive implements AutoCloseable {
 
         @Override
         public void close() {
+        }
+    }
+
+    /**
+     * A read-only view of a file that reads it a block at a time and serves reads from the last
+     * block read. Commons-compress parses a ZIP central directory with several small reads per
+     * entry, and searches backwards for the end record one byte per read; on a network share
+     * without client-side caching every read is a round trip. Through blocks those become a few
+     * large reads, as when java.util.zip reads the whole central directory at once.
+     */
+    static final class BlockReadChannel implements SeekableByteChannel {
+
+        private static final int BLOCK_SIZE = 64 * 1024;
+
+        private final SeekableByteChannel file;
+        private final long size;
+        private final ByteBuffer block = ByteBuffer.allocate(BLOCK_SIZE).limit(0);
+        private long blockStart;
+        private long position;
+
+        BlockReadChannel(SeekableByteChannel file) throws IOException {
+            this.file = file;
+            this.size = file.size();
+        }
+
+        @Override
+        public int read(ByteBuffer dst) throws IOException {
+            if (!isOpen()) {
+                throw new ClosedChannelException();
+            }
+            int read = 0;
+            while (dst.hasRemaining()) {
+                if ((position < blockStart || position >= blockStart + block.limit()) && !readBlock()) {
+                    break;
+                }
+                int offset = (int) (position - blockStart);
+                int length = Math.min(dst.remaining(), block.limit() - offset);
+                dst.put(block.array(), offset, length);
+                position += length;
+                read += length;
+            }
+            return read == 0 && dst.hasRemaining() ? -1 : read;
+        }
+
+        /** Reads the block holding {@code position}; false when that is at or past the end of the file. */
+        private boolean readBlock() throws IOException {
+            if (position >= size) {
+                return false;
+            }
+            // Aligned blocks, except that the last one ends at the end of the file, so the end record
+            // and a central directory of up to a block come in one read
+            blockStart = Math.max(0, Math.min(position - position % BLOCK_SIZE, size - BLOCK_SIZE));
+            block.clear();
+            file.position(blockStart);
+            while (block.hasRemaining() && file.read(block) >= 0) {
+                // A read may return fewer bytes than asked for
+            }
+            block.flip();
+            return position < blockStart + block.limit();
+        }
+
+        @Override
+        public long position() {
+            return position;
+        }
+
+        @Override
+        public SeekableByteChannel position(long newPosition) {
+            if (newPosition < 0) {
+                throw new IllegalArgumentException("Negative position: " + newPosition);
+            }
+            position = newPosition;
+            return this;
+        }
+
+        @Override
+        public long size() {
+            return size;
+        }
+
+        @Override
+        public int write(ByteBuffer src) {
+            throw new NonWritableChannelException();
+        }
+
+        @Override
+        public SeekableByteChannel truncate(long newSize) {
+            throw new NonWritableChannelException();
+        }
+
+        @Override
+        public boolean isOpen() {
+            return file.isOpen();
+        }
+
+        @Override
+        public void close() throws IOException {
+            file.close();
         }
     }
 }

@@ -1,5 +1,7 @@
 package org.booklore.util;
 
+import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
+import org.apache.commons.compress.archivers.zip.ZipFile;
 import org.booklore.util.CbxTestArchives.Entry;
 import org.booklore.util.CbxTestArchives.Format;
 import org.junit.jupiter.api.Nested;
@@ -14,10 +16,17 @@ import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.InputStream;
+import java.nio.ByteBuffer;
+import java.nio.channels.SeekableByteChannel;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
+import java.util.Arrays;
+import java.util.Collections;
 import java.util.List;
+import java.util.Random;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -163,6 +172,144 @@ class CbxArchiveTest {
                 assertThat(imageWidth(archive.readEntry("pages/002.png"))).isEqualTo(2);
                 assertThat(imageWidth(archive.readEntry("pages/003.png"))).isEqualTo(3);
                 assertThat(imageWidth(archive.readEntry("pages/001.png"))).isEqualTo(1);
+            }
+        }
+    }
+
+    @Nested
+    class ZipReadsInBlocks {
+
+        /** Counts the reads that reach the file. */
+        private static final class CountingChannel implements SeekableByteChannel {
+
+            private final SeekableByteChannel file;
+            private int reads;
+
+            CountingChannel(SeekableByteChannel file) {
+                this.file = file;
+            }
+
+            @Override
+            public int read(ByteBuffer dst) throws IOException {
+                reads++;
+                return file.read(dst);
+            }
+
+            @Override
+            public int write(ByteBuffer src) throws IOException {
+                return file.write(src);
+            }
+
+            @Override
+            public long position() throws IOException {
+                return file.position();
+            }
+
+            @Override
+            public SeekableByteChannel position(long newPosition) throws IOException {
+                file.position(newPosition);
+                return this;
+            }
+
+            @Override
+            public long size() throws IOException {
+                return file.size();
+            }
+
+            @Override
+            public SeekableByteChannel truncate(long size) throws IOException {
+                file.truncate(size);
+                return this;
+            }
+
+            @Override
+            public boolean isOpen() {
+                return file.isOpen();
+            }
+
+            @Override
+            public void close() throws IOException {
+                file.close();
+            }
+        }
+
+        @Test
+        void readsTheCentralDirectoryOfAManyPageZipInOneRead() throws IOException {
+            Entry[] entries = new Entry[300];
+            Random random = new Random(42);
+            for (int i = 0; i < entries.length; i++) {
+                byte[] page = new byte[1024];
+                random.nextBytes(page);
+                entries[i] = file("pages/page-%03d.jpg".formatted(i), page);
+            }
+            Path cbz = CbxTestArchives.zip(tempDir.resolve("many.cbz"), entries);
+            CountingChannel file = new CountingChannel(Files.newByteChannel(cbz));
+
+            // Commons-compress reads the central directory with about three reads per entry, so
+            // straight from the file this ZIP takes about nine hundred
+            try (ZipFile zip = CbxArchive.readZip(file, true)) {
+                assertThat(Collections.list(zip.getEntries())).hasSize(300);
+                assertThat(file.reads).isEqualTo(1);
+
+                ZipArchiveEntry page = zip.getEntry("pages/page-123.jpg");
+                try (InputStream is = zip.getInputStream(page)) {
+                    assertThat(is.readAllBytes()).isEqualTo(entries[123].data());
+                }
+            }
+            assertThat(file.isOpen()).isFalse();
+        }
+
+        @Test
+        void closesTheFileWhenItIsNotAZip() throws IOException {
+            Path garbage = Files.writeString(tempDir.resolve("garbage.cbz"), "not a zip at all");
+            SeekableByteChannel file = Files.newByteChannel(garbage);
+
+            assertThatThrownBy(() -> CbxArchive.readZip(file, true)).isInstanceOf(IOException.class);
+            assertThat(file.isOpen()).isFalse();
+        }
+
+        @Test
+        void blockReadsReturnWhatTheFileHolds() throws IOException {
+            // Several blocks and a partial one, read forwards, backwards, across block boundaries,
+            // in pieces larger than a block, at the end of the file and past it
+            byte[] content = new byte[200_003];
+            Random random = new Random(7);
+            random.nextBytes(content);
+            Path path = Files.write(tempDir.resolve("content.bin"), content);
+            // Each read is {position, length}
+            List<int[]> reads = new ArrayList<>();
+            for (int position = content.length - 4; position > content.length - 70_000; position -= 997) {
+                reads.add(new int[]{position, 4});
+            }
+            for (int i = 0; i < 500; i++) {
+                reads.add(new int[]{random.nextInt(content.length + 10), random.nextInt(i % 50 == 0 ? 150_000 : 300)});
+            }
+            reads.add(new int[]{0, content.length + 5});
+            reads.add(new int[]{content.length - 1, 10});
+            reads.add(new int[]{content.length, 10});
+            reads.add(new int[]{content.length + 100, 1});
+            reads.add(new int[]{5, 0});
+
+            try (SeekableByteChannel channel = new CbxArchive.BlockReadChannel(Files.newByteChannel(path))) {
+                assertThat(channel.size()).isEqualTo(content.length);
+                for (int[] read : reads) {
+                    int position = read[0];
+                    ByteBuffer dst = ByteBuffer.allocate(read[1]);
+                    channel.position(position);
+
+                    int count = channel.read(dst);
+
+                    int expected = Math.max(0, Math.min(dst.capacity(), content.length - position));
+                    if (expected == 0 && dst.capacity() > 0) {
+                        assertThat(count).as("read of %d at %d", dst.capacity(), position).isEqualTo(-1);
+                        assertThat(channel.position()).isEqualTo(position);
+                    } else {
+                        assertThat(count).as("read of %d at %d", dst.capacity(), position).isEqualTo(expected);
+                        assertThat(Arrays.copyOf(dst.array(), count))
+                                .isEqualTo(Arrays.copyOfRange(content, position, position + count));
+                        assertThat(channel.position()).isEqualTo(position + count);
+                    }
+                }
             }
         }
     }
