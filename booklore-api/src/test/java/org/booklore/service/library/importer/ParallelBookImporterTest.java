@@ -35,6 +35,8 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.InOrder;
 import org.slf4j.LoggerFactory;
+import org.springframework.dao.DataIntegrityViolationException;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 
@@ -42,6 +44,7 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.SQLTransientConnectionException;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
@@ -106,7 +109,10 @@ class ParallelBookImporterTest {
     /** Primary files whose preparation never returns until {@link #release}, as a read wedged on a share. */
     private final Set<String> wedgedFiles = ConcurrentHashMap.newKeySet();
     private final Set<String> unreadableFiles = ConcurrentHashMap.newKeySet();
+    /** Primary files whose row the database rejects, as for a value too long for its column. */
     private final Set<String> unsavableFiles = ConcurrentHashMap.newKeySet();
+    /** Primary files that cannot be saved because the database cannot be reached. */
+    private final Set<String> databaseDownFiles = ConcurrentHashMap.newKeySet();
     private volatile int maxPrepareMillis = 0;
 
     private final Logger importerLog = (Logger) LoggerFactory.getLogger(ParallelBookImporter.class);
@@ -161,8 +167,12 @@ class ParallelBookImporterTest {
         persistThreads.add(Thread.currentThread());
         // As the real persistPrepared checks
         assertThat(prepared.request().path()).isEqualTo(file.getFullPath());
+        if (databaseDownFiles.contains(file.getFileName())) {
+            throw new CannotCreateTransactionException("Could not open JPA EntityManager for transaction",
+                    new SQLTransientConnectionException("HikariPool-1 - Connection is not available, request timed out after 30000ms."));
+        }
         if (unsavableFiles.contains(file.getFileName())) {
-            throw new IllegalStateException("cannot save " + file.getFileName());
+            throw new DataIntegrityViolationException("could not execute statement [Data too long for column 'story_arc' at row 1]");
         }
         long id = lastBookId.incrementAndGet();
         return new PersistedBook(Book.builder().id(id).build(), id, true, file.getFileName(), file.getBookFileType(), sidecarJob);
@@ -419,14 +429,16 @@ class ParallelBookImporterTest {
     }
 
     @Test
-    void twentySavesFailingInARowStopTheScan() {
+    void twentySavesFailingInARowForWantOfTheDatabaseStopTheScan() {
         List<List<LibraryFile>> groupList = new ArrayList<>();
         for (int i = 0; i < 50; i++) {
             String name = "book-%02d".formatted(i);
             groupList.add(List.of(epub(name)));
-            // One success in between starts the count again
-            if (i != 19) {
+            // One success in between starts the count again; a rejected row neither counts nor starts it again
+            if (i == 25) {
                 unsavableFiles.add(name + ".epub");
+            } else if (i != 19) {
+                databaseDownFiles.add(name + ".epub");
             }
         }
         @SuppressWarnings("unchecked")
@@ -436,12 +448,39 @@ class ParallelBookImporterTest {
 
         assertThat(summary.stoppedDatabaseErrors()).isTrue();
         assertThat(summary.added()).isEqualTo(1);
-        assertThat(summary.failed()).isEqualTo(39);
-        assertThat(summary.notStarted()).isEqualTo(10);
-        verify(processor, times(40)).persistPrepared(any(), any());
+        assertThat(summary.failed()).isEqualTo(40);
+        assertThat(summary.notStarted()).isEqualTo(9);
+        verify(processor, times(41)).persistPrepared(any(), any());
         assertThat(logged(Level.ERROR)).filteredOn(line -> line.startsWith("Stopped importing")).singleElement().asString()
-                .isEqualTo("Stopped importing into library 'Books' after 20 books in a row could not be saved; 10 new books "
-                        + "were not started and will be picked up by the next scan.");
+                .isEqualTo("Stopped importing into library 'Books' after 20 books in a row could not be saved because the "
+                        + "database could not be reached; 9 new books were not started and will be picked up by the next scan.");
+    }
+
+    @Test
+    void rowsTheDatabaseRejectsDoNotStopTheScanHoweverManyInARow() {
+        // As a folder of comics whose ComicInfo has a story arc too long for its column: rejected again on every scan,
+        // they must not stop every scan at the same place
+        List<List<LibraryFile>> groupList = new ArrayList<>();
+        for (int i = 0; i < 30; i++) {
+            String name = "book-%02d".formatted(i);
+            groupList.add(List.of(epub(name)));
+            if (i < 25) {
+                unsavableFiles.add(name + ".epub");
+            }
+        }
+        @SuppressWarnings("unchecked")
+        Map<String, List<LibraryFile>> groups = groups(groupList.toArray(List[]::new));
+
+        ImportSummary summary = importer(executor(2, 4)).importGroups(groups, library);
+
+        assertThat(summary.stoppedDatabaseErrors()).isFalse();
+        assertThat(summary.failed()).isEqualTo(25);
+        assertThat(summary.added()).isEqualTo(5);
+        assertThat(summary.notStarted()).isZero();
+        verify(processor, times(30)).persistPrepared(any(), any());
+        assertThat(logged(Level.ERROR)).hasSize(25).first().asString()
+                .isEqualTo("Failed to process file group [book-00.epub]: could not execute statement [Data too long for column "
+                        + "'story_arc' at row 1]");
     }
 
     @Test

@@ -2,6 +2,7 @@ package org.booklore.service.library.importer;
 
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.lang3.exception.ExceptionUtils;
 import org.booklore.exception.ApiError;
 import org.booklore.model.FileProcessResult;
 import org.booklore.model.dto.Book;
@@ -40,13 +41,20 @@ import org.booklore.util.FileService;
 import org.booklore.util.cover.CoverKind;
 import org.booklore.util.cover.CropPolicy;
 import org.booklore.util.cover.RenderedCover;
+import org.springframework.dao.DataAccessResourceFailureException;
+import org.springframework.dao.RecoverableDataAccessException;
+import org.springframework.dao.TransientDataAccessException;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.File;
 import java.io.IOException;
+import java.sql.SQLNonTransientConnectionException;
+import java.sql.SQLRecoverableException;
+import java.sql.SQLTransientException;
 import java.time.Duration;
 import java.time.Instant;
 import java.util.ArrayDeque;
@@ -77,9 +85,9 @@ import java.util.concurrent.locks.ReentrantLock;
  * <p>A group whose primary file fails, or does not finish reading within its deadline, is skipped and stays new for
  * the next scan, and so is one whose additional format does not finish reading in time; one whose additional format
  * cannot be read is saved without it. When storage
- * wedges (see {@link ImportExecutor#breakerOpen()}), or saving fails {@value #MAX_CONSECUTIVE_SAVE_FAILURES} times in
- * a row, the scan stops planning, saves what has been read and returns; what it did not get to is new again on the
- * next scan. The returned {@link ImportSummary} counts all of this.
+ * wedges (see {@link ImportExecutor#breakerOpen()}), or the database cannot be reached to save
+ * {@value #MAX_CONSECUTIVE_SAVE_FAILURES} books in a row, the scan stops planning, saves what has been read and
+ * returns; what it did not get to is new again on the next scan. The returned {@link ImportSummary} counts all of this.
  */
 @Slf4j
 @Component
@@ -353,7 +361,9 @@ public class ParallelBookImporter {
             // Rolled back; a new book's cover files went with it
             log.error("Failed to process file group {}: {}", plan.names(), e.getMessage());
             scan.failed++;
-            scan.consecutiveSaveFailures++;
+            if (databaseUnreachable(e)) {
+                scan.consecutiveSaveFailures++;
+            }
             return null;
         } finally {
             // The scan's caller keeps its files until the scan ends, and with them the library each one was saved with:
@@ -367,6 +377,21 @@ public class ParallelBookImporter {
         scan.consecutiveSaveFailures = 0;
         scan.added++;
         return persisted;
+    }
+
+    /**
+     * Whether saving failed because the database could not be reached or did not answer in time, rather than because of
+     * the book. Only such failures, in a row, stop the import: a row the database rejects, such as for a value too long
+     * for its column, is rejected again on every scan, and would stop every scan at the same files.
+     */
+    private static boolean databaseUnreachable(Throwable e) {
+        return ExceptionUtils.getThrowableList(e).stream().anyMatch(cause -> cause instanceof CannotCreateTransactionException
+                || cause instanceof DataAccessResourceFailureException
+                || cause instanceof TransientDataAccessException
+                || cause instanceof RecoverableDataAccessException
+                || cause instanceof SQLTransientException
+                || cause instanceof SQLRecoverableException
+                || cause instanceof SQLNonTransientConnectionException);
     }
 
     /**
@@ -602,8 +627,9 @@ public class ParallelBookImporter {
                             + "and will be picked up by the next scan. Check the share, or restart Booklore if it stays stuck.",
                     name, executor.stuckThreads(), scan.notStarted);
         } else if (scan.stoppedDatabaseErrors) {
-            log.error("Stopped importing into library '{}' after {} books in a row could not be saved; {} new books were not "
-                    + "started and will be picked up by the next scan.", name, MAX_CONSECUTIVE_SAVE_FAILURES, scan.notStarted);
+            log.error("Stopped importing into library '{}' after {} books in a row could not be saved because the database "
+                    + "could not be reached; {} new books were not started and will be picked up by the next scan.",
+                    name, MAX_CONSECUTIVE_SAVE_FAILURES, scan.notStarted);
         }
         Duration elapsed = Duration.ofNanos(System.nanoTime() - scan.startNanos);
         long slowestMillis = TimeUnit.NANOSECONDS.toMillis(scan.slowestNanos);
@@ -685,6 +711,7 @@ public class ParallelBookImporter {
         int timedOut;
         int notStarted;
         int attachmentsSkipped;
+        /** Books in a row that could not be saved because the database could not be reached. */
         int consecutiveSaveFailures;
         boolean stoppedStorageStuck;
         boolean stoppedDatabaseErrors;
