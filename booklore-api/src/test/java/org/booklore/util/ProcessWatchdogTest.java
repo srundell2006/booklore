@@ -1,5 +1,8 @@
 package org.booklore.util;
 
+import org.booklore.service.fileprocessor.prepare.HeapReservation;
+import org.booklore.service.fileprocessor.prepare.IoCallable;
+import org.booklore.service.fileprocessor.prepare.PrepareContext;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.condition.EnabledOnOs;
 import org.junit.jupiter.api.condition.OS;
@@ -9,6 +12,8 @@ import java.io.InputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -66,6 +71,42 @@ class ProcessWatchdogTest {
 
         assertThat(process.waitFor(5, TimeUnit.SECONDS)).isTrue();
         TestProcesses.assertAllStopped(pids, 2);
+    }
+
+    @Test
+    void processWatchedWhilePreparingAFileIsRegisteredWithThePreparation() throws Exception {
+        List<Process> registered = new ArrayList<>();
+        PrepareContext ctx = new PrepareContext() {
+            @Override
+            public void checkpoint() {
+            }
+
+            @Override
+            public <T> T render(long estimatedBytes, IoCallable<T> work) throws Exception {
+                return work.call();
+            }
+
+            @Override
+            public HeapReservation reserveHeap(long bytes) {
+                return () -> {
+                };
+            }
+
+            @Override
+            public void registerProcess(Process process) {
+                registered.add(process);
+            }
+        };
+        Process inside = new ProcessBuilder("sh", "-c", "echo done").start();
+        Process outside = new ProcessBuilder("sh", "-c", "echo done").start();
+
+        ScopedValue.where(PrepareContext.CURRENT, ctx).call(() -> {
+            ProcessWatchdog.watch(inside, Duration.ofSeconds(30)).close();
+            return null;
+        });
+        ProcessWatchdog.watch(outside, Duration.ofSeconds(30)).close();
+
+        assertThat(registered).containsExactly(inside);
     }
 
     private static void awaitPids(Path pids) throws Exception {

@@ -1,5 +1,7 @@
 package org.booklore.util;
 
+import org.booklore.service.fileprocessor.prepare.PrepareContext;
+
 import java.time.Duration;
 import java.util.concurrent.ScheduledFuture;
 import java.util.concurrent.ScheduledThreadPoolExecutor;
@@ -28,10 +30,16 @@ public final class ProcessWatchdog {
     /**
      * Kills {@code process} if it is still running after {@code timeout}. Close the result when done with the process:
      * that stops the timer, and kills the process if it is still running.
+     * <p>
+     * Called while preparing a file for import, the process is also registered with that preparation's
+     * {@link PrepareContext}, so it is killed as soon as the import gives up on the file.
      */
     public static WatchedProcess watch(Process process, Duration timeout) {
         WatchedProcess watched = new WatchedProcess(process);
         watched.timer = TIMER.schedule(watched::timeOut, timeout.toNanos(), TimeUnit.NANOSECONDS);
+        if (PrepareContext.CURRENT.isBound()) {
+            PrepareContext.CURRENT.get().registerProcess(process);
+        }
         return watched;
     }
 

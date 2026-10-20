@@ -27,6 +27,20 @@ app:
     # Seconds a directory listing may wait on one filesystem call before that directory
     # is skipped and reported as not scanned.
     directory-timeout-seconds: ${SCAN_DIRECTORY_TIMEOUT_SECONDS:60}
+    # New-book import pipeline. false = the sequential loop and one scan-wide transaction, as before.
+    import-pipeline-enabled: ${SCAN_IMPORT_PIPELINE_ENABLED:true}
+    # Files read from storage at once, shared by all scans (1-128). Threads are platform threads.
+    import-io-parallelism: ${SCAN_IMPORT_IO_PARALLELISM:16}
+    # Groups in flight per scan, prepared but not yet saved included. 0 = 4 x io-parallelism (clamped io..512).
+    import-window: ${SCAN_IMPORT_WINDOW:0}
+    # Seconds one file may take once it has started reading before it is skipped and retried next scan (10-3600).
+    import-file-timeout-seconds: ${SCAN_IMPORT_FILE_TIMEOUT_SECONDS:180}
+    # Abandoned import threads still blocked on storage, process-wide, at which imports stop (1-128).
+    import-max-stuck-threads: ${SCAN_IMPORT_MAX_STUCK_THREADS:16}
+    # Concurrent cover decode/render/encode jobs. 0 = max(1, min(4, cores/2)) (clamped 1..16).
+    import-render-parallelism: ${SCAN_IMPORT_RENDER_PARALLELISM:0}
+    # Heap reserved for decoding and FB2 parsing, MiB. 0 = maxHeap/4 clamped 128..1024; explicit values clamped 64..maxHeap/2.
+    import-heap-budget-mb: ${SCAN_IMPORT_HEAP_BUDGET_MB:0}
 
 server:
   max-http-header-size: 128KB
