@@ -28,6 +28,7 @@ import org.booklore.service.metadata.MetadataMatchService;
 import org.booklore.service.metadata.extractor.PdfMetadataExtractor;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
 import org.booklore.util.FileService;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -38,6 +39,7 @@ import org.junit.jupiter.params.provider.Arguments;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
+import org.mockito.Mockito;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.web.client.RestTemplate;
@@ -92,6 +94,13 @@ class PdfProcessorTest {
     private FileService fileService;
     private PdfMetadataExtractor pdfMetadataExtractor;
     private PdfProcessor pdfProcessor;
+
+    // The spies record every call, page renders included, and Mockito's inline mock maker keeps a spy whose recorded
+    // calls point back at it alive for good. Without this the renders pile up across the test suite's heap.
+    @AfterEach
+    void dropRecordedRenders() {
+        Mockito.clearInvocations(fileService, pdfMetadataExtractor);
+    }
 
     @BeforeEach
     void setUp() {
