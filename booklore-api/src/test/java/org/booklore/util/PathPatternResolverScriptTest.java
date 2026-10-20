@@ -140,6 +140,20 @@ class PathPatternResolverScriptTest {
         assertThat(sanitized(title)).isEqualTo(expected);
     }
 
+    @ParameterizedTest(name = "{0} -> {1}")
+    @CsvSource(delimiter = '|', value = {
+            // Every letter is kept, so these differ from the names they used to get ("Signicance", "Winters Tale")
+            "The Signi\uFB01cance of \uFB02ow  | The Signi\uFB01cance of \uFB02ow",
+            "N\u00BA 5 and 1\u00AA edici\u00F3n | N\u00BA 5 and 1\u00AA edicion",
+            "XIX\u1D49 si\u00E8cle             | XIX\u1D49 siecle",
+            "Winter\u02BCs Tale                | Winter\u02BCs Tale",
+            "Winter\u2019s Tale                | Winters Tale",
+    })
+    void ligaturesOrdinalsAndModifierLetters_areKeptLikeAnyOtherLetter(String title, String expected) {
+        // Ligatures, ordinal indicators and modifier letters (the U+02BC apostrophe among them) are letters, \p{L}
+        assertThat(sanitized(title)).isEqualTo(expected);
+    }
+
     @ParameterizedTest(name = "{0}")
     @CsvSource(delimiter = '|', value = {
             "Persian with ZWNJ    | \u06A9\u062A\u0627\u0628\u200C\u0647\u0627 \u0645\u06CC\u200C\u062E\u0648\u0627\u0647\u0645",
