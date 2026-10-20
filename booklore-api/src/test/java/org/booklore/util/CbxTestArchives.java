@@ -30,6 +30,39 @@ public final class CbxTestArchives {
     private CbxTestArchives() {
     }
 
+    /** The archive formats a CBX book can be in, with the type ArchiveUtils detects for each. */
+    public enum Format {
+        CBZ(".cbz", ArchiveUtils.ArchiveType.ZIP),
+        CB7(".cb7", ArchiveUtils.ArchiveType.SEVEN_ZIP),
+        CBR(".cbr", ArchiveUtils.ArchiveType.RAR);
+
+        private final String extension;
+        private final ArchiveUtils.ArchiveType archiveType;
+
+        Format(String extension, ArchiveUtils.ArchiveType archiveType) {
+            this.extension = extension;
+            this.archiveType = archiveType;
+        }
+
+        public String extension() {
+            return extension;
+        }
+
+        public ArchiveUtils.ArchiveType archiveType() {
+            return archiveType;
+        }
+
+        /** Writes {@code baseName} plus this format's extension into {@code dir}. */
+        public Path write(Path dir, String baseName, Entry... entries) throws IOException {
+            Path path = dir.resolve(baseName + extension);
+            return switch (this) {
+                case CBZ -> zip(path, entries);
+                case CB7 -> sevenZip(path, entries);
+                case CBR -> rar(path, entries);
+            };
+        }
+    }
+
     /** A file entry, or a directory entry when {@code data} is null. */
     public record Entry(String name, byte[] data) {
         boolean isDirectory() {

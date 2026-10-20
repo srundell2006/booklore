@@ -18,8 +18,8 @@ import org.booklore.service.metadata.extractor.CbxMetadataExtractor;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
 import org.booklore.util.ArchiveUtils;
 import org.booklore.util.CbxArchive;
-import org.booklore.util.CbxTestArchives;
 import org.booklore.util.CbxTestArchives.Entry;
+import org.booklore.util.CbxTestArchives.Format;
 import org.booklore.util.FileService;
 import org.booklore.util.UnrarHelper;
 import org.junit.jupiter.api.BeforeEach;
@@ -98,30 +98,8 @@ class CbxProcessorTest {
         );
     }
 
-    enum Format {
-        CBZ(".cbz", ArchiveUtils.ArchiveType.ZIP),
-        CB7(".cb7", ArchiveUtils.ArchiveType.SEVEN_ZIP),
-        CBR(".cbr", ArchiveUtils.ArchiveType.RAR);
-
-        private final String extension;
-        private final ArchiveUtils.ArchiveType archiveType;
-
-        Format(String extension, ArchiveUtils.ArchiveType archiveType) {
-            this.extension = extension;
-            this.archiveType = archiveType;
-        }
-
-        Path write(Path path, Entry... entries) throws IOException {
-            return switch (this) {
-                case CBZ -> CbxTestArchives.zip(path, entries);
-                case CB7 -> CbxTestArchives.sevenZip(path, entries);
-                case CBR -> CbxTestArchives.rar(path, entries);
-            };
-        }
-    }
-
     private Path archive(Format format, String baseName, Entry... entries) throws IOException {
-        return format.write(tempDir.resolve(baseName + format.extension), entries);
+        return format.write(tempDir, baseName, entries);
     }
 
     private BookEntity bookFor(Path file) {
@@ -405,7 +383,7 @@ class CbxProcessorTest {
             assertThat(savedCoverWidth()).isEqualTo(1);
             assertThat(book.getBookCoverHash()).isNotNull();
             assertThat(book.getMetadata().getCoverUpdatedOn()).isNotNull();
-            assertThat(book.getPrimaryBookFile().getArchiveType()).isEqualTo(format.archiveType);
+            assertThat(book.getPrimaryBookFile().getArchiveType()).isEqualTo(format.archiveType());
             assertThat(book.getMetadata().getTitle()).isEqualTo("The Title");
             assertThat(book.getMetadata().getSeriesName()).isEqualTo("The Series");
             assertThat(book.getMetadata().getSeriesNumber()).isEqualTo(7f);
@@ -528,7 +506,7 @@ class CbxProcessorTest {
                 assertThat(savedCoverWidth()).isEqualTo(1);
                 assertThat(book.getMetadata().getTitle()).isEqualTo("Once");
                 archiveUtils.verify(() -> ArchiveUtils.detectArchiveType(any(File.class)), times(1));
-                cbxArchive.verify(() -> CbxArchive.open(any(File.class), eq(format.archiveType)), times(1));
+                cbxArchive.verify(() -> CbxArchive.open(any(File.class), eq(format.archiveType())), times(1));
             }
         }
 

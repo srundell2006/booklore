@@ -3,8 +3,8 @@ package org.booklore.service.metadata.extractor;
 import org.booklore.model.dto.BookMetadata;
 import org.booklore.model.dto.ComicMetadata;
 import org.booklore.util.CbxArchive;
-import org.booklore.util.CbxTestArchives;
 import org.booklore.util.CbxTestArchives.Entry;
+import org.booklore.util.CbxTestArchives.Format;
 import org.booklore.util.UnrarHelper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -1383,26 +1383,8 @@ class CbxMetadataExtractorTest {
         }
     }
 
-    enum Format {
-        CBZ(".cbz"),
-        CB7(".cb7"),
-        CBR(".cbr");
-
-        private final String extension;
-
-        Format(String extension) {
-            this.extension = extension;
-        }
-    }
-
     private File archive(Format format, String baseName, Entry... entries) throws IOException {
-        Path path = tempDir.resolve(baseName + format.extension);
-        switch (format) {
-            case CBZ -> CbxTestArchives.zip(path, entries);
-            case CB7 -> CbxTestArchives.sevenZip(path, entries);
-            case CBR -> CbxTestArchives.rar(path, entries);
-        }
-        return path.toFile();
+        return format.write(tempDir, baseName, entries).toFile();
     }
 
     @Nested
@@ -1487,7 +1469,7 @@ class CbxMetadataExtractorTest {
         @ParameterizedTest
         @EnumSource(Format.class)
         void fallsBackToFileNameForUnreadableArchive(Format format) throws IOException {
-            Path path = tempDir.resolve("Unreadable-01" + format.extension);
+            Path path = tempDir.resolve("Unreadable-01" + format.extension());
             Files.writeString(path, "this is not an archive of any kind");
 
             assertThat(extractor.extractMetadata(path.toFile()).getTitle()).isEqualTo("Unreadable-01");

@@ -1,6 +1,7 @@
 package org.booklore.util;
 
 import org.booklore.util.CbxTestArchives.Entry;
+import org.booklore.util.CbxTestArchives.Format;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
@@ -32,26 +33,8 @@ class CbxArchiveTest {
     @TempDir
     Path tempDir;
 
-    enum Format {
-        CBZ(ArchiveUtils.ArchiveType.ZIP),
-        CB7(ArchiveUtils.ArchiveType.SEVEN_ZIP),
-        CBR(ArchiveUtils.ArchiveType.RAR);
-
-        private final ArchiveUtils.ArchiveType type;
-
-        Format(ArchiveUtils.ArchiveType type) {
-            this.type = type;
-        }
-    }
-
     private File write(Format format, Entry... entries) throws IOException {
-        Path path = tempDir.resolve("archive." + format.name().toLowerCase());
-        switch (format) {
-            case CBZ -> CbxTestArchives.zip(path, entries);
-            case CB7 -> CbxTestArchives.sevenZip(path, entries);
-            case CBR -> CbxTestArchives.rar(path, entries);
-        }
-        return path.toFile();
+        return format.write(tempDir, "archive", entries).toFile();
     }
 
     private static byte[] bytes(String text) {
@@ -69,7 +52,7 @@ class CbxArchiveTest {
                 imageFile("1.png", 1),
                 file("a/notes.txt", "notes"));
 
-        try (CbxArchive archive = CbxArchive.open(file, format.type)) {
+        try (CbxArchive archive = CbxArchive.open(file, format.archiveType())) {
             assertThat(archive.fileNames()).containsExactly("b/2.jpg", "a/ComicInfo.xml", "1.png", "a/notes.txt");
         }
     }
@@ -84,7 +67,7 @@ class CbxArchiveTest {
                 file("deep/er/second.txt", "two"),
                 file("third.txt", "three"));
 
-        try (CbxArchive archive = CbxArchive.open(file, format.type)) {
+        try (CbxArchive archive = CbxArchive.open(file, format.archiveType())) {
             assertThat(archive.readEntry("third.txt")).isEqualTo(bytes("three"));
             assertThat(archive.readEntry("first.txt")).isEqualTo(bytes("one"));
             assertThat(archive.readEntry("deep/er/second.txt")).isEqualTo(bytes("two"));
@@ -97,7 +80,7 @@ class CbxArchiveTest {
     void readsEmptyEntries(Format format) throws IOException {
         File file = write(format, file("empty.txt", new byte[0]), file("after.txt", "after"));
 
-        try (CbxArchive archive = CbxArchive.open(file, format.type)) {
+        try (CbxArchive archive = CbxArchive.open(file, format.archiveType())) {
             assertThat(archive.readEntry("empty.txt")).isEmpty();
             assertThat(archive.readEntry("after.txt")).isEqualTo(bytes("after"));
         }
@@ -111,7 +94,7 @@ class CbxArchiveTest {
                 file("other.txt", "other"),
                 file("page.jpg", "second copy"));
 
-        try (CbxArchive archive = CbxArchive.open(file, format.type)) {
+        try (CbxArchive archive = CbxArchive.open(file, format.archiveType())) {
             assertThat(archive.fileNames()).containsExactly("page.jpg", "other.txt");
             assertThat(archive.readEntry("page.jpg")).isEqualTo(bytes("first copy"));
         }
@@ -122,7 +105,7 @@ class CbxArchiveTest {
     void readingAMissingEntryOrADirectoryFails(Format format) throws IOException {
         File file = write(format, dir("folder"), file("folder/page.txt", "page"));
 
-        try (CbxArchive archive = CbxArchive.open(file, format.type)) {
+        try (CbxArchive archive = CbxArchive.open(file, format.archiveType())) {
             assertThatThrownBy(() -> archive.readEntry("missing.txt")).isInstanceOf(FileNotFoundException.class);
             assertThatThrownBy(() -> archive.readEntry(format == Format.CBZ ? "folder/" : "folder"))
                     .isInstanceOf(FileNotFoundException.class);
@@ -152,7 +135,7 @@ class CbxArchiveTest {
     void corruptArchiveDoesNotOpen(Format format) throws IOException {
         File garbage = Files.writeString(tempDir.resolve("garbage"), "not an archive").toFile();
 
-        assertThatThrownBy(() -> CbxArchive.open(garbage, format.type)).isInstanceOf(IOException.class);
+        assertThatThrownBy(() -> CbxArchive.open(garbage, format.archiveType())).isInstanceOf(IOException.class);
     }
 
     @Nested
