@@ -355,6 +355,10 @@ public class ParallelBookImporter {
             scan.failed++;
             scan.consecutiveSaveFailures++;
             return null;
+        } finally {
+            // The scan's caller keeps its files until the scan ends, and with them the library each one was saved with:
+            // a copy, with its paths, per book
+            plan.primary().setLibraryEntity(scan.library);
         }
         if (persisted == null) {
             scan.failed++;

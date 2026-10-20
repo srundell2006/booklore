@@ -372,6 +372,35 @@ class ParallelBookImporterTest {
     }
 
     @Test
+    void eachBookIsSavedWithItsTransactionsLibraryWhichTheScansFilesDoNotKeep() {
+        List<LibraryEntity> loaded = Collections.synchronizedList(new ArrayList<>());
+        when(libraryRepository.findById(1L)).thenAnswer(inv -> {
+            // As each transaction's session loads its own copy
+            LibraryEntity copy = LibraryEntity.builder().id(1L).name("Books").formatPriority(library.getFormatPriority()).build();
+            loaded.add(copy);
+            return Optional.of(copy);
+        });
+        List<LibraryEntity> savedWith = Collections.synchronizedList(new ArrayList<>());
+        doAnswer(inv -> {
+            LibraryFile file = inv.getArgument(0);
+            savedWith.add(file.getLibraryEntity());
+            return persist(file, inv.getArgument(1), null);
+        }).when(processor).persistPrepared(any(), any());
+        List<LibraryFile> primaries = List.of(epub("one"), epub("two"), epub("three"));
+
+        ImportSummary summary = importer(executor(4, 8)).importGroups(
+                groups(List.of(primaries.get(0)), List.of(primaries.get(1)), List.of(primaries.get(2))), library);
+
+        assertThat(summary.added()).isEqualTo(3);
+        // The scan's own copy first, then one per book's transaction
+        assertThat(loaded).hasSize(4);
+        for (int i = 0; i < 3; i++) {
+            assertThat(savedWith.get(i)).isSameAs(loaded.get(i + 1));
+            assertThat(primaries.get(i).getLibraryEntity()).isSameAs(loaded.getFirst());
+        }
+    }
+
+    @Test
     void aFailingBroadcastOrKoboShelfLeavesTheRestOfTheGroupAlone() throws Exception {
         doThrow(new IllegalStateException("no websocket")).when(bookEventBroadcaster).broadcastBookAddEvent(argThat(book -> book.getId() == 1L));
         doThrow(new IllegalStateException("no shelf")).when(koboAutoShelfService).autoAddBookToKoboShelves(2L);
