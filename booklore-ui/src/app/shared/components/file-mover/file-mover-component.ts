@@ -14,7 +14,7 @@ import {LibraryService} from "../../../features/book/service/library.service";
 import {AppSettingsService} from '../../service/app-settings.service';
 import {Select} from 'primeng/select';
 import {Library, LibraryPath} from '../../../features/book/model/library.model';
-import {replacePlaceholders} from '../../util/pattern-resolver';
+import {replacePlaceholders, sanitize} from '../../util/pattern-resolver';
 
 interface FilePreview {
   bookId: number;
@@ -252,16 +252,16 @@ export class FileMoverComponent implements OnDestroy {
     const pattern = this.getPatternForLibrary(preview.targetLibraryId);
 
     const values: Record<string, string> = {
-      authors: this.sanitize(meta.authors?.join(', ') || 'Unknown Author'),
-      title: this.sanitize(meta.title || 'Untitled'),
-      subtitle: this.sanitize(meta.subtitle || ''),
+      authors: sanitize(meta.authors?.join(', ') || 'Unknown Author'),
+      title: sanitize(meta.title || 'Untitled'),
+      subtitle: sanitize(meta.subtitle || ''),
       year: this.formatYear(meta.publishedDate),
-      series: this.sanitize(meta.seriesName || ''),
+      series: sanitize(meta.seriesName || ''),
       seriesIndex: this.formatSeriesIndex(meta.seriesNumber ?? undefined),
-      language: this.sanitize(meta.language || ''),
-      publisher: this.sanitize(meta.publisher || ''),
-      isbn: this.sanitize(meta.isbn13 || meta.isbn10 || ''),
-      currentFilename: this.sanitize(fileName)
+      language: sanitize(meta.language || ''),
+      publisher: sanitize(meta.publisher || ''),
+      isbn: sanitize(meta.isbn13 || meta.isbn10 || ''),
+      currentFilename: sanitize(fileName)
     };
 
     let newPath: string;
@@ -321,13 +321,6 @@ export class FileMoverComponent implements OnDestroy {
     return this.filePreviews.filter(p => p.isMoved).length;
   }
 
-  sanitize(input: string | undefined): string {
-    return input?.replace(/[\\/:*?"<>|]/g, '')
-      .replace(/[\x00-\x1F\x7F]/g, '')
-      .replace(/\s+/g, ' ')
-      .trim() ?? '';
-  }
-
   formatYear(dateStr?: string): string {
     if (!dateStr) return '';
     const yearMatch = dateStr.match(/^(\d{4})/);
@@ -343,12 +336,12 @@ export class FileMoverComponent implements OnDestroy {
     // Check if it's a whole number
     if (Number.isInteger(seriesNumber)) {
       // Format with leading zero for 1-9
-      return this.sanitize(seriesNumber.toString().padStart(2, '0'));
+      return sanitize(seriesNumber.toString().padStart(2, '0'));
     } else {
       // For decimal numbers, format integer part with leading zero
       const intPart = Math.floor(seriesNumber);
       const decimalPart = (seriesNumber % 1).toFixed(10).substring(1).replace(/0+$/, '');
-      return this.sanitize(intPart.toString().padStart(2, '0') + decimalPart);
+      return sanitize(intPart.toString().padStart(2, '0') + decimalPart);
     }
   }
 
