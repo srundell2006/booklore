@@ -11,11 +11,12 @@ import org.springframework.security.core.context.SecurityContextImpl;
 
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ExecutionException;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 
 import static org.junit.jupiter.api.Assertions.*;
 
-class SecurityContextVirtualThreadTest {
+class SecurityContextThreadsTest {
 
     private Authentication originalAuth;
     private SecurityContext originalContext;
@@ -33,11 +34,62 @@ class SecurityContextVirtualThreadTest {
     }
 
     @Test
+    void start_runsTheTaskOnANamedPlatformDaemonThread() throws Exception {
+        CompletableFuture<Thread> ranOn = new CompletableFuture<>();
+
+        Thread thread = SecurityContextThreads.start("library-scan-7", () -> ranOn.complete(Thread.currentThread()));
+
+        assertSame(thread, ranOn.get(5, TimeUnit.SECONDS));
+        assertFalse(thread.isVirtual());
+        assertTrue(thread.isDaemon());
+        assertEquals("library-scan-7", thread.getName());
+        thread.join(5000);
+        assertFalse(thread.isAlive());
+    }
+
+    @Test
+    void start_withProvidedContext_runsTheTaskOnANamedPlatformDaemonThread() throws Exception {
+        CompletableFuture<Thread> ranOn = new CompletableFuture<>();
+
+        Thread thread = SecurityContextThreads.start("task-MISSING_FILE_SCAN", originalContext,
+                () -> ranOn.complete(Thread.currentThread()));
+
+        assertSame(thread, ranOn.get(5, TimeUnit.SECONDS));
+        assertFalse(thread.isVirtual());
+        assertTrue(thread.isDaemon());
+        assertEquals("task-MISSING_FILE_SCAN", thread.getName());
+    }
+
+    @Test
+    void runAs_setsTheSecurityContextForTheTaskAndClearsItAfterwards() {
+        Authentication otherAuth = new UsernamePasswordAuthenticationToken("otherUser", "password", null);
+        AtomicReference<Authentication> capturedAuth = new AtomicReference<>();
+
+        SecurityContextThreads.runAs(otherAuth, () -> capturedAuth.set(SecurityContextHolder.getContext().getAuthentication()));
+
+        assertSame(otherAuth, capturedAuth.get());
+        assertNull(SecurityContextHolder.getContext().getAuthentication());
+    }
+
+    @Test
+    void runAs_clearsTheSecurityContextWhenTheTaskThrows() {
+        Authentication otherAuth = new UsernamePasswordAuthenticationToken("otherUser", "password", null);
+
+        RuntimeException thrown = assertThrows(RuntimeException.class,
+                () -> SecurityContextThreads.runAs(otherAuth, () -> {
+                    throw new RuntimeException("Test exception");
+                }));
+
+        assertEquals("Test exception", thrown.getMessage());
+        assertNull(SecurityContextHolder.getContext().getAuthentication());
+    }
+
+    @Test
     void testRunWithSecurityContext_executesRunnable() throws ExecutionException, InterruptedException {
         AtomicReference<String> result = new AtomicReference<>();
 
         CompletableFuture<Void> future = new CompletableFuture<>();
-        SecurityContextVirtualThread.runWithSecurityContext(() -> {
+        SecurityContextThreads.start("test", () -> {
             try {
                 result.set("executed");
                 future.complete(null);
@@ -46,7 +98,7 @@ class SecurityContextVirtualThreadTest {
             }
         });
 
-        // Wait for the virtual thread to complete
+        // Wait for the thread to complete
         future.get();
         assertEquals("executed", result.get());
     }
@@ -56,7 +108,7 @@ class SecurityContextVirtualThreadTest {
         AtomicReference<Authentication> capturedAuth = new AtomicReference<>();
 
         CompletableFuture<Void> future = new CompletableFuture<>();
-        SecurityContextVirtualThread.runWithSecurityContext(() -> {
+        SecurityContextThreads.start("test", () -> {
             try {
                 capturedAuth.set(SecurityContextHolder.getContext().getAuthentication());
                 future.complete(null);
@@ -73,7 +125,7 @@ class SecurityContextVirtualThreadTest {
     @Test
     void testRunWithSecurityContext_maintainsMainThreadContext() throws ExecutionException, InterruptedException {
         CompletableFuture<Void> future = new CompletableFuture<>();
-        SecurityContextVirtualThread.runWithSecurityContext(() -> {
+        SecurityContextThreads.start("test", () -> {
             try {
                 // Context should be set here
                 assertNotNull(SecurityContextHolder.getContext().getAuthentication());
@@ -85,7 +137,7 @@ class SecurityContextVirtualThreadTest {
 
         future.get();
 
-        // After the virtual thread completes, the main thread's context should still be intact
+        // After the thread completes, the main thread's context should still be intact
         Authentication mainThreadAuth = SecurityContextHolder.getContext().getAuthentication();
         assertNotNull(mainThreadAuth);
         assertEquals(originalAuth.getName(), mainThreadAuth.getName());
@@ -99,7 +151,7 @@ class SecurityContextVirtualThreadTest {
         AtomicReference<Authentication> capturedAuth = new AtomicReference<>();
 
         CompletableFuture<Void> future = new CompletableFuture<>();
-        SecurityContextVirtualThread.runWithSecurityContext(differentContext, () -> {
+        SecurityContextThreads.start("test", differentContext, () -> {
             try {
                 capturedAuth.set(SecurityContextHolder.getContext().getAuthentication());
                 future.complete(null);
@@ -119,7 +171,7 @@ class SecurityContextVirtualThreadTest {
         SecurityContext differentContext = new SecurityContextImpl(differentAuth);
 
         CompletableFuture<Void> future = new CompletableFuture<>();
-        SecurityContextVirtualThread.runWithSecurityContext(differentContext, () -> {
+        SecurityContextThreads.start("test", differentContext, () -> {
             try {
                 // Different context should be set here
                 assertEquals("differentUser", SecurityContextHolder.getContext().getAuthentication().getName());
@@ -140,7 +192,7 @@ class SecurityContextVirtualThreadTest {
     void testRunWithSecurityContext_handlesException() throws ExecutionException, InterruptedException {
         CompletableFuture<Exception> future = new CompletableFuture<>();
 
-        SecurityContextVirtualThread.runWithSecurityContext(() -> {
+        SecurityContextThreads.start("test", () -> {
             try {
                 throw new RuntimeException("Test exception");
             } catch (Exception e) {

@@ -21,7 +21,7 @@ import org.booklore.service.metadata.writer.MetadataWriter;
 import org.booklore.service.metadata.writer.MetadataWriterFactory;
 import org.booklore.util.BookCoverUtils;
 import org.booklore.util.FileService;
-import org.booklore.util.SecurityContextVirtualThread;
+import org.booklore.util.SecurityContextThreads;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -215,7 +215,7 @@ public class BookCoverService {
         validateCoverFile(file);
         byte[] coverImageBytes = extractBytesFromMultipartFile(file);
         List<BookCoverInfo> unlockedBooks = getUnlockedBookCoverInfos(bookIds);
-        SecurityContextVirtualThread.runWithSecurityContext(() -> processBulkCoverUpdate(unlockedBooks, coverImageBytes));
+        SecurityContextThreads.start("bulk-cover-update", () -> processBulkCoverUpdate(unlockedBooks, coverImageBytes));
     }
 
     // =========================
@@ -283,7 +283,7 @@ public class BookCoverService {
      */
     public void regenerateCoversForBooks(Set<Long> bookIds) {
         List<BookRegenerationInfo> unlockedBooks = getUnlockedBookRegenerationInfos(bookIds);
-        SecurityContextVirtualThread.runWithSecurityContext(() -> processBulkCoverRegeneration(unlockedBooks));
+        SecurityContextThreads.start("bulk-cover-regeneration", () -> processBulkCoverRegeneration(unlockedBooks));
     }
 
     /**
@@ -291,14 +291,14 @@ public class BookCoverService {
      */
     public void generateCustomCoversForBooks(Set<Long> bookIds) {
         List<BookCoverInfo> unlockedBooks = getUnlockedBookCoverInfos(bookIds);
-        SecurityContextVirtualThread.runWithSecurityContext(() -> processBulkCustomCoverGeneration(unlockedBooks));
+        SecurityContextThreads.start("bulk-cover-generation", () -> processBulkCustomCoverGeneration(unlockedBooks));
     }
 
     /**
      * Regenerate covers for all books, optionally only for books with missing covers.
      */
     public void regenerateCovers(boolean missingOnly) {
-        SecurityContextVirtualThread.runWithSecurityContext(() -> {
+        SecurityContextThreads.start("bulk-cover-regeneration", () -> {
             try {
                 List<BookRegenerationInfo> books = bookQueryService.getAllFullBookEntities().stream()
                         .filter(book -> !isCoverLocked(book))

@@ -54,14 +54,16 @@ public class LibraryFileEventProcessor {
 
     @PostConstruct
     public void init() {
-        Thread.ofVirtual().start(() -> {
-            log.info("LibraryFileEventProcessor virtual thread started.");
+        // A platform thread, as handling an event reads library storage: on JDK 25 a virtual thread blocked in a
+        // file call keeps its carrier, so a wedged network share would stall every virtual thread in the application.
+        Thread.ofPlatform().daemon(true).name("library-file-events").start(() -> {
+            log.info("LibraryFileEventProcessor thread started.");
             while (!Thread.currentThread().isInterrupted()) {
                 try {
                     handleEvent(eventQueue.take());
                 } catch (InterruptedException e) {
                     Thread.currentThread().interrupt();
-                    log.warn("LibraryFileEventProcessor virtual thread interrupted.");
+                    log.warn("LibraryFileEventProcessor thread interrupted.");
                 } catch (Exception e) {
                     log.error("Error while processing file event", e);
                 }
