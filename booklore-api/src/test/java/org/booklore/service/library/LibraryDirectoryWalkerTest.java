@@ -12,6 +12,7 @@ import org.junit.jupiter.api.io.TempDir;
 
 import java.io.IOException;
 import java.io.InterruptedIOException;
+import java.lang.ref.WeakReference;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
@@ -131,6 +132,82 @@ class LibraryDirectoryWalkerTest {
     }
 
     @Test
+    void bookFileItCouldNotSeePutsItsDirectoryInDoubtWhereItDecidesHowAudioGroups() throws IOException {
+        // Two tracks of a folder audiobook, one unreadable: the other alone would come out as a single-file book.
+        Path folderBook = tempDir.resolve("Author/Book");
+        book("Author/Book/ch01.mp3");
+        book("Author/Book/ch02.mp3");
+        fileAccess.unreadable.add(folderBook.resolve("ch01.mp3"));
+        // An unreadable ebook that keeps two tracks from collapsing into one folder audiobook.
+        Path mixed = tempDir.resolve("Mixed");
+        book("Mixed/book.epub");
+        book("Mixed/a.mp3");
+        book("Mixed/b.mp3");
+        fileAccess.unreadable.add(mixed.resolve("book.epub"));
+        // A track whose attributes cannot be read.
+        Path stale = tempDir.resolve("Stale");
+        book("Stale/t1.mp3");
+        book("Stale/t2.mp3");
+        fileAccess.attributeFailures.put(stale.resolve("t1.mp3"), new IOException("Stale file handle"));
+        // Where every book file is a book of its own whatever else is there, only the unseen file is in doubt:
+        // at the library path, beside a single track, and among ebooks.
+        book("r1.mp3");
+        Path rootTrack = book("r2.mp3");
+        fileAccess.unreadable.add(rootTrack);
+        book("Lone/talk.mp3");
+        Path loneEpub = book("Lone/book.epub");
+        fileAccess.unreadable.add(loneEpub);
+        book("Ebooks/a.epub");
+        Path lockedEpub = book("Ebooks/b.epub");
+        fileAccess.unreadable.add(lockedEpub);
+
+        LibraryScanResult result = new LibraryFileHelper(walker(4, Duration.ofSeconds(30))).scanAllLibraryFiles(library(tempDir));
+
+        assertThat(result.incompletePaths()).containsExactlyInAnyOrder(folderBook, mixed, stale, rootTrack, loneEpub, lockedEpub);
+        // The folder audiobook a rescan would otherwise drop is covered, as are the books of the mixed directory.
+        assertThat(result.isUnderIncompletePath(folderBook)).isTrue();
+        assertThat(result.isUnderIncompletePath(mixed.resolve("a.mp3"))).isTrue();
+        assertThat(result.isUnderIncompletePath(stale)).isTrue();
+        assertThat(result.isUnderIncompletePath(tempDir.resolve("r1.mp3"))).isFalse();
+        assertThat(result.isUnderIncompletePath(tempDir.resolve("Ebooks/a.epub"))).isFalse();
+    }
+
+    @Test
+    void linkOntoAShareThatIsDownIsIncomplete() throws IOException {
+        Path share = Files.createDirectories(tempDir.resolve("nas2"));
+        Files.write(share.resolve("comic.cbz"), new byte[]{1});
+        Files.write(share.resolve("novel.epub"), new byte[]{1});
+        Path root = book("books/a.epub").getParent();
+        Path comics = Files.createSymbolicLink(root.resolve("Comics"), share);
+        Path novel = Files.createSymbolicLink(root.resolve("novel.epub"), share.resolve("novel.epub"));
+        Files.createSymbolicLink(root.resolve("dangling.epub"), share.resolve("gone.epub"));
+        fileAccess.targetFailures.put(comics, new IOException("Host is down"));
+        fileAccess.targetFailures.put(novel, new IOException("Host is down"));
+
+        LibraryScanResult result = new LibraryFileHelper(walker(4, Duration.ofSeconds(30))).scanAllLibraryFiles(library(root));
+
+        // Unlike a link whose target is gone, these may lead to books that still exist.
+        assertThat(fileNames(result.files())).containsExactly("a.epub");
+        assertThat(result.incompletePaths()).containsExactlyInAnyOrder(comics, novel);
+        assertThat(result.isUnderIncompletePath(comics.resolve("comic.cbz"))).isTrue();
+    }
+
+    @Test
+    void emptyLibraryPathIsIncomplete() throws IOException {
+        // What a share that failed to mount looks like: its mount point, empty.
+        Path unmounted = Files.createDirectories(tempDir.resolve("unmounted"));
+        Path quiet = Files.createDirectories(tempDir.resolve("quiet"));
+        book("quiet/.DS_Store");
+        Path present = book("present/a.epub").getParent();
+
+        List<WalkedPath> walked = walker(4, Duration.ofSeconds(30)).walk(List.of(unmounted, quiet, present));
+
+        assertThat(walked.get(0).incompletePaths()).containsExactly(unmounted);
+        assertThat(walked.get(1).incompletePaths()).isEmpty();
+        assertThat(walked.get(2).incompletePaths()).isEmpty();
+    }
+
+    @Test
     void missingLibraryPathIsIncomplete() throws IOException {
         Path missing = tempDir.resolve("unmounted");
 
@@ -175,25 +252,90 @@ class LibraryDirectoryWalkerTest {
         Path stuck = tempDir.resolve("stuck");
         fileAccess.stuckListings.add(stuck);
 
-        List<WalkedPath> walked = assertTimeoutPreemptively(Duration.ofSeconds(10),
-                () -> walker(4, Duration.ofMillis(500)).walk(List.of(tempDir)));
+        LibraryDirectoryWalker walker = walker(4, Duration.ofMillis(500));
+
+        List<WalkedPath> walked = assertTimeoutPreemptively(Duration.ofSeconds(10), () -> walker.walk(List.of(tempDir)));
 
         WalkedPath result = walked.getFirst();
         assertThat(result.incompletePaths()).containsExactly(stuck);
         assertThat(child(result.root(), "a").getBookFiles()).containsExactly("a.epub");
         assertThat(child(result.root(), "b").getBookFiles()).containsExactly("b.epub");
+        assertThat(walker.strandedListings()).isEqualTo(1);
 
-        // The abandoned listing finally returns; what the walk already handed back must not change.
+        // The stuck call finally returns: the abandoned listing stops there instead of reading the rest of the
+        // directory, and what the walk already handed back does not change.
         fileAccess.release();
-        Path lateEntry = stuck.resolve("x.epub");
-        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
-        while (!fileAccess.readabilityChecked.contains(lateEntry) && System.nanoTime() < deadline) {
-            Thread.sleep(10);
-        }
-        assertThat(fileAccess.readabilityChecked).contains(lateEntry);
-        Thread.sleep(100);
+        awaitNoStrandedListings(walker);
+        assertThat(fileAccess.attributesRead).doesNotContain(stuck.resolve("x.epub"));
+        assertThat(fileAccess.readabilityChecked).doesNotContain(stuck.resolve("x.epub"));
         assertThat(child(result.root(), "stuck").getBookFiles()).isEmpty();
         assertThat(child(result.root(), "stuck").getSubdirectories()).isEmpty();
+    }
+
+    private static void awaitNoStrandedListings(LibraryDirectoryWalker walker) throws InterruptedException {
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (walker.strandedListings() > 0 && System.nanoTime() < deadline) {
+            Thread.sleep(10);
+        }
+        assertThat(walker.strandedListings()).isZero();
+    }
+
+    @Test
+    void stopsListingWhileTooManyAbandonedListingsAreStillStuck() throws Exception {
+        Path dead = tempDir.resolve("dead");
+        for (int i = 0; i < 40; i++) {
+            fileAccess.stuckListings.add(Files.createDirectories(dead.resolve("dir" + i)));
+        }
+        Path healthy = book("healthy/a.epub").getParent();
+        int parallelism = 8;
+        LibraryDirectoryWalker walker = walker(parallelism, Duration.ofMillis(200));
+
+        // Rescan after rescan of a share that stays dead, each leaving the threads it gave up on stuck.
+        assertTimeoutPreemptively(Duration.ofSeconds(30), () -> {
+            while (fileAccess.stuckCount.get() < LibraryDirectoryWalker.MAX_STRANDED_LISTINGS) {
+                walker.walk(List.of(dead));
+            }
+        });
+        assertThat(walker.strandedListings()).isGreaterThanOrEqualTo(fileAccess.stuckCount.get());
+        assertThat(fileAccess.stuckCount.get()).isLessThan(LibraryDirectoryWalker.MAX_STRANDED_LISTINGS + parallelism);
+
+        // No more threads are put at risk, not even for a healthy path: it is reported as not scanned.
+        int stuckBefore = fileAccess.stuckCount.get();
+        WalkedPath refused = walker.walk(List.of(healthy)).getFirst();
+        assertThat(refused.root()).isNull();
+        assertThat(refused.incompletePaths()).containsExactly(healthy);
+        assertThat(fileAccess.listed).doesNotContain(healthy);
+        assertThat(walker.walk(List.of(dead)).getFirst().incompletePaths()).containsExactly(dead);
+        assertThat(fileAccess.stuckCount.get()).isEqualTo(stuckBefore);
+
+        // Once the share answers again the stuck threads return, and walks list again.
+        fileAccess.release();
+        awaitNoStrandedListings(walker);
+        WalkedPath walked = walker.walk(List.of(healthy)).getFirst();
+        assertThat(walked.incompletePaths()).isEmpty();
+        assertThat(walked.root().getBookFiles()).containsExactly("a.epub");
+    }
+
+    @Test
+    void stuckListingDoesNotKeepTheWalkedTreeAlive() throws Exception {
+        for (int i = 0; i < 10; i++) {
+            book("Author" + i + "/Book/book.epub");
+        }
+        Path stuck = Files.createDirectories(tempDir.resolve("Author3/Book/Stuck"));
+        fileAccess.stuckListings.add(stuck);
+        LibraryDirectoryWalker walker = walker(4, Duration.ofMillis(200));
+
+        WeakReference<Directory> root = new WeakReference<>(assertTimeoutPreemptively(Duration.ofSeconds(10),
+                () -> walker.walk(List.of(tempDir))).getFirst().root());
+
+        // The thread wedged in the listing may stay stuck for good; it must not pin the scan's whole tree.
+        assertThat(walker.strandedListings()).isEqualTo(1);
+        for (int i = 0; i < 50 && root.get() != null; i++) {
+            System.gc();
+            Thread.sleep(20);
+        }
+        assertThat(root.get()).isNull();
+        assertThat(fileAccess.stuckCount.get()).isEqualTo(1);
     }
 
     @Test
@@ -322,17 +464,62 @@ class LibraryDirectoryWalkerTest {
         Path empty = Files.createFile(tempDir.resolve("empty.epub"));
         book("#recycle/x.epub");
         book(".git/x.epub");
+        // Listed in name order: one entry before the marker, the rest after it.
+        Path beforeMarker = book("Ignored/-first.epub");
         book("Ignored/.ignore");
-        book("Ignored/a.epub");
+        book("Ignored/after.epub");
         book("Ignored/Sub/b.epub");
         Path nested = book("Author/c.epub");
+        fileAccess.listInNameOrder = true;
 
         walker(4, Duration.ofSeconds(30)).walk(List.of(tempDir));
 
         assertThat(fileAccess.listed).containsExactlyInAnyOrder(tempDir, tempDir.resolve("Ignored"), tempDir.resolve("Author"));
+        // An entry listed before the marker has been looked at already; nothing after it is.
         assertThat(fileAccess.attributesRead).containsExactlyInAnyOrder(
-                tempDir, epub, cover, opf, empty, tempDir.resolve("Ignored"), tempDir.resolve("Author"), nested);
-        assertThat(fileAccess.readabilityChecked).containsExactlyInAnyOrder(epub, nested);
+                tempDir, epub, cover, opf, empty, tempDir.resolve("Ignored"), tempDir.resolve("Author"), nested, beforeMarker);
+        assertThat(fileAccess.readabilityChecked).containsExactlyInAnyOrder(epub, nested, beforeMarker);
+        // The marker is recognised by its name alone.
+        assertThat(fileAccess.existenceChecked).isEmpty();
+    }
+
+    @Test
+    void readsEachEntrysAttributesAsTheListingReturnsIt() throws IOException {
+        for (int i = 0; i < 20; i++) {
+            book("Shelf/book" + i + ".epub");
+        }
+        book("Shelf/cover.jpg");
+        Files.createDirectories(tempDir.resolve("Shelf/Sub"));
+        Path shelf = tempDir.resolve("Shelf");
+
+        walker(4, Duration.ofSeconds(30)).walk(List.of(tempDir));
+
+        // A network client caches the attributes a listing brings along only briefly, so each entry is
+        // looked at before the listing moves on, never after the whole directory has been read.
+        List<ScriptedFileAccess.Call> calls = fileAccess.calls.stream()
+                .filter(call -> shelf.equals(call.path().getParent()))
+                .toList();
+        assertThat(calls).hasSize(2 * 22);
+        for (int i = 0; i < calls.size(); i += 2) {
+            assertThat(calls.get(i).kind()).isEqualTo("entry");
+            assertThat(calls.get(i + 1)).isEqualTo(new ScriptedFileAccess.Call("stat", calls.get(i).path()));
+        }
+    }
+
+    @Test
+    void markerInAnotherCaseCountsOnlyWhereTheFilesystemIgnoresCase() throws IOException {
+        book("Shouting/.IGNORE");
+        book("Shouting/loud.epub");
+        Path lookup = tempDir.resolve("Shouting/.ignore");
+        LibraryFileHelper helper = new LibraryFileHelper(walker(4, Duration.ofSeconds(30)));
+
+        // Like the old Files.exists(dir/.ignore) lookup: a case-sensitive filesystem has no .ignore here...
+        assertThat(fileNames(helper.getAllLibraryFiles(library(tempDir)))).containsExactly("loud.epub");
+        assertThat(fileAccess.existenceChecked).containsExactly(lookup);
+
+        // ...while one that ignores case, as SMB shares usually do, finds it.
+        fileAccess.caseInsensitive = true;
+        assertThat(helper.getAllLibraryFiles(library(tempDir))).isEmpty();
     }
 
     @Test

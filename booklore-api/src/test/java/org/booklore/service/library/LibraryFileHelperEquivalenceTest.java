@@ -136,6 +136,9 @@ class LibraryFileHelperEquivalenceTest {
         file(root, "Ignored/.ignore");
         file(root, "Ignored/hidden.epub");
         file(root, "Ignored/Sub/deeper.epub");
+        // A marker in another case, which this case-sensitive filesystem does not take for one
+        file(root, "Shouting/.IGNORE");
+        file(root, "Shouting/loud.epub");
         file(root, ".hiddenDir/x.epub");
         file(root, "#recycle/x.epub");
         file(root, "@eaDir/x.epub");
@@ -157,7 +160,7 @@ class LibraryFileHelperEquivalenceTest {
         List<Key> files = assertSameAsLegacy(library(root));
 
         // The oracle is only worth something if the tree exercised the interesting rules.
-        assertThat(files).hasSize(30);
+        assertThat(files).hasSize(31);
         assertThat(files).anyMatch(k -> k.folderBased() && k.fileName().equals("Book 1"));
         assertThat(files).anyMatch(k -> k.folderBased() && k.fileName().equals("CD2"));
         assertThat(files).anyMatch(k -> k.fileName().equals("02 - The Two Towers.m4b"));
@@ -215,13 +218,13 @@ class LibraryFileHelperEquivalenceTest {
             "ch01.mp3", "ch02.mp3", "ch03.mp3", "Track.MP3", "01 - Alpha.m4b", "02 - Beta.m4b",
             "Part 1.m4b", "Part 2.m4b", "a.m4a", "talk.opus", "book.epub", "Book.EPUB", "comic.cbz",
             "doc.pdf", "story.fb2", "novel.azw3", "cover.jpg", "metadata.opf", ".DS_Store",
-            "._book.epub", "book.epub.part", "x.tmp", ".ignore");
+            "._book.epub", "book.epub.part", "x.tmp", ".ignore", ".Ignore");
 
     private static void populate(Path dir, int depth, Random random, List<Path> directories) throws IOException {
         int fileCount = random.nextInt(7);
         for (int i = 0; i < fileCount; i++) {
             String name = FILE_NAMES.get(random.nextInt(FILE_NAMES.size()));
-            if (name.equals(".ignore") && random.nextInt(3) != 0) {
+            if (name.equalsIgnoreCase(".ignore") && random.nextInt(3) != 0) {
                 continue;
             }
             Files.write(dir.resolve(name), new byte[random.nextInt(7) == 0 ? 0 : 1]);

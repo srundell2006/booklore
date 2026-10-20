@@ -6,6 +6,7 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.booklore.config.AppProperties;
 import org.booklore.model.enums.BookFileExtension;
+import org.booklore.model.enums.BookFileType;
 import org.booklore.util.FileUtils;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.stereotype.Component;
@@ -31,14 +32,18 @@ import java.util.HashSet;
 import java.util.Iterator;
 import java.util.List;
 import java.util.Map;
+import java.util.Optional;
+import java.util.Queue;
 import java.util.Set;
-import java.util.concurrent.CompletionService;
+import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.ExecutionException;
-import java.util.concurrent.ExecutorCompletionService;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
-import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
+import java.util.concurrent.LinkedBlockingQueue;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
+import java.util.concurrent.atomic.AtomicInteger;
 
 /**
  * Lists the directories under a library's paths into an in-memory tree, which
@@ -50,9 +55,11 @@ import java.util.concurrent.TimeUnit;
  * <ul>
  *   <li>Calls are kept to what the walk needs: one listing per directory, one
  *       attribute read per entry, and a readability check for book files only.
- *       Entries the ignore rules drop by name (hidden files, system folders, temp
- *       files) are never touched, and a {@code .ignore} marker is spotted in the
- *       listing itself.</li>
+ *       Each entry is looked at as soon as the listing returns it, while a network
+ *       client still has the attributes the listing brought along cached. Entries
+ *       the ignore rules drop by name (hidden files, system folders, temp files)
+ *       are never touched, and a {@code .ignore} marker is spotted in the listing
+ *       itself.</li>
  *   <li>Directories are listed on virtual threads, at most
  *       {@code app.scan.walk-parallelism} at a time, across all of a library's
  *       paths together.</li>
@@ -60,15 +67,20 @@ import java.util.concurrent.TimeUnit;
  *       {@code app.scan.directory-timeout-seconds} is abandoned: the directory is
  *       reported incomplete and the walk carries on. The limit is on progress, not
  *       on the whole listing, so a large directory on a slow share still finishes.
- *       An abandoned thread cannot be reclaimed (it ignores interrupts while stuck
- *       in IO), so after {@value #MAX_TIMEOUTS_PER_PATH} timeouts under one library
- *       path the walk stops listing that path and reports all of it incomplete,
- *       rather than strand a thread per directory of a dead share.</li>
+ *       An abandoned thread cannot be reclaimed while it is stuck (it ignores
+ *       interrupts while in IO), but it stops at its next filesystem call once the
+ *       stuck one returns. So that stuck threads cannot pile up, after
+ *       {@value #MAX_TIMEOUTS_PER_PATH} timeouts under one library path the walk
+ *       stops listing that path, and while {@value #MAX_STRANDED_LISTINGS} abandoned
+ *       listings of this or earlier walks are still stuck, no walk lists anything
+ *       more. Whatever is left out is reported incomplete.</li>
  * </ul>
  *
- * <p>Listing threads only read the filesystem and hand back what they found. The
- * calling thread owns the tree, the queue and every count, so a listing that
- * returns after it was abandoned is simply never looked at.
+ * <p>Listing threads only read the filesystem and hand back what they found. They
+ * are given the directory to list and the directories above it, nothing of the
+ * tree, so a thread stuck for good holds on to little. The calling thread owns the
+ * tree, the queue and every count, so a listing that returns after it was
+ * abandoned is simply never looked at.
  */
 @Slf4j
 @Component
@@ -76,12 +88,19 @@ public class LibraryDirectoryWalker {
 
     static final int MAX_PARALLELISM = 64;
     static final int MAX_TIMEOUTS_PER_PATH = 10;
+    /**
+     * Each stuck listing holds a carrier thread of the virtual thread scheduler, which
+     * has at most 256 by default, so they are capped well below that.
+     */
+    static final int MAX_STRANDED_LISTINGS = 64;
 
     private static final String IGNORE_MARKER = ".ignore";
 
     private final int parallelism;
     private final Duration directoryTimeout;
     private final FileAccess fileAccess;
+    /** Listings abandoned by any walk whose threads have not returned yet. */
+    private final AtomicInteger strandedListings = new AtomicInteger();
 
     @Autowired
     public LibraryDirectoryWalker(AppProperties appProperties) {
@@ -102,8 +121,10 @@ public class LibraryDirectoryWalker {
      * @param path            the library path, as given
      * @param root            its directory tree, or null when it could not be listed or
      *                        the ignore rules exclude it
-     * @param incompletePaths directories that could not be listed and entries that could
-     *                        not be inspected; nothing at or below them was seen
+     * @param incompletePaths paths the walk cannot vouch for: directories that could not be
+     *                        listed, entries that could not be inspected (or, where how its
+     *                        audio files group depends on them, their directory), and a
+     *                        library path that turned out empty
      */
     record WalkedPath(Path path, Directory root, Set<Path> incompletePaths) {
     }
@@ -118,10 +139,6 @@ public class LibraryDirectoryWalker {
     @RequiredArgsConstructor(access = AccessLevel.PRIVATE)
     static final class Directory {
         private final Path path;
-        @Getter(AccessLevel.NONE)
-        private final Directory parent;
-        @Getter(AccessLevel.NONE)
-        private final Object fileKey;
         /** Names of the regular, non-empty, readable files with a book extension. */
         private List<String> bookFiles = List.of();
         private List<Directory> subdirectories = List.of();
@@ -137,17 +154,16 @@ public class LibraryDirectoryWalker {
             return Files.newDirectoryStream(dir);
         }
 
-        /** Follows links, falling back to the link itself when its target is gone, as walkFileTree does. */
-        BasicFileAttributes readAttributes(Path path) throws IOException {
-            try {
-                return Files.readAttributes(path, BasicFileAttributes.class);
-            } catch (IOException e) {
-                return Files.readAttributes(path, BasicFileAttributes.class, LinkOption.NOFOLLOW_LINKS);
-            }
+        BasicFileAttributes readAttributes(Path path, LinkOption... options) throws IOException {
+            return Files.readAttributes(path, BasicFileAttributes.class, options);
         }
 
         boolean isReadable(Path file) {
             return Files.isReadable(file);
+        }
+
+        boolean exists(Path path) {
+            return Files.exists(path);
         }
 
         boolean isSameFile(Path path, Path other) throws IOException {
@@ -170,28 +186,94 @@ public class LibraryDirectoryWalker {
     }
 
     /**
-     * One directory to list; {@code directory} is null for a library path itself, whose
-     * attributes the listing reads first. The listing thread stamps {@code lastProgress}
-     * each time a filesystem call returns, and the walking thread reads it to spot a stall.
+     * A directory on the way down a library path, with the directories above it: all
+     * that spotting a symbolic link loop takes. {@code fileKey} is null where the
+     * filesystem has none.
+     */
+    private record Lineage(Path path, Object fileKey, Lineage parent) {
+    }
+
+    /**
+     * A directory waiting to be listed: where its contents go, and its lineage, which is
+     * null for a library path (its listing reads its attributes first).
+     */
+    private record Pending(PathWalk walk, Directory directory, Lineage lineage) {
+    }
+
+    /**
+     * What a listing thread is given. It stamps {@code lastProgress} each time a
+     * filesystem call returns, and the walking thread reads it to spot a stall.
      */
     @RequiredArgsConstructor
     private static final class Listing {
-        private final PathWalk walk;
         private final Path path;
-        private final Directory directory;
-        private volatile long lastProgress;
+        private final Lineage lineage;
+        private volatile long lastProgress = System.nanoTime();
 
-        void progressed() {
+        /** Called after each filesystem call; throws once the walk has given up on this listing. */
+        void progressed() throws InterruptedIOException {
             lastProgress = System.nanoTime();
+            if (Thread.currentThread().isInterrupted()) {
+                throw new InterruptedIOException("Gave up listing " + path);
+            }
         }
     }
 
     /** What one listing found, for the walking thread to attach to the tree. */
-    private record Contents(Directory directory, List<Directory> subdirectories, List<String> bookFiles,
-                            List<Path> incompletePaths) {
+    private record Contents(List<Lineage> subdirectories, List<String> bookFiles, List<Path> incompletePaths) {
+        static final Contents SKIPPED = new Contents(List.of(), List.of(), List.of());
     }
 
-    private record Entry(Path path, String name) {
+    /**
+     * Runs one listing and queues itself for the walking thread once done. Whether its
+     * thread outlives the walk's interest is settled exactly once: by the listing
+     * finishing, or by the walk abandoning it first, in which case the thread counts as
+     * stranded until it returns.
+     */
+    private final class ListingTask extends FutureTask<Contents> {
+        private final Listing listing;
+        private final Queue<ListingTask> completed;
+        private final AtomicBoolean settled = new AtomicBoolean();
+
+        ListingTask(Listing listing, Queue<ListingTask> completed) {
+            super(() -> list(listing));
+            this.listing = listing;
+            this.completed = completed;
+        }
+
+        @Override
+        public void run() {
+            try {
+                super.run();
+            } finally {
+                if (!settled.compareAndSet(false, true)) {
+                    strandedListings.decrementAndGet();
+                }
+            }
+        }
+
+        @Override
+        protected void done() {
+            completed.add(this);
+        }
+
+        /**
+         * Gives up on the listing and interrupts it, which frees a thread blocked
+         * interruptibly; one stuck in a CIFS call stays stuck and is just never waited
+         * for. False when the listing has finished and waits to be collected instead.
+         */
+        boolean abandon() {
+            if (!settled.compareAndSet(false, true)) {
+                return false;
+            }
+            strandedListings.incrementAndGet();
+            return cancel(true);
+        }
+    }
+
+    /** Abandoned listings whose threads have not returned yet. */
+    int strandedListings() {
+        return strandedListings.get();
     }
 
     /**
@@ -203,7 +285,7 @@ public class LibraryDirectoryWalker {
     List<WalkedPath> walk(List<Path> paths) throws InterruptedIOException {
         long startedAt = System.nanoTime();
         List<PathWalk> walks = new ArrayList<>(paths.size());
-        Deque<Listing> queue = new ArrayDeque<>();
+        Deque<Pending> queue = new ArrayDeque<>();
         for (Path path : paths) {
             PathWalk walk = new PathWalk(path);
             walks.add(walk);
@@ -212,36 +294,44 @@ public class LibraryDirectoryWalker {
                 walk.finishedAt = startedAt;
             } else {
                 walk.outstanding++;
-                queue.add(new Listing(walk, path, null));
+                queue.add(new Pending(walk, new Directory(path), null));
             }
         }
 
         ExecutorService executor = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("library-walk-", 0).factory());
+        BlockingQueue<ListingTask> completed = new LinkedBlockingQueue<>();
+        Map<ListingTask, Pending> running = new HashMap<>();
         try {
-            CompletionService<Contents> completions = new ExecutorCompletionService<>(executor);
-            Map<Future<Contents>, Listing> running = new HashMap<>();
             while (!queue.isEmpty() || !running.isEmpty()) {
                 while (running.size() < parallelism && !queue.isEmpty()) {
-                    Listing listing = queue.poll();
-                    if (listing.walk.stopped) {
-                        finished(listing.walk);
+                    Pending pending = queue.poll();
+                    PathWalk walk = pending.walk();
+                    if (!walk.stopped && strandedListings.get() >= MAX_STRANDED_LISTINGS) {
+                        stop(walk);
+                        log.warn("Stopped walking library path [{}]: {} directory listings given up on by this or earlier "
+                                        + "scans are still stuck in filesystem calls, so the rest of it was not scanned",
+                                walk.path, strandedListings.get());
+                    }
+                    if (walk.stopped) {
+                        finished(walk);
                         continue;
                     }
-                    listing.progressed();
-                    running.put(completions.submit(() -> list(listing)), listing);
+                    ListingTask task = new ListingTask(new Listing(pending.directory().getPath(), pending.lineage()), completed);
+                    executor.execute(task);
+                    running.put(task, pending);
                 }
                 if (running.isEmpty()) {
                     break;
                 }
 
-                Future<Contents> done = completions.poll(nanosUntilStall(running.values()), TimeUnit.NANOSECONDS);
+                ListingTask done = completed.poll(nanosUntilStall(running.keySet()), TimeUnit.NANOSECONDS);
                 if (done == null) {
                     abandonStalled(running);
                 } else {
                     // Null for a listing abandoned earlier, whose cancellation is queued too (a late return is not).
-                    Listing listing = running.remove(done);
-                    if (listing != null) {
-                        attach(listing, done, queue);
+                    Pending pending = running.remove(done);
+                    if (pending != null) {
+                        attach(pending, done, queue);
                     }
                 }
             }
@@ -249,6 +339,8 @@ public class LibraryDirectoryWalker {
             Thread.currentThread().interrupt();
             throw new InterruptedIOException("Interrupted while walking " + paths);
         } finally {
+            // Whatever still runs is given up on, so it counts as stranded until its thread returns.
+            running.keySet().forEach(ListingTask::abandon);
             // Not close(): that waits for every thread, including any still wedged in IO.
             executor.shutdownNow();
         }
@@ -263,59 +355,60 @@ public class LibraryDirectoryWalker {
         return results;
     }
 
-    private void attach(Listing listing, Future<Contents> done, Deque<Listing> queue) throws InterruptedException {
-        PathWalk walk = listing.walk;
+    private void attach(Pending pending, ListingTask done, Deque<Pending> queue) throws InterruptedException {
+        PathWalk walk = pending.walk();
+        Directory directory = pending.directory();
         try {
             Contents contents = done.get();
-            Directory directory = contents.directory();
-            directory.subdirectories = contents.subdirectories();
+            List<Directory> subdirectories = new ArrayList<>(contents.subdirectories().size());
+            for (Lineage lineage : contents.subdirectories()) {
+                Directory subdirectory = new Directory(lineage.path());
+                subdirectories.add(subdirectory);
+                if (!walk.stopped) {
+                    walk.outstanding++;
+                    queue.add(new Pending(walk, subdirectory, lineage));
+                }
+            }
+            directory.subdirectories = List.copyOf(subdirectories);
             directory.bookFiles = contents.bookFiles();
-            if (listing.directory == null) {
+            if (pending.lineage() == null) {
                 walk.root = directory;
             }
             walk.directoriesListed++;
             walk.bookFiles += contents.bookFiles().size();
             walk.incompletePaths.addAll(contents.incompletePaths());
-            if (!walk.stopped) {
-                for (Directory subdirectory : contents.subdirectories()) {
-                    walk.outstanding++;
-                    queue.add(new Listing(walk, subdirectory.path, subdirectory));
-                }
-            }
         } catch (ExecutionException e) {
             Throwable cause = e.getCause();
-            walk.incompletePaths.add(listing.path);
+            walk.incompletePaths.add(directory.getPath());
             if (cause instanceof IOException) {
-                log.warn("Could not list directory [{}], so nothing under it was scanned: {}", listing.path, cause.toString());
+                log.warn("Could not list directory [{}], so nothing under it was scanned: {}", directory.getPath(), cause.toString());
             } else {
-                log.warn("Could not list directory [{}], so nothing under it was scanned", listing.path, cause);
+                log.warn("Could not list directory [{}], so nothing under it was scanned", directory.getPath(), cause);
             }
         }
         finished(walk);
     }
 
-    private void abandonStalled(Map<Future<Contents>, Listing> running) {
+    private void abandonStalled(Map<ListingTask, Pending> running) {
         long now = System.nanoTime();
-        Iterator<Map.Entry<Future<Contents>, Listing>> it = running.entrySet().iterator();
+        Iterator<Map.Entry<ListingTask, Pending>> it = running.entrySet().iterator();
         while (it.hasNext()) {
-            Map.Entry<Future<Contents>, Listing> entry = it.next();
-            Listing listing = entry.getValue();
+            Map.Entry<ListingTask, Pending> entry = it.next();
+            ListingTask task = entry.getKey();
             // A listing that finished meanwhile is waiting in the completion queue for the next poll.
-            if (entry.getKey().isDone() || now - listing.lastProgress < directoryTimeout.toNanos()) {
+            if (now - task.listing.lastProgress < directoryTimeout.toNanos() || !task.abandon()) {
                 continue;
             }
             it.remove();
-            // Frees a thread blocked interruptibly; one stuck in a CIFS call stays stuck and is just never waited for.
-            entry.getKey().cancel(true);
 
-            PathWalk walk = listing.walk;
-            walk.incompletePaths.add(listing.path);
+            PathWalk walk = entry.getValue().walk();
+            Path path = entry.getValue().directory().getPath();
+            walk.incompletePaths.add(path);
             walk.timeouts++;
             log.warn("Gave up listing directory [{}] after {} ms without filesystem progress, so nothing under it was scanned",
-                    listing.path, directoryTimeout.toMillis());
+                    path, directoryTimeout.toMillis());
             if (walk.timeouts == MAX_TIMEOUTS_PER_PATH) {
-                walk.stopped = true;
-                walk.incompletePaths.add(walk.path);
+                stop(walk);
                 log.warn("Stopped walking library path [{}] after {} directory timeouts; the rest of it was not scanned",
                         walk.path, walk.timeouts);
             }
@@ -323,14 +416,20 @@ public class LibraryDirectoryWalker {
         }
     }
 
-    private long nanosUntilStall(Collection<Listing> running) {
+    private long nanosUntilStall(Collection<ListingTask> running) {
         long now = System.nanoTime();
         long timeout = directoryTimeout.toNanos();
         long wait = timeout;
-        for (Listing listing : running) {
-            wait = Math.min(wait, timeout - (now - listing.lastProgress));
+        for (ListingTask task : running) {
+            wait = Math.min(wait, timeout - (now - task.listing.lastProgress));
         }
         return Math.max(0, wait);
+    }
+
+    /** Lists nothing more under the library path, which as a whole is reported incomplete. */
+    private static void stop(PathWalk walk) {
+        walk.stopped = true;
+        walk.incompletePaths.add(walk.path);
     }
 
     private static void finished(PathWalk walk) {
@@ -342,98 +441,151 @@ public class LibraryDirectoryWalker {
     /** Runs on a listing thread: reads one directory and returns what it holds. */
     private Contents list(Listing listing) throws IOException {
         Path path = listing.path;
-        Directory directory = listing.directory;
-        if (directory == null) {
-            BasicFileAttributes attrs = fileAccess.readAttributes(path);
-            listing.progressed();
+        Lineage directory = listing.lineage;
+        boolean libraryPath = directory == null;
+        if (libraryPath) {
+            BasicFileAttributes attrs = readAttributes(path, listing);
             if (!attrs.isDirectory()) {
                 throw new NotDirectoryException(path.toString());
             }
-            directory = new Directory(path, null, attrs.fileKey());
+            directory = new Lineage(path, attrs.fileKey(), null);
         }
 
-        List<Entry> entries = new ArrayList<>();
-        boolean hasIgnoreMarker = false;
+        List<Lineage> subdirectories = new ArrayList<>();
+        List<String> bookFiles = new ArrayList<>();
+        List<Path> incompletePaths = new ArrayList<>();
+        List<Path> unseenBookFiles = new ArrayList<>();
+        // Audio files among all the book files, seen or not.
+        int audioFiles = 0;
+        boolean empty = true;
         try (DirectoryStream<Path> stream = fileAccess.newDirectoryStream(path)) {
             listing.progressed();
             for (Path entry : stream) {
-                String name = entry.getFileName().toString();
-                hasIgnoreMarker |= IGNORE_MARKER.equals(name);
-                entries.add(new Entry(entry, name));
                 listing.progressed();
+                empty = false;
+                String name = entry.getFileName().toString();
+                // The library path itself is scanned even when it holds a marker.
+                if (!libraryPath && name.equalsIgnoreCase(IGNORE_MARKER)) {
+                    boolean marked = name.equals(IGNORE_MARKER);
+                    if (!marked) {
+                        // In another case it is a marker only where the filesystem ignores case, as a lookup tells.
+                        marked = fileAccess.exists(path.resolve(IGNORE_MARKER));
+                        listing.progressed();
+                    }
+                    if (marked) {
+                        log.debug("Skipping directory with .ignore file: {}", path);
+                        return Contents.SKIPPED;
+                    }
+                }
+                if (FileUtils.shouldIgnore(entry)) {
+                    continue;
+                }
+
+                Optional<BookFileType> bookType = BookFileExtension.fromFileName(name).map(BookFileExtension::getType);
+                boolean audio = bookType.orElse(null) == BookFileType.AUDIOBOOK;
+                BasicFileAttributes attrs;
+                try {
+                    attrs = readAttributes(entry, listing);
+                } catch (NoSuchFileException e) {
+                    // Removed since the listing: genuinely gone.
+                    continue;
+                } catch (InterruptedIOException e) {
+                    throw e;
+                } catch (IOException e) {
+                    log.warn("Could not read attributes of [{}]: {}", entry, e.toString());
+                    if (bookType.isPresent()) {
+                        unseenBookFiles.add(entry);
+                        if (audio) {
+                            audioFiles++;
+                        }
+                    } else {
+                        // It may be a directory full of books, so it must not pass for absent.
+                        incompletePaths.add(entry);
+                    }
+                    continue;
+                }
+
+                if (attrs.isDirectory()) {
+                    if (isLoop(directory, entry, attrs.fileKey(), listing)) {
+                        log.error("Failed read path [{}]: symbolic link loop", entry);
+                    } else {
+                        subdirectories.add(new Lineage(entry, attrs.fileKey(), directory));
+                    }
+                } else if (bookType.isPresent() && attrs.isRegularFile() && attrs.size() > 0) {
+                    boolean readable = fileAccess.isReadable(entry);
+                    listing.progressed();
+                    if (readable) {
+                        bookFiles.add(name);
+                    } else {
+                        log.warn("Book file is not readable, so it was left out of the scan: {}", entry);
+                        unseenBookFiles.add(entry);
+                    }
+                    if (audio) {
+                        audioFiles++;
+                    }
+                }
+                // Anything else (other files, empty files, broken links) is not a book and is skipped as before.
             }
         } catch (DirectoryIteratorException e) {
             throw e.getCause();
         }
-        // The library path itself is scanned even when it holds a marker.
-        if (hasIgnoreMarker && directory.parent != null) {
-            log.debug("Skipping directory with .ignore file: {}", path);
-            return new Contents(directory, List.of(), List.of(), List.of());
+
+        if (libraryPath && empty) {
+            log.warn("Library path [{}] is empty; reporting it as not scanned in case it is a share that is not mounted", path);
+            incompletePaths.add(path);
         }
-
-        entries.sort(Comparator.comparing(Entry::name));
-        List<Directory> subdirectories = new ArrayList<>();
-        List<String> bookFiles = new ArrayList<>();
-        List<Path> incompletePaths = new ArrayList<>();
-        for (Entry entry : entries) {
-            if (FileUtils.shouldIgnore(entry.path())) {
-                continue;
+        if (!unseenBookFiles.isEmpty()) {
+            if (!libraryPath && audioFiles >= LibraryFileHelper.MIN_AUDIO_FILES_FOR_FOLDER_AUDIOBOOK) {
+                // Whether the audio files here make one folder audiobook, a series or separate books depends on
+                // every book file of the directory, so one that could not be seen puts all of its books in doubt.
+                incompletePaths.add(path);
+            } else {
+                // Each book file here is a book of its own, so only the unseen ones are in doubt.
+                incompletePaths.addAll(unseenBookFiles);
             }
-
-            BasicFileAttributes attrs;
-            try {
-                attrs = fileAccess.readAttributes(entry.path());
-            } catch (NoSuchFileException e) {
-                // Removed since the listing: genuinely gone.
-                continue;
-            } catch (IOException e) {
-                // It may be a directory full of books, so it must not pass for absent.
-                log.warn("Could not read attributes of [{}]: {}", entry.path(), e.toString());
-                incompletePaths.add(entry.path());
-                continue;
-            } finally {
-                listing.progressed();
-            }
-
-            if (attrs.isDirectory()) {
-                if (isLoop(directory, entry.path(), attrs.fileKey(), listing)) {
-                    log.error("Failed read path [{}]: symbolic link loop", entry.path());
-                } else {
-                    subdirectories.add(new Directory(entry.path(), directory, attrs.fileKey()));
-                }
-            } else if (BookFileExtension.fromFileName(entry.name()).isPresent()
-                    && attrs.isRegularFile() && attrs.size() > 0) {
-                boolean readable = fileAccess.isReadable(entry.path());
-                listing.progressed();
-                if (readable) {
-                    bookFiles.add(entry.name());
-                } else {
-                    log.warn("Book file is not readable, so it was left out of the scan: {}", entry.path());
-                    incompletePaths.add(entry.path());
-                }
-            }
-            // Anything else (other files, empty files, broken links) is not a book and is skipped as before.
         }
-        return new Contents(directory, List.copyOf(subdirectories), List.copyOf(bookFiles), incompletePaths);
+        subdirectories.sort(Comparator.comparing(lineage -> lineage.path().getFileName().toString()));
+        bookFiles.sort(Comparator.naturalOrder());
+        return new Contents(List.copyOf(subdirectories), List.copyOf(bookFiles), incompletePaths);
+    }
+
+    /**
+     * Reads attributes following links. Only a link whose target does not exist falls
+     * back to the link itself, as walkFileTree does, and then passes for a broken link.
+     * Any other failure is thrown, so a link onto a share that is down is reported
+     * incomplete instead (and so is a chain of links that loops on itself).
+     */
+    private BasicFileAttributes readAttributes(Path path, Listing listing) throws IOException {
+        try {
+            return fileAccess.readAttributes(path);
+        } catch (NoSuchFileException e) {
+            listing.progressed();
+            // Throws again for an entry removed since the listing.
+            return fileAccess.readAttributes(path, LinkOption.NOFOLLOW_LINKS);
+        } finally {
+            listing.progressed();
+        }
     }
 
     /** True when {@code dir} is one of its own ancestors: the cycle test walkFileTree makes when following links. */
-    private boolean isLoop(Directory parent, Path dir, Object fileKey, Listing listing) {
-        for (Directory ancestor = parent; ancestor != null; ancestor = ancestor.parent) {
-            if (fileKey != null && ancestor.fileKey != null) {
-                if (fileKey.equals(ancestor.fileKey)) {
+    private boolean isLoop(Lineage parent, Path dir, Object fileKey, Listing listing) throws InterruptedIOException {
+        for (Lineage ancestor = parent; ancestor != null; ancestor = ancestor.parent()) {
+            if (fileKey != null && ancestor.fileKey() != null) {
+                if (fileKey.equals(ancestor.fileKey())) {
                     return true;
                 }
             } else {
                 // No file keys on this filesystem: compare the files themselves.
+                boolean same;
                 try {
-                    if (fileAccess.isSameFile(dir, ancestor.path)) {
-                        return true;
-                    }
+                    same = fileAccess.isSameFile(dir, ancestor.path());
                 } catch (IOException | SecurityException e) {
                     // Not provably the same directory, so not a loop.
-                } finally {
-                    listing.progressed();
+                    same = false;
+                }
+                listing.progressed();
+                if (same) {
+                    return true;
                 }
             }
         }

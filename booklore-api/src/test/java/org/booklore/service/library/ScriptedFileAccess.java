@@ -4,10 +4,15 @@ import java.io.IOException;
 import java.io.InterruptedIOException;
 import java.nio.file.DirectoryIteratorException;
 import java.nio.file.DirectoryStream;
+import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.Path;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.time.Duration;
+import java.util.ArrayList;
+import java.util.Arrays;
 import java.util.Iterator;
+import java.util.List;
 import java.util.Map;
 import java.util.Queue;
 import java.util.Set;
@@ -17,6 +22,7 @@ import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.stream.Stream;
 
 /**
  * Real filesystem access that a test can script to behave like a troubled network share
@@ -25,20 +31,33 @@ import java.util.concurrent.atomic.AtomicInteger;
  */
 class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
 
+    /** One recorded call: {@code entry} when a listing returns an entry, {@code stat} when attributes are read. */
+    record Call(String kind, Path path) {
+    }
+
     final Map<Path, IOException> listingFailures = new ConcurrentHashMap<>();
     final Set<Path> listingsFailingAfterFirstEntry = ConcurrentHashMap.newKeySet();
     /** Listings that block, ignoring interrupts, until {@link #release()}: a CIFS call on a dead share. */
     final Set<Path> stuckListings = ConcurrentHashMap.newKeySet();
     final Map<Path, Duration> listingDelays = new ConcurrentHashMap<>();
     final Map<Path, CyclicBarrier> listingBarriers = new ConcurrentHashMap<>();
+    /** Thrown for every attribute read of the path, with or without following links. */
     final Map<Path, IOException> attributeFailures = new ConcurrentHashMap<>();
+    /** Thrown only when following links: a link whose target is on a share that is down. */
+    final Map<Path, IOException> targetFailures = new ConcurrentHashMap<>();
     /** Delay for reading the attributes of each entry of the given directory. */
     final Map<Path, Duration> entryAttributeDelays = new ConcurrentHashMap<>();
     final Set<Path> unreadable = ConcurrentHashMap.newKeySet();
+    /** Lists entries in name order instead of the filesystem's. */
+    volatile boolean listInNameOrder;
+    /** Answers lookups as a filesystem that matches names regardless of case would. */
+    volatile boolean caseInsensitive;
 
     final Queue<Path> listed = new ConcurrentLinkedQueue<>();
     final Queue<Path> attributesRead = new ConcurrentLinkedQueue<>();
     final Queue<Path> readabilityChecked = new ConcurrentLinkedQueue<>();
+    final Queue<Path> existenceChecked = new ConcurrentLinkedQueue<>();
+    final Queue<Call> calls = new ConcurrentLinkedQueue<>();
     final AtomicInteger stuckCount = new AtomicInteger();
     /** Listings in progress, not counting stuck ones. */
     final AtomicInteger activeListings = new AtomicInteger();
@@ -72,30 +91,47 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
             if (failure != null) {
                 throw failure;
             }
-            DirectoryStream<Path> stream = super.newDirectoryStream(dir);
-            return listingsFailingAfterFirstEntry.contains(dir) ? failingAfterFirstEntry(stream) : stream;
+            return recording(super.newDirectoryStream(dir), listingsFailingAfterFirstEntry.contains(dir));
         } finally {
             activeListings.decrementAndGet();
         }
     }
 
     @Override
-    BasicFileAttributes readAttributes(Path path) throws IOException {
+    BasicFileAttributes readAttributes(Path path, LinkOption... options) throws IOException {
         attributesRead.add(path);
+        calls.add(new Call("stat", path));
         if (path.getParent() != null) {
             sleep(entryAttributeDelays.get(path.getParent()));
         }
         IOException failure = attributeFailures.get(path);
+        if (failure == null && !Arrays.asList(options).contains(LinkOption.NOFOLLOW_LINKS)) {
+            failure = targetFailures.get(path);
+        }
         if (failure != null) {
             throw failure;
         }
-        return super.readAttributes(path);
+        return super.readAttributes(path, options);
     }
 
     @Override
     boolean isReadable(Path file) {
         readabilityChecked.add(file);
         return !unreadable.contains(file) && super.isReadable(file);
+    }
+
+    @Override
+    boolean exists(Path path) {
+        existenceChecked.add(path);
+        if (!caseInsensitive) {
+            return super.exists(path);
+        }
+        String name = path.getFileName().toString();
+        try (Stream<Path> siblings = Files.list(path.getParent())) {
+            return siblings.anyMatch(sibling -> sibling.getFileName().toString().equalsIgnoreCase(name));
+        } catch (IOException e) {
+            return false;
+        }
     }
 
     private void blockUninterruptibly() {
@@ -125,26 +161,37 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
         }
     }
 
-    private static DirectoryStream<Path> failingAfterFirstEntry(DirectoryStream<Path> stream) {
+    /** Records each entry as the listing returns it, optionally sorted, optionally failing after the first. */
+    private DirectoryStream<Path> recording(DirectoryStream<Path> stream, boolean failAfterFirstEntry) {
+        Iterator<Path> source;
+        if (listInNameOrder) {
+            List<Path> entries = new ArrayList<>();
+            stream.forEach(entries::add);
+            entries.sort((a, b) -> a.getFileName().toString().compareTo(b.getFileName().toString()));
+            source = entries.iterator();
+        } else {
+            source = stream.iterator();
+        }
         return new DirectoryStream<>() {
             @Override
             public Iterator<Path> iterator() {
-                Iterator<Path> entries = stream.iterator();
                 return new Iterator<>() {
                     private boolean first = true;
 
                     @Override
                     public boolean hasNext() {
-                        return true;
+                        return failAfterFirstEntry || source.hasNext();
                     }
 
                     @Override
                     public Path next() {
-                        if (first && entries.hasNext()) {
-                            first = false;
-                            return entries.next();
+                        if (failAfterFirstEntry && !(first && source.hasNext())) {
+                            throw new DirectoryIteratorException(new IOException("Connection reset by peer"));
                         }
-                        throw new DirectoryIteratorException(new IOException("Connection reset by peer"));
+                        first = false;
+                        Path entry = source.next();
+                        calls.add(new Call("entry", entry));
+                        return entry;
                     }
                 };
             }

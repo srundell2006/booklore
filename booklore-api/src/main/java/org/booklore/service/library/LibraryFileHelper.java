@@ -36,7 +36,7 @@ import java.util.Set;
 @Slf4j
 public class LibraryFileHelper {
 
-    private static final int MIN_AUDIO_FILES_FOR_FOLDER_AUDIOBOOK = 2;
+    static final int MIN_AUDIO_FILES_FOR_FOLDER_AUDIOBOOK = 2;
 
     private final LibraryDirectoryWalker directoryWalker;
 
