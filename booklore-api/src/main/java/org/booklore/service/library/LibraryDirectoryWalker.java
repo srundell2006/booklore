@@ -60,9 +60,11 @@ import java.util.concurrent.atomic.AtomicInteger;
  *       the ignore rules drop by name (hidden files, system folders, temp files)
  *       are never touched, and a {@code .ignore} marker is spotted in the listing
  *       itself.</li>
- *   <li>Directories are listed on virtual threads, at most
+ *   <li>Directories are listed on platform threads, at most
  *       {@code app.scan.walk-parallelism} at a time, across all of a library's
- *       paths together.</li>
+ *       paths together. Not virtual threads: on JDK 25 a virtual thread blocked in a
+ *       file call keeps its carrier, so a few listings wedged on a network share would
+ *       stall every virtual thread in the application, request handling included.</li>
  *   <li>A listing whose current filesystem call has not returned within
  *       {@code app.scan.directory-timeout-seconds} is abandoned: the directory is
  *       reported incomplete and the walk carries on. The limit is on progress, not
@@ -88,10 +90,7 @@ public class LibraryDirectoryWalker {
 
     static final int MAX_PARALLELISM = 64;
     static final int MAX_TIMEOUTS_PER_PATH = 10;
-    /**
-     * Each stuck listing holds a carrier thread of the virtual thread scheduler, which
-     * has at most 256 by default, so they are capped well below that.
-     */
+    /** Each stuck listing holds a platform thread until its filesystem call returns. */
     static final int MAX_STRANDED_LISTINGS = 64;
 
     private static final String IGNORE_MARKER = ".ignore";
@@ -298,7 +297,7 @@ public class LibraryDirectoryWalker {
             }
         }
 
-        ExecutorService executor = Executors.newThreadPerTaskExecutor(Thread.ofVirtual().name("library-walk-", 0).factory());
+        ExecutorService executor = Executors.newThreadPerTaskExecutor(Thread.ofPlatform().daemon(true).name("library-walk-", 0).factory());
         BlockingQueue<ListingTask> completed = new LinkedBlockingQueue<>();
         Map<ListingTask, Pending> running = new HashMap<>();
         try {
