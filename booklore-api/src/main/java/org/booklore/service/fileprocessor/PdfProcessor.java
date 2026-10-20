@@ -7,26 +7,25 @@ import org.apache.pdfbox.io.RandomAccessReadBufferedFile;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.booklore.mapper.BookMapper;
 import org.booklore.model.dto.BookMetadata;
-import org.booklore.model.dto.settings.LibraryFile;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.service.book.BookCreatorService;
+import org.booklore.service.fileprocessor.prepare.*;
 import org.booklore.service.metadata.MetadataMatchService;
 import org.booklore.service.metadata.extractor.PdfMetadataExtractor;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
-import org.booklore.util.BookCoverUtils;
 import org.booklore.util.FileService;
 import org.booklore.util.FileUtils;
+import org.booklore.util.cover.RenderedCover;
 import org.springframework.stereotype.Service;
 
 import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.util.List;
-import java.util.function.Consumer;
 
 import static org.booklore.util.FileService.truncate;
 
@@ -36,6 +35,8 @@ public class PdfProcessor extends AbstractFileProcessor implements BookFileProce
 
     // Only pages too small to fill the stored cover render this sharp; larger pages render just big enough
     private static final float MAX_COVER_DPI = 150f;
+    // Heap PDFBox needs to render a page beyond the page's own raster
+    private static final long RENDER_HEAP_BYTES = 64L * 1024 * 1024;
 
     private final PdfMetadataExtractor pdfMetadataExtractor;
 
@@ -52,21 +53,39 @@ public class PdfProcessor extends AbstractFileProcessor implements BookFileProce
     }
 
     @Override
-    public BookEntity processNewFile(LibraryFile libraryFile) {
-        BookEntity bookEntity = bookCreatorService.createShellBook(libraryFile, BookFileType.PDF);
-        // Metadata is read from the document loaded for the cover, so the file is only loaded once
-        boolean coverGenerated = generateCover(bookEntity, bookEntity.getPrimaryBookFile(), pdf -> extractAndSetMetadata(bookEntity, pdf));
-        if (!coverGenerated) {
-            var folder = getBookFolderForCoverFallback(libraryFile);
-            if (folder != null) {
-                coverGenerated = generateCoverFromFolderImage(bookEntity, folder);
+    protected ExtractedContent readContent(PrepareRequest request, FileFacts facts, FolderSnapshot folder,
+                                           CoverMaker covers, PrepareContext ctx) {
+        File pdfFile = request.path().toFile();
+        BookMetadata metadata = null;
+        RenderedCover cover = null;
+        try (RandomAccessReadBufferedFile randomAccessRead = new RandomAccessReadBufferedFile(pdfFile);
+             PDDocument pdf = Loader.loadPDF(randomAccessRead)) {
+            // Metadata is read from the document loaded for the cover, so the file is only loaded once
+            try {
+                metadata = pdfMetadataExtractor.extractMetadata(pdf, pdfFile);
+            } catch (Exception e) {
+                log.warn("Failed to extract PDF metadata for '{}': {}", request.fileName(), e.getMessage());
             }
+            ctx.checkpoint();
+            long coverPixels = PdfMetadataExtractor.coverPixels(pdf.getPage(0), MAX_COVER_DPI);
+            cover = covers.fromPixels(coverPixels, RENDER_HEAP_BYTES, () -> pdfMetadataExtractor.renderCover(pdf, MAX_COVER_DPI));
+        } catch (PrepareAbandonedException | PrepareDeadlineException e) {
+            throw e;
+        } catch (OutOfMemoryError e) {
+            // Note: Catching OOM is generally discouraged, but for batch processing
+            // of potentially large/corrupted PDFs, we prefer graceful degradation
+            // over crashing the entire service.
+            log.error("Out of memory (heap space exhausted) while generating cover for '{}'. Skipping cover generation.", request.fileName());
+            System.gc(); // Hint to JVM to reclaim memory
+        } catch (NegativeArraySizeException e) {
+            // This can appear on corrupted PDF, or PDF with such large images that the
+            // initial memory buffer is already bigger than the entire JVM heap, therefore
+            // it leads to NegativeArrayException (basically run out of memory, and overflows)
+            log.warn("Corrupted PDF structure for '{}'. Skipping cover generation.", request.fileName());
+        } catch (Exception e) {
+            log.warn("Failed to generate cover for '{}': {}", request.fileName(), e.getMessage());
         }
-        if (coverGenerated) {
-            FileService.setBookCoverPath(bookEntity.getMetadata());
-            bookEntity.setBookCoverHash(BookCoverUtils.generateCoverHash());
-        }
-        return bookEntity;
+        return new ExtractedContent(metadata, cover, null);
     }
 
     @Override
@@ -76,14 +95,9 @@ public class PdfProcessor extends AbstractFileProcessor implements BookFileProce
 
     @Override
     public boolean generateCover(BookEntity bookEntity, BookFileEntity bookFile) {
-        return generateCover(bookEntity, bookFile, pdf -> {});
-    }
-
-    private boolean generateCover(BookEntity bookEntity, BookFileEntity bookFile, Consumer<PDDocument> beforeRender) {
         File pdfFile = new File(FileUtils.getBookFullPath(bookEntity, bookFile));
         try (RandomAccessReadBufferedFile randomAccessRead = new RandomAccessReadBufferedFile(pdfFile);
              PDDocument pdf = Loader.loadPDF(randomAccessRead)) {
-            beforeRender.accept(pdf);
             return generateCoverImageAndSave(bookEntity.getId(), pdf);
         } catch (OutOfMemoryError e) {
             // Note: Catching OOM is generally discouraged, but for batch processing
@@ -109,10 +123,11 @@ public class PdfProcessor extends AbstractFileProcessor implements BookFileProce
         return List.of(BookFileType.PDF);
     }
 
-    private void extractAndSetMetadata(BookEntity bookEntity, PDDocument pdf) {
+    @Override
+    protected void applyMetadata(BookEntity bookEntity, PreparedBookFile prepared) {
+        BookMetadata extracted = prepared.metadata();
+        if (extracted == null) return;
         try {
-            BookMetadata extracted = pdfMetadataExtractor.extractMetadata(pdf, new File(FileUtils.getBookFullPath(bookEntity)));
-
             if (StringUtils.isNotBlank(extracted.getTitle())) {
                 bookEntity.getMetadata().setTitle(truncate(extracted.getTitle(), 1000));
             }

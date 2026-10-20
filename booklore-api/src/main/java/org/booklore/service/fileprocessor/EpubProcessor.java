@@ -2,7 +2,6 @@ package org.booklore.service.fileprocessor;
 
 import org.booklore.mapper.BookMapper;
 import org.booklore.model.dto.BookMetadata;
-import org.booklore.model.dto.settings.LibraryFile;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.BookMetadataEntity;
@@ -10,12 +9,14 @@ import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.service.book.BookCreatorService;
+import org.booklore.service.fileprocessor.prepare.*;
 import org.booklore.service.metadata.MetadataMatchService;
 import org.booklore.service.metadata.extractor.EpubMetadataExtractor;
+import org.booklore.service.metadata.extractor.FileMetadataExtractor;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
-import org.booklore.util.BookCoverUtils;
 import org.booklore.util.FileService;
 import org.booklore.util.FileUtils;
+import org.booklore.util.cover.RenderedCover;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
@@ -48,24 +49,35 @@ public class EpubProcessor extends AbstractFileProcessor implements BookFileProc
     }
 
     @Override
-    public BookEntity processNewFile(LibraryFile libraryFile) {
-        BookEntity bookEntity = bookCreatorService.createShellBook(libraryFile, BookFileType.EPUB);
+    protected ExtractedContent readContent(PrepareRequest request, FileFacts facts, FolderSnapshot folder,
+                                           CoverMaker covers, PrepareContext ctx) {
         // Metadata and cover from one open of the EPUB rather than one per lookup
-        EpubMetadataExtractor.MetadataAndCover extracted =
-                epubMetadataExtractor.extractMetadataAndCover(new File(bookEntity.getFullFilePath().toUri()));
-        setBookMetadata(bookEntity, extracted.metadata());
-        boolean coverGenerated = saveCover(bookEntity, bookEntity.getPrimaryBookFile(), extracted.cover());
-        if (!coverGenerated) {
-            var folder = getBookFolderForCoverFallback(libraryFile);
-            if (folder != null) {
-                coverGenerated = generateCoverFromFolderImage(bookEntity, folder);
+        FileMetadataExtractor.MetadataAndCover extracted = epubMetadataExtractor.extractMetadataAndCover(request.path().toFile());
+        return new ExtractedContent(extracted.metadata(), renderCover(request.fileName(), extracted.cover(), covers), null);
+    }
+
+    @Override
+    protected void applyMetadata(BookEntity bookEntity, PreparedBookFile prepared) {
+        setBookMetadata(bookEntity, prepared.metadata());
+    }
+
+    private RenderedCover renderCover(String fileName, byte[] coverData, CoverMaker covers) {
+        if (coverData == null) {
+            log.warn("No cover image found in EPUB '{}'", fileName);
+            return null;
+        }
+        try {
+            RenderedCover cover = covers.fromEncoded(coverData, false);
+            if (cover == null) {
+                log.warn("Cover image found but could not be decoded (possibly SVG or unsupported format) in EPUB '{}'", fileName);
             }
+            return cover;
+        } catch (PrepareAbandonedException | PrepareDeadlineException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Error generating cover for EPUB '{}': {}", fileName, e.getMessage(), e);
+            return null;
         }
-        if (coverGenerated) {
-            FileService.setBookCoverPath(bookEntity.getMetadata());
-            bookEntity.setBookCoverHash(BookCoverUtils.generateCoverHash());
-        }
-        return bookEntity;
     }
 
     @Override

@@ -24,6 +24,10 @@ import org.booklore.repository.*;
 import org.booklore.service.appsettings.AppSettingService;
 import org.booklore.service.book.BookCreatorService;
 import org.booklore.service.file.FileFingerprint;
+import org.booklore.service.fileprocessor.prepare.PersistedBook;
+import org.booklore.service.fileprocessor.prepare.PrepareContext;
+import org.booklore.service.fileprocessor.prepare.PrepareRequest;
+import org.booklore.service.fileprocessor.prepare.PreparedBookFile;
 import org.booklore.service.metadata.MetadataMatchService;
 import org.booklore.service.metadata.extractor.*;
 import org.booklore.service.metadata.sidecar.SidecarMetadataMapper;
@@ -62,16 +66,17 @@ import static org.booklore.util.CbxTestArchives.comicInfo;
 import static org.booklore.util.CbxTestArchives.file;
 import static org.booklore.util.CbxTestArchives.imageFile;
 import static org.mockito.ArgumentMatchers.any;
-import static org.mockito.ArgumentMatchers.anyLong;
-import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.clearInvocations;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.verifyNoInteractions;
 import static org.mockito.Mockito.when;
 
 /**
  * What processFile stores for a new book of every format, recorded before it was split into a preparation step and a
  * persisting step: every field of the book, its files and its metadata, the cover files written for it and its
- * sidecar. The processors run with their real extractors, BookCreatorService, MetadataMatchService, FileService and
- * SidecarMetadataWriter on files written into a temporary library; only the repositories and the mapper are mocked.
+ * sidecar. Both processFile and prepare followed by persistPrepared must still store exactly that. The processors run
+ * with their real extractors, BookCreatorService, MetadataMatchService, FileService and SidecarMetadataWriter on files
+ * written into a temporary library; only the repositories and the mapper are mocked.
  * <p>
  * The expected snapshots are in {@value #EXPECTED_FILE}. Every run writes what it saw to {@value #ACTUAL_FILE}; after
  * an intended change, check the difference and copy that file over the expected one.
@@ -177,6 +182,31 @@ class ProcessorEquivalenceTest {
         assertThat(stored).isEqualTo(expected(c.name()));
     }
 
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("cases")
+    void prepareThenPersistStoresWhatProcessFileAlwaysHas(Case c) throws Exception {
+        Harness harness = new Harness(tempDir.resolve("split"), c);
+        LibraryFile libraryFile = harness.writeBook();
+        AbstractFileProcessor processor = harness.processor();
+
+        PrepareRequest request = PrepareRequest.of(libraryFile, harness.fileService.currentCropPolicy());
+        clearInvocations(harness.appSettingService);
+
+        PreparedBookFile prepared = processor.prepare(request, PrepareContext.unbounded());
+        // Reading the file needs no database and no settings, so it can run on any thread
+        verifyNoInteractions(harness.repositories.toArray());
+        verifyNoInteractions(harness.appSettingService, harness.bookMapper);
+
+        PersistedBook persisted = processor.persistPrepared(libraryFile, prepared);
+        if (persisted.sidecarJob() != null) {
+            harness.sidecarMetadataWriter.execute(persisted.sidecarJob());
+        }
+
+        assertThat(persisted.bookId()).isEqualTo(BOOK_ID);
+        assertThat(persisted.created()).isEqualTo(!c.existing());
+        assertThat(harness.snapshot()).isEqualTo(expected(c.name()));
+    }
+
     @AfterAll
     static void writeActual() throws IOException {
         StringBuilder out = new StringBuilder();
@@ -211,8 +241,9 @@ class ProcessorEquivalenceTest {
         private final Path library;
         private final Path config;
         private final AppSettingService appSettingService = mock(AppSettingService.class);
-        private final BookRepository bookRepository = mock(BookRepository.class);
-        private final BookAdditionalFileRepository bookAdditionalFileRepository = mock(BookAdditionalFileRepository.class);
+        private final List<Object> repositories = new ArrayList<>();
+        private final BookRepository bookRepository = repository(BookRepository.class);
+        private final BookAdditionalFileRepository bookAdditionalFileRepository = repository(BookAdditionalFileRepository.class);
         private final BookMapper bookMapper = mock(BookMapper.class);
         private final FileService fileService;
         private final BookCreatorService bookCreatorService;
@@ -264,9 +295,15 @@ class ProcessorEquivalenceTest {
             }
         }
 
-        @SuppressWarnings({"unchecked", "rawtypes"})
-        private static <T extends org.springframework.data.jpa.repository.JpaRepository> T savingMock(Class<T> type) {
+        private <T> T repository(Class<T> type) {
             T repository = mock(type);
+            repositories.add(repository);
+            return repository;
+        }
+
+        @SuppressWarnings({"unchecked", "rawtypes"})
+        private <T extends org.springframework.data.jpa.repository.JpaRepository> T savingMock(Class<T> type) {
+            T repository = repository(type);
             when(repository.save(any())).thenAnswer(inv -> inv.getArgument(0));
             when(repository.saveAll(any())).thenAnswer(inv -> inv.getArgument(0));
             return repository;

@@ -13,6 +13,7 @@ import org.booklore.model.enums.LibraryOrganizationMode;
 import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.service.book.BookCreatorService;
+import org.booklore.service.fileprocessor.prepare.FileFacts;
 import org.booklore.service.metadata.MetadataMatchService;
 import org.booklore.service.metadata.extractor.CbxMetadataExtractor;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
@@ -22,6 +23,10 @@ import org.booklore.util.CbxTestArchives.Entry;
 import org.booklore.util.CbxTestArchives.Format;
 import org.booklore.util.FileService;
 import org.booklore.util.UnrarHelper;
+import org.booklore.util.cover.CoverKind;
+import org.booklore.util.cover.CropPolicy;
+import org.booklore.util.cover.RenderedCover;
+import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
@@ -32,10 +37,12 @@ import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
+import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileOutputStream;
 import java.io.IOException;
@@ -59,6 +66,7 @@ import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
+import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
@@ -85,6 +93,11 @@ class CbxProcessorTest {
     @BeforeEach
     void setUp() {
         cbxProcessor = processorWith(cbxMetadataExtractor);
+    }
+
+    @AfterEach
+    void dropRecordedCovers() {
+        Mockito.clearInvocations(fileService);
     }
 
     private CbxProcessor processorWith(CbxMetadataExtractor extractor) {
@@ -342,20 +355,31 @@ class CbxProcessorTest {
     }
 
     @Nested
-    class ProcessNewFile {
+    class ProcessFile {
 
         private CbxProcessor processor;
 
         @BeforeEach
         void useRealExtractor() {
             processor = processorWith(new CbxMetadataExtractor());
+            lenient().when(fileService.currentCropPolicy()).thenReturn(CropPolicy.NONE);
         }
 
         private BookEntity process(Path file) {
             BookEntity shell = bookFor(file);
             LibraryFile libraryFile = libraryFileFor(file);
-            when(bookCreatorService.createShellBook(libraryFile, BookFileType.CBX)).thenReturn(shell);
-            return processor.processNewFile(libraryFile);
+            when(bookCreatorService.createShellBook(eq(libraryFile), eq(BookFileType.CBX), any(FileFacts.class)))
+                    .thenReturn(new BookCreatorService.ShellBook(shell, true));
+            processor.processFile(libraryFile);
+            return shell;
+        }
+
+        /** Width of the cover written for the book; the test images are told apart by width. */
+        private int writtenCoverWidth() throws IOException {
+            ArgumentCaptor<RenderedCover> captor = ArgumentCaptor.forClass(RenderedCover.class);
+            verify(fileService).writeRenderedCover(eq(1L), captor.capture());
+            assertThat(captor.getValue().kind()).isEqualTo(CoverKind.BOOK);
+            return ImageIO.read(new ByteArrayInputStream(captor.getValue().cover())).getWidth();
         }
 
         @SuppressWarnings("unchecked")
@@ -378,11 +402,11 @@ class CbxProcessorTest {
                             <Pages><Page Image="1" Type="FrontCover"/></Pages>
                             """)),
                     imageFile("pages/001.jpg", 1));
-            when(fileService.saveCoverImages(any(BufferedImage.class), eq(1L))).thenReturn(true);
+            when(fileService.writeRenderedCover(eq(1L), any(RenderedCover.class))).thenReturn(true);
 
             BookEntity book = process(file);
 
-            assertThat(savedCoverWidth()).isEqualTo(1);
+            assertThat(writtenCoverWidth()).isEqualTo(1);
             assertThat(book.getBookCoverHash()).isNotNull();
             assertThat(book.getMetadata().getCoverUpdatedOn()).isNotNull();
             assertThat(book.getPrimaryBookFile().getArchiveType()).isEqualTo(format.archiveType());
@@ -399,7 +423,7 @@ class CbxProcessorTest {
                     imageFile("001.jpg", 1),
                     file("extras/comicinfo.XML", comicInfo("<Title>From Extras</Title>")),
                     file("ComicInfo.xml", comicInfo("<Title>From Root</Title>")));
-            when(fileService.saveCoverImages(any(BufferedImage.class), eq(1L))).thenReturn(true);
+            when(fileService.writeRenderedCover(eq(1L), any(RenderedCover.class))).thenReturn(true);
 
             BookEntity book = process(file);
 
@@ -410,11 +434,11 @@ class CbxProcessorTest {
         @EnumSource(Format.class)
         void titleIsTheRawFileBaseNameWithoutComicInfo(Format format) throws IOException {
             Path file = archive(format, "My_Comic-01", imageFile("001.jpg", 1));
-            when(fileService.saveCoverImages(any(BufferedImage.class), eq(1L))).thenReturn(true);
+            when(fileService.writeRenderedCover(eq(1L), any(RenderedCover.class))).thenReturn(true);
 
             BookEntity book = process(file);
 
-            assertThat(savedCoverWidth()).isEqualTo(1);
+            assertThat(writtenCoverWidth()).isEqualTo(1);
             assertThat(book.getMetadata().getTitle()).isEqualTo("My_Comic-01");
         }
 
@@ -424,11 +448,11 @@ class CbxProcessorTest {
             Path file = archive(format, "My_Comic-01",
                     file("ComicInfo.xml", "<ComicInfo><Title>unclosed"),
                     imageFile("001.jpg", 1));
-            when(fileService.saveCoverImages(any(BufferedImage.class), eq(1L))).thenReturn(true);
+            when(fileService.writeRenderedCover(eq(1L), any(RenderedCover.class))).thenReturn(true);
 
             BookEntity book = process(file);
 
-            assertThat(savedCoverWidth()).isEqualTo(1);
+            assertThat(writtenCoverWidth()).isEqualTo(1);
             assertThat(book.getMetadata().getTitle()).isEqualTo("My_Comic-01");
         }
 
@@ -441,18 +465,18 @@ class CbxProcessorTest {
 
             BookEntity book = process(file);
 
-            verify(fileService, never()).saveCoverImages(any(), anyLong());
+            verify(fileService, never()).writeRenderedCover(anyLong(), any());
             assertThat(book.getBookCoverHash()).isNull();
             assertThat(book.getMetadata().getTitle()).isEqualTo("Text Only");
         }
 
         private void assertCoverAndComicInfoFromSolidBlock(Path fixture, String title) throws IOException {
             Path file = Files.copy(fixture, tempDir.resolve(fixture.getFileName()));
-            when(fileService.saveCoverImages(any(BufferedImage.class), eq(1L))).thenReturn(true);
+            when(fileService.writeRenderedCover(eq(1L), any(RenderedCover.class))).thenReturn(true);
 
             BookEntity book = process(file);
 
-            assertThat(savedCoverWidth()).isEqualTo(1);
+            assertThat(writtenCoverWidth()).isEqualTo(1);
             assertThat(book.getPrimaryBookFile().getArchiveType()).isEqualTo(ArchiveUtils.ArchiveType.SEVEN_ZIP);
             assertThat(book.getMetadata().getTitle()).isEqualTo(title);
             assertThat(book.getMetadata().getSeriesName()).isEqualTo("Solid Series");
@@ -475,7 +499,7 @@ class CbxProcessorTest {
 
             BookEntity book = process(file);
 
-            verify(fileService, never()).saveCoverImages(any(), anyLong());
+            verify(fileService, never()).writeRenderedCover(anyLong(), any());
             assertThat(book.getPrimaryBookFile().getArchiveType()).isEqualTo(ArchiveUtils.ArchiveType.ZIP);
             assertThat(book.getMetadata().getTitle()).isEqualTo("Broken_Book-02");
         }
@@ -483,7 +507,7 @@ class CbxProcessorTest {
         @Test
         void fallsBackToCleanedFileNameWhenExtractorReturnsNothing() throws IOException {
             Path file = archive(Format.CBZ, "My_Comic-01", imageFile("001.jpg", 1));
-            when(fileService.saveCoverImages(any(BufferedImage.class), eq(1L))).thenReturn(true);
+            when(fileService.writeRenderedCover(eq(1L), any(RenderedCover.class))).thenReturn(true);
             processor = cbxProcessor;
 
             BookEntity book = process(file);
@@ -496,7 +520,7 @@ class CbxProcessorTest {
             Path file = tempDir.resolve("rar5.cbr");
             Files.copy(Path.of("src/test/resources/cbx/test-rar5.cbr"), file);
             byte[] xml = comicInfo("<Title>Via CLI</Title>").getBytes(StandardCharsets.UTF_8);
-            when(fileService.saveCoverImages(any(BufferedImage.class), eq(1L))).thenReturn(true);
+            when(fileService.writeRenderedCover(eq(1L), any(RenderedCover.class))).thenReturn(true);
 
             try (MockedStatic<UnrarHelper> unrar = mockStatic(UnrarHelper.class)) {
                 unrar.when(UnrarHelper::isAvailable).thenReturn(true);
@@ -508,7 +532,7 @@ class CbxProcessorTest {
 
                 BookEntity book = process(file);
 
-                assertThat(savedCoverWidth()).isEqualTo(2);
+                assertThat(writtenCoverWidth()).isEqualTo(2);
                 assertThat(book.getPrimaryBookFile().getArchiveType()).isEqualTo(ArchiveUtils.ArchiveType.RAR);
                 assertThat(book.getMetadata().getTitle()).isEqualTo("Via CLI");
                 // One listing serves both the cover and ComicInfo.xml
@@ -522,13 +546,13 @@ class CbxProcessorTest {
             Path file = archive(format, "once",
                     imageFile("001.jpg", 1),
                     file("ComicInfo.xml", comicInfo("<Title>Once</Title>")));
-            when(fileService.saveCoverImages(any(BufferedImage.class), eq(1L))).thenReturn(true);
+            when(fileService.writeRenderedCover(eq(1L), any(RenderedCover.class))).thenReturn(true);
 
             try (MockedStatic<ArchiveUtils> archiveUtils = mockStatic(ArchiveUtils.class, CALLS_REAL_METHODS);
                  MockedStatic<CbxArchive> cbxArchive = mockStatic(CbxArchive.class, CALLS_REAL_METHODS)) {
                 BookEntity book = process(file);
 
-                assertThat(savedCoverWidth()).isEqualTo(1);
+                assertThat(writtenCoverWidth()).isEqualTo(1);
                 assertThat(book.getMetadata().getTitle()).isEqualTo("Once");
                 archiveUtils.verify(() -> ArchiveUtils.detectArchiveType(any(File.class)), times(1));
                 cbxArchive.verify(() -> CbxArchive.open(any(File.class), eq(format.archiveType())), times(1));
@@ -538,7 +562,7 @@ class CbxProcessorTest {
         @Test
         void handsTheOpenArchiveToTheExtractor() throws IOException {
             Path file = archive(Format.CBR, "handoff", imageFile("001.jpg", 1));
-            when(fileService.saveCoverImages(any(BufferedImage.class), eq(1L))).thenReturn(true);
+            when(fileService.writeRenderedCover(eq(1L), any(RenderedCover.class))).thenReturn(true);
             when(cbxMetadataExtractor.extractMetadata(any(CbxArchive.class), eq("handoff")))
                     .thenReturn(BookMetadata.builder().title("From The Open Archive").build());
             processor = cbxProcessor;
