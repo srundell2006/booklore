@@ -2,14 +2,17 @@ package org.booklore.service.metadata.extractor;
 
 import org.booklore.model.dto.BookMetadata;
 import org.booklore.model.dto.ComicMetadata;
+import org.booklore.util.CbxArchive;
 import org.booklore.util.CbxTestArchives;
 import org.booklore.util.CbxTestArchives.Entry;
+import org.booklore.util.UnrarHelper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.mockito.MockedStatic;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -18,6 +21,8 @@ import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.LocalDate;
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Set;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
@@ -28,6 +33,10 @@ import static org.booklore.util.CbxTestArchives.comicInfo;
 import static org.booklore.util.CbxTestArchives.dir;
 import static org.booklore.util.CbxTestArchives.file;
 import static org.booklore.util.CbxTestArchives.imageFile;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.mockStatic;
+import static org.mockito.Mockito.times;
 
 class CbxMetadataExtractorTest {
 
@@ -1482,6 +1491,68 @@ class CbxMetadataExtractorTest {
             Files.writeString(path, "this is not an archive of any kind");
 
             assertThat(extractor.extractMetadata(path.toFile()).getTitle()).isEqualTo("Unreadable-01");
+        }
+
+        @Test
+        void readsRarThatJunrarCannotOpenThroughUnrarCli() throws IOException {
+            Path rar5 = tempDir.resolve("Rar_Five.cbr");
+            Files.copy(Path.of("src/test/resources/cbx/test-rar5.cbr"), rar5);
+            try (MockedStatic<UnrarHelper> unrar = mockStatic(UnrarHelper.class)) {
+                unrar.when(UnrarHelper::isAvailable).thenReturn(true);
+                unrar.when(() -> UnrarHelper.listEntries(rar5)).thenReturn(List.of("001.jpg", "info/ComicInfo.xml"));
+                unrar.when(() -> UnrarHelper.extractEntryBytes(rar5, "info/ComicInfo.xml"))
+                        .thenReturn(comicInfo("<Title>Through CLI</Title>").getBytes(StandardCharsets.UTF_8));
+
+                assertThat(extractor.extractMetadata(rar5.toFile()).getTitle()).isEqualTo("Through CLI");
+                unrar.verify(() -> UnrarHelper.extractEntryBytes(eq(rar5), any()), times(1));
+            }
+        }
+
+        @Test
+        void readsOnlyComicInfoFromAnOpenArchive() {
+            List<String> reads = new ArrayList<>();
+            CbxArchive archive = new CbxArchive() {
+                @Override
+                public List<String> fileNames() {
+                    return List.of("001.jpg", "notes.txt", "Extras/ComicInfo.xml", "ComicInfo.xml");
+                }
+
+                @Override
+                public byte[] readEntry(String name) {
+                    reads.add(name);
+                    return comicInfo("<Title>From " + name + "</Title>").getBytes(StandardCharsets.UTF_8);
+                }
+
+                @Override
+                public void close() {
+                }
+            };
+
+            BookMetadata metadata = extractor.extractMetadata(archive, "fallback");
+
+            assertThat(metadata.getTitle()).isEqualTo("From Extras/ComicInfo.xml");
+            assertThat(reads).containsExactly("Extras/ComicInfo.xml");
+        }
+
+        @Test
+        void fallsBackWhenTheOpenArchiveCannotReadComicInfo() {
+            CbxArchive archive = new CbxArchive() {
+                @Override
+                public List<String> fileNames() {
+                    return List.of("ComicInfo.xml");
+                }
+
+                @Override
+                public byte[] readEntry(String name) throws IOException {
+                    throw new IOException("CRC error");
+                }
+
+                @Override
+                public void close() {
+                }
+            };
+
+            assertThat(extractor.extractMetadata(archive, "fallback").getTitle()).isEqualTo("fallback");
         }
 
         @Test

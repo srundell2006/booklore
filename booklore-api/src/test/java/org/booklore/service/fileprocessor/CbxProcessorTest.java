@@ -1,6 +1,7 @@
 package org.booklore.service.fileprocessor;
 
 import org.booklore.mapper.BookMapper;
+import org.booklore.model.dto.BookMetadata;
 import org.booklore.model.dto.settings.LibraryFile;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
@@ -16,6 +17,7 @@ import org.booklore.service.metadata.MetadataMatchService;
 import org.booklore.service.metadata.extractor.CbxMetadataExtractor;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
 import org.booklore.util.ArchiveUtils;
+import org.booklore.util.CbxArchive;
 import org.booklore.util.CbxTestArchives;
 import org.booklore.util.CbxTestArchives.Entry;
 import org.booklore.util.FileService;
@@ -54,8 +56,10 @@ import static org.booklore.util.CbxTestArchives.imageFile;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.eq;
+import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
@@ -504,7 +508,42 @@ class CbxProcessorTest {
                 assertThat(savedCoverWidth()).isEqualTo(2);
                 assertThat(book.getPrimaryBookFile().getArchiveType()).isEqualTo(ArchiveUtils.ArchiveType.RAR);
                 assertThat(book.getMetadata().getTitle()).isEqualTo("Via CLI");
+                // One listing serves both the cover and ComicInfo.xml
+                unrar.verify(() -> UnrarHelper.listEntries(any(Path.class)), times(1));
             }
+        }
+
+        @ParameterizedTest
+        @EnumSource(Format.class)
+        void detectsTheTypeAndOpensTheArchiveOnce(Format format) throws IOException {
+            Path file = archive(format, "once",
+                    imageFile("001.jpg", 1),
+                    file("ComicInfo.xml", comicInfo("<Title>Once</Title>")));
+            when(fileService.saveCoverImages(any(BufferedImage.class), eq(1L))).thenReturn(true);
+
+            try (MockedStatic<ArchiveUtils> archiveUtils = mockStatic(ArchiveUtils.class, CALLS_REAL_METHODS);
+                 MockedStatic<CbxArchive> cbxArchive = mockStatic(CbxArchive.class, CALLS_REAL_METHODS)) {
+                BookEntity book = process(file);
+
+                assertThat(savedCoverWidth()).isEqualTo(1);
+                assertThat(book.getMetadata().getTitle()).isEqualTo("Once");
+                archiveUtils.verify(() -> ArchiveUtils.detectArchiveType(any(File.class)), times(1));
+                cbxArchive.verify(() -> CbxArchive.open(any(File.class), eq(format.archiveType)), times(1));
+            }
+        }
+
+        @Test
+        void handsTheOpenArchiveToTheExtractor() throws IOException {
+            Path file = archive(Format.CBR, "handoff", imageFile("001.jpg", 1));
+            when(fileService.saveCoverImages(any(BufferedImage.class), eq(1L))).thenReturn(true);
+            when(cbxMetadataExtractor.extractMetadata(any(CbxArchive.class), eq("handoff")))
+                    .thenReturn(BookMetadata.builder().title("From The Open Archive").build());
+            processor = cbxProcessor;
+
+            BookEntity book = process(file);
+
+            assertThat(book.getMetadata().getTitle()).isEqualTo("From The Open Archive");
+            verify(cbxMetadataExtractor, never()).extractMetadata(any(File.class));
         }
     }
 }
