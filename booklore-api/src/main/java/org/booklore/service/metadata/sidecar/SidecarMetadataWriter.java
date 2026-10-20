@@ -146,17 +146,11 @@ public class SidecarMetadataWriter {
     }
 
     public Path getSidecarPath(Path bookPath) {
-        String fileName = bookPath.getFileName().toString();
-        int dotIndex = fileName.lastIndexOf('.');
-        String baseName = (dotIndex > 0) ? fileName.substring(0, dotIndex) : fileName;
-        return bookPath.getParent().resolve(baseName + ".metadata.json");
+        return bookPath.getParent().resolve(SidecarFileNames.baseName(bookPath) + ".metadata.json");
     }
 
     public Path getCoverPath(Path bookPath) {
-        String fileName = bookPath.getFileName().toString();
-        int dotIndex = fileName.lastIndexOf('.');
-        String baseName = (dotIndex > 0) ? fileName.substring(0, dotIndex) : fileName;
-        return bookPath.getParent().resolve(baseName + ".cover.jpg");
+        return bookPath.getParent().resolve(SidecarFileNames.baseName(bookPath) + ".cover.jpg");
     }
 
     private void writeCoverFile(BookEntity book, Path coverPath) {
