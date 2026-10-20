@@ -37,7 +37,7 @@ public abstract class MobiBaseMetadataExtractor implements FileMetadataExtractor
 
     @Override
     public byte[] extractCover(File file) {
-        try (RandomAccessFile raf = new RandomAccessFile(file, "r")) {
+        try (RandomAccessFile raf = openFile(file)) {
             PalmDB palmDB = readPalmDB(raf);
             if (palmDB == null) {
                 return null;
@@ -48,25 +48,7 @@ public abstract class MobiBaseMetadataExtractor implements FileMetadataExtractor
                 return null;
             }
 
-            // Try to get cover from EXTH
-            Integer coverIndex = mobiHeader.exthRecords.get(EXTH_COVER_OFFSET);
-            if (coverIndex == null) {
-                coverIndex = mobiHeader.exthRecords.get(EXTH_THUMB_OFFSET);
-            }
-
-            if (coverIndex != null) {
-                int imageRecordIndex = mobiHeader.firstImageIndex + coverIndex;
-                if (imageRecordIndex < palmDB.records.size()) {
-                    return extractImageFromRecord(raf, palmDB.records.get(imageRecordIndex));
-                }
-            }
-
-            // Try first image
-            if (mobiHeader.firstImageIndex > 0 && mobiHeader.firstImageIndex < palmDB.records.size()) {
-                return extractImageFromRecord(raf, palmDB.records.get(mobiHeader.firstImageIndex));
-            }
-
-            return null;
+            return coverFrom(raf, palmDB, mobiHeader);
         } catch (Exception e) {
             log.error("Failed to extract cover from {}: {}", getFormatName(), file.getName(), e);
             return null;
@@ -75,7 +57,7 @@ public abstract class MobiBaseMetadataExtractor implements FileMetadataExtractor
 
     @Override
     public BookMetadata extractMetadata(File file) {
-        try (RandomAccessFile raf = new RandomAccessFile(file, "r")) {
+        try (RandomAccessFile raf = openFile(file)) {
             PalmDB palmDB = readPalmDB(raf);
             if (palmDB == null) {
                 log.warn("Failed to read PalmDB header from: {}", file.getName());
@@ -88,63 +70,134 @@ public abstract class MobiBaseMetadataExtractor implements FileMetadataExtractor
                 return null;
             }
 
-            BookMetadata.BookMetadataBuilder builder = BookMetadata.builder();
-            List<String> authors = new ArrayList<>();
-            Set<String> categories = new HashSet<>();
-
-            // Extract title
-            if (StringUtils.isNotBlank(mobiHeader.title)) {
-                builder.title(mobiHeader.title);
-            }
-
-            // Extract metadata from EXTH records
-            for (var entry : mobiHeader.exthData.entrySet()) {
-                int recordType = entry.getKey();
-                String value = entry.getValue();
-
-                if (StringUtils.isBlank(value)) {
-                    continue;
-                }
-
-                switch (recordType) {
-                    case EXTH_AUTHOR -> authors.add(value.trim());
-                    case EXTH_PUBLISHER -> builder.publisher(value.trim());
-                    case EXTH_DESCRIPTION -> builder.description(value.trim());
-                    case EXTH_ISBN -> {
-                        String isbn = ISBN_INVALID_CHARS_PATTERN.matcher(value).replaceAll("");
-                        if (isbn.length() == 13) {
-                            builder.isbn13(isbn);
-                        } else if (isbn.length() == 10) {
-                            builder.isbn10(isbn);
-                        }
-                    }
-                    case EXTH_SUBJECT -> {
-                        for (String category : CATEGORY_SEPARATOR_PATTERN.split(value)) {
-                            String trimmed = category.trim();
-                            if (StringUtils.isNotBlank(trimmed)) {
-                                categories.add(trimmed);
-                            }
-                        }
-                    }
-                    case EXTH_PUBLISHED_DATE -> {
-                        LocalDate date = parseDate(value.trim());
-                        if (date != null) {
-                            builder.publishedDate(date);
-                        }
-                    }
-                    case EXTH_LANGUAGE -> builder.language(value.trim());
-                    case EXTH_ASIN -> builder.asin(value.trim());
-                }
-            }
-
-            builder.authors(authors);
-            builder.categories(categories);
-
-            return builder.build();
+            return buildMetadata(mobiHeader);
         } catch (Exception e) {
             log.error("Failed to extract metadata from {}: {}", getFormatName(), file.getName(), e);
             return null;
         }
+    }
+
+    /**
+     * Metadata and cover from one open of the file and one read of its headers, each what
+     * {@link #extractMetadata(File)} and {@link #extractCover(File)} return, with the same logs when either part fails.
+     */
+    @Override
+    public MetadataAndCover extractMetadataAndCover(File file) {
+        try (RandomAccessFile raf = openFile(file)) {
+            PalmDB palmDB = readPalmDB(raf);
+            if (palmDB == null) {
+                log.warn("Failed to read PalmDB header from: {}", file.getName());
+                return new MetadataAndCover(null, null);
+            }
+
+            MobiHeader mobiHeader = readMobiHeader(raf, palmDB);
+            if (mobiHeader == null) {
+                log.warn("Failed to read {} header from: {}", getFormatName(), file.getName());
+                return new MetadataAndCover(null, null);
+            }
+
+            BookMetadata metadata = null;
+            try {
+                metadata = buildMetadata(mobiHeader);
+            } catch (Exception e) {
+                log.error("Failed to extract metadata from {}: {}", getFormatName(), file.getName(), e);
+            }
+            byte[] cover = null;
+            try {
+                cover = coverFrom(raf, palmDB, mobiHeader);
+            } catch (Exception e) {
+                log.error("Failed to extract cover from {}: {}", getFormatName(), file.getName(), e);
+            }
+            return new MetadataAndCover(metadata, cover);
+        } catch (Exception e) {
+            // Opening the file or reading its headers failed, which fails both parts, as each would on its own
+            log.error("Failed to extract metadata from {}: {}", getFormatName(), file.getName(), e);
+            log.error("Failed to extract cover from {}: {}", getFormatName(), file.getName(), e);
+            return new MetadataAndCover(null, null);
+        }
+    }
+
+    // Seam for tests that count how often a file is opened
+    RandomAccessFile openFile(File file) throws IOException {
+        return new RandomAccessFile(file, "r");
+    }
+
+    private byte[] coverFrom(RandomAccessFile raf, PalmDB palmDB, MobiHeader mobiHeader) throws IOException {
+        // Try to get cover from EXTH
+        Integer coverIndex = mobiHeader.exthRecords.get(EXTH_COVER_OFFSET);
+        if (coverIndex == null) {
+            coverIndex = mobiHeader.exthRecords.get(EXTH_THUMB_OFFSET);
+        }
+
+        if (coverIndex != null) {
+            int imageRecordIndex = mobiHeader.firstImageIndex + coverIndex;
+            if (imageRecordIndex < palmDB.records.size()) {
+                return extractImageFromRecord(raf, palmDB.records.get(imageRecordIndex));
+            }
+        }
+
+        // Try first image
+        if (mobiHeader.firstImageIndex > 0 && mobiHeader.firstImageIndex < palmDB.records.size()) {
+            return extractImageFromRecord(raf, palmDB.records.get(mobiHeader.firstImageIndex));
+        }
+
+        return null;
+    }
+
+    private BookMetadata buildMetadata(MobiHeader mobiHeader) {
+        BookMetadata.BookMetadataBuilder builder = BookMetadata.builder();
+        List<String> authors = new ArrayList<>();
+        Set<String> categories = new HashSet<>();
+
+        // Extract title
+        if (StringUtils.isNotBlank(mobiHeader.title)) {
+            builder.title(mobiHeader.title);
+        }
+
+        // Extract metadata from EXTH records
+        for (var entry : mobiHeader.exthData.entrySet()) {
+            int recordType = entry.getKey();
+            String value = entry.getValue();
+
+            if (StringUtils.isBlank(value)) {
+                continue;
+            }
+
+            switch (recordType) {
+                case EXTH_AUTHOR -> authors.add(value.trim());
+                case EXTH_PUBLISHER -> builder.publisher(value.trim());
+                case EXTH_DESCRIPTION -> builder.description(value.trim());
+                case EXTH_ISBN -> {
+                    String isbn = ISBN_INVALID_CHARS_PATTERN.matcher(value).replaceAll("");
+                    if (isbn.length() == 13) {
+                        builder.isbn13(isbn);
+                    } else if (isbn.length() == 10) {
+                        builder.isbn10(isbn);
+                    }
+                }
+                case EXTH_SUBJECT -> {
+                    for (String category : CATEGORY_SEPARATOR_PATTERN.split(value)) {
+                        String trimmed = category.trim();
+                        if (StringUtils.isNotBlank(trimmed)) {
+                            categories.add(trimmed);
+                        }
+                    }
+                }
+                case EXTH_PUBLISHED_DATE -> {
+                    LocalDate date = parseDate(value.trim());
+                    if (date != null) {
+                        builder.publishedDate(date);
+                    }
+                }
+                case EXTH_LANGUAGE -> builder.language(value.trim());
+                case EXTH_ASIN -> builder.asin(value.trim());
+            }
+        }
+
+        builder.authors(authors);
+        builder.categories(categories);
+
+        return builder.build();
     }
 
     protected PalmDB readPalmDB(RandomAccessFile raf) throws IOException {

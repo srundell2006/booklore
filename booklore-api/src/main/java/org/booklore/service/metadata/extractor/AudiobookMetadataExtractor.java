@@ -7,11 +7,13 @@ import org.apache.commons.lang3.StringUtils;
 import org.booklore.model.dto.AudiobookMetadata;
 import org.booklore.model.dto.BookMetadata;
 import org.booklore.service.reader.FfprobeService;
+import org.booklore.util.ProcessWatchdog;
 import org.jaudiotagger.audio.AudioFile;
 import org.jaudiotagger.audio.AudioFileIO;
 import org.jaudiotagger.audio.AudioHeader;
 import org.jaudiotagger.tag.FieldKey;
 import org.jaudiotagger.tag.Tag;
+import org.jaudiotagger.tag.TagOptionSingleton;
 import org.jaudiotagger.tag.id3.AbstractID3v2Frame;
 import org.jaudiotagger.tag.id3.AbstractID3v2Tag;
 import org.jaudiotagger.tag.id3.ID3v2ChapterFrames;
@@ -25,11 +27,13 @@ import java.io.BufferedReader;
 import java.io.File;
 import java.io.InputStreamReader;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.LocalDate;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Level;
 import java.util.logging.Logger;
 
@@ -38,129 +42,207 @@ import java.util.logging.Logger;
 @AllArgsConstructor
 public class AudiobookMetadataExtractor implements FileMetadataExtractor {
 
+    private static final Duration FFPROBE_TIMEOUT = Duration.ofSeconds(120);
+
     private final FfprobeService ffprobeService;
 
     static {
         Logger.getLogger("org.jaudiotagger").setLevel(Level.WARNING);
+        // jaudiotagger creates these singletons on first use without locking, so create them here, before
+        // files are read on several threads at once
+        TagOptionSingleton.getInstance();
+        AudioFileIO.getDefaultAudioFileIO();
     }
 
     @Override
     public BookMetadata extractMetadata(File audioFile) {
         try {
-            AudioFile f = AudioFileIO.read(audioFile);
-            Tag tag = f.getTag();
-            AudioHeader header = f.getAudioHeader();
-
-            BookMetadata.BookMetadataBuilder builder = BookMetadata.builder();
-            AudiobookMetadata.AudiobookMetadataBuilder audiobookBuilder = AudiobookMetadata.builder();
-
-            extractAudioHeaderInfo(audiobookBuilder, header);
-
-            List<AudiobookMetadata.ChapterInfo> chapters = extractChapters(audioFile, f, header);
-            if (chapters != null && !chapters.isEmpty()) {
-                audiobookBuilder.chapters(chapters);
-                audiobookBuilder.chapterCount(chapters.size());
-            }
-
-            if (tag != null) {
-                String narrator = tag.getFirst(FieldKey.COMPOSER);
-                if (StringUtils.isNotBlank(narrator)) {
-                    builder.narrator(narrator);
-                }
-            }
-
-            builder.audiobookMetadata(audiobookBuilder.build());
-
-            if (tag == null) {
-                builder.title(FilenameUtils.getBaseName(audioFile.getName()));
-                return builder.build();
-            }
-
-            String album = tag.getFirst(FieldKey.ALBUM);
-            String title = tag.getFirst(FieldKey.TITLE);
-            if (StringUtils.isNotBlank(album)) {
-                builder.title(album);
-            } else if (StringUtils.isNotBlank(title)) {
-                builder.title(title);
-            } else {
-                builder.title(FilenameUtils.getBaseName(audioFile.getName()));
-            }
-
-            String albumArtist = tag.getFirst(FieldKey.ALBUM_ARTIST);
-            String artist = tag.getFirst(FieldKey.ARTIST);
-            List<String> authors = new ArrayList<>();
-            if (StringUtils.isNotBlank(albumArtist)) {
-                authors.add(albumArtist);
-            } else if (StringUtils.isNotBlank(artist)) {
-                authors.add(artist);
-            }
-            if (!authors.isEmpty()) {
-                builder.authors(authors);
-            }
-
-            String comment = tag.getFirst(FieldKey.COMMENT);
-            if (StringUtils.isNotBlank(comment)) {
-                builder.description(comment);
-            }
-
-            String publisher = tag.getFirst(FieldKey.RECORD_LABEL);
-            if (StringUtils.isNotBlank(publisher)) {
-                builder.publisher(publisher);
-            }
-
-            String year = tag.getFirst(FieldKey.YEAR);
-            if (StringUtils.isNotBlank(year)) {
-                try {
-                    int yearInt = Integer.parseInt(year.trim().substring(0, Math.min(4, year.trim().length())));
-                    if (yearInt >= 1 && yearInt <= 9999) {
-                        builder.publishedDate(LocalDate.of(yearInt, 1, 1));
-                    }
-                } catch (NumberFormatException ignored) {
-                }
-            }
-
-            String genre = tag.getFirst(FieldKey.GENRE);
-            if (StringUtils.isNotBlank(genre)) {
-                Set<String> categories = new HashSet<>();
-                categories.add(genre);
-                builder.categories(categories);
-            }
-
-            String language = tag.getFirst(FieldKey.LANGUAGE);
-            if (StringUtils.isNotBlank(language)) {
-                builder.language(language);
-            }
-
-            String grouping = tag.getFirst(FieldKey.GROUPING);
-            if (StringUtils.isNotBlank(grouping)) {
-                builder.seriesName(grouping);
-            }
-
-            String trackNo = tag.getFirst(FieldKey.TRACK);
-            if (StringUtils.isNotBlank(trackNo)) {
-                try {
-                    String trackNum = trackNo.contains("/") ? trackNo.split("/")[0] : trackNo;
-                    builder.seriesNumber((float) Integer.parseInt(trackNum.trim()));
-                } catch (NumberFormatException ignored) {
-                }
-            }
-
-            String trackTotal = tag.getFirst(FieldKey.TRACK_TOTAL);
-            if (StringUtils.isNotBlank(trackTotal)) {
-                try {
-                    builder.seriesTotal(Integer.parseInt(trackTotal.trim()));
-                } catch (NumberFormatException ignored) {
-                }
-            }
-
-            return builder.build();
-
+            return buildMetadata(audioFile, readAudioFile(audioFile));
         } catch (Exception e) {
-            log.error("Failed to read metadata from audio file {}: {}", audioFile.getName(), e.getMessage(), e);
-            return BookMetadata.builder()
-                    .title(FilenameUtils.getBaseName(audioFile.getName()))
-                    .build();
+            return unreadableMetadata(audioFile, e);
         }
+    }
+
+    @Override
+    public byte[] extractCover(File audioFile) {
+        try {
+            return coverFrom(readAudioFile(audioFile));
+        } catch (Exception e) {
+            log.warn("Failed to extract cover from audio file {}: {}", audioFile.getName(), e.getMessage());
+            return null;
+        }
+    }
+
+    /**
+     * Metadata and cover from one read of the file, each what {@link #extractMetadata(File)} and
+     * {@link #extractCover(File)} return. Either part failing leaves the other, with the same log as its own method.
+     */
+    @Override
+    public MetadataAndCover extractMetadataAndCover(File audioFile) {
+        AudioFile f;
+        try {
+            f = readAudioFile(audioFile);
+        } catch (Exception e) {
+            BookMetadata metadata = unreadableMetadata(audioFile, e);
+            log.warn("Failed to extract cover from audio file {}: {}", audioFile.getName(), e.getMessage());
+            return new MetadataAndCover(metadata, null);
+        }
+
+        BookMetadata metadata;
+        try {
+            metadata = buildMetadata(audioFile, f);
+        } catch (Exception e) {
+            metadata = unreadableMetadata(audioFile, e);
+        }
+        byte[] cover;
+        try {
+            cover = coverFrom(f);
+        } catch (Exception e) {
+            log.warn("Failed to extract cover from audio file {}: {}", audioFile.getName(), e.getMessage());
+            cover = null;
+        }
+        return new MetadataAndCover(metadata, cover);
+    }
+
+    // Seam for tests that count how often a file is read
+    AudioFile readAudioFile(File audioFile) throws Exception {
+        return AudioFileIO.read(audioFile);
+    }
+
+    // Seam for tests that need a hanging ffprobe to time out sooner
+    Duration ffprobeTimeout() {
+        return FFPROBE_TIMEOUT;
+    }
+
+    private static BookMetadata unreadableMetadata(File audioFile, Exception e) {
+        log.error("Failed to read metadata from audio file {}: {}", audioFile.getName(), e.getMessage(), e);
+        return BookMetadata.builder()
+                .title(FilenameUtils.getBaseName(audioFile.getName()))
+                .build();
+    }
+
+    private static byte[] coverFrom(AudioFile f) {
+        Tag tag = f.getTag();
+
+        if (tag == null) {
+            return null;
+        }
+
+        Artwork artwork = tag.getFirstArtwork();
+        if (artwork != null) {
+            return artwork.getBinaryData();
+        }
+
+        return null;
+    }
+
+    private BookMetadata buildMetadata(File audioFile, AudioFile f) {
+        Tag tag = f.getTag();
+        AudioHeader header = f.getAudioHeader();
+
+        BookMetadata.BookMetadataBuilder builder = BookMetadata.builder();
+        AudiobookMetadata.AudiobookMetadataBuilder audiobookBuilder = AudiobookMetadata.builder();
+
+        extractAudioHeaderInfo(audiobookBuilder, header);
+
+        List<AudiobookMetadata.ChapterInfo> chapters = extractChapters(audioFile, f, header);
+        if (chapters != null && !chapters.isEmpty()) {
+            audiobookBuilder.chapters(chapters);
+            audiobookBuilder.chapterCount(chapters.size());
+        }
+
+        if (tag != null) {
+            String narrator = tag.getFirst(FieldKey.COMPOSER);
+            if (StringUtils.isNotBlank(narrator)) {
+                builder.narrator(narrator);
+            }
+        }
+
+        builder.audiobookMetadata(audiobookBuilder.build());
+
+        if (tag == null) {
+            builder.title(FilenameUtils.getBaseName(audioFile.getName()));
+            return builder.build();
+        }
+
+        String album = tag.getFirst(FieldKey.ALBUM);
+        String title = tag.getFirst(FieldKey.TITLE);
+        if (StringUtils.isNotBlank(album)) {
+            builder.title(album);
+        } else if (StringUtils.isNotBlank(title)) {
+            builder.title(title);
+        } else {
+            builder.title(FilenameUtils.getBaseName(audioFile.getName()));
+        }
+
+        String albumArtist = tag.getFirst(FieldKey.ALBUM_ARTIST);
+        String artist = tag.getFirst(FieldKey.ARTIST);
+        List<String> authors = new ArrayList<>();
+        if (StringUtils.isNotBlank(albumArtist)) {
+            authors.add(albumArtist);
+        } else if (StringUtils.isNotBlank(artist)) {
+            authors.add(artist);
+        }
+        if (!authors.isEmpty()) {
+            builder.authors(authors);
+        }
+
+        String comment = tag.getFirst(FieldKey.COMMENT);
+        if (StringUtils.isNotBlank(comment)) {
+            builder.description(comment);
+        }
+
+        String publisher = tag.getFirst(FieldKey.RECORD_LABEL);
+        if (StringUtils.isNotBlank(publisher)) {
+            builder.publisher(publisher);
+        }
+
+        String year = tag.getFirst(FieldKey.YEAR);
+        if (StringUtils.isNotBlank(year)) {
+            try {
+                int yearInt = Integer.parseInt(year.trim().substring(0, Math.min(4, year.trim().length())));
+                if (yearInt >= 1 && yearInt <= 9999) {
+                    builder.publishedDate(LocalDate.of(yearInt, 1, 1));
+                }
+            } catch (NumberFormatException ignored) {
+            }
+        }
+
+        String genre = tag.getFirst(FieldKey.GENRE);
+        if (StringUtils.isNotBlank(genre)) {
+            Set<String> categories = new HashSet<>();
+            categories.add(genre);
+            builder.categories(categories);
+        }
+
+        String language = tag.getFirst(FieldKey.LANGUAGE);
+        if (StringUtils.isNotBlank(language)) {
+            builder.language(language);
+        }
+
+        String grouping = tag.getFirst(FieldKey.GROUPING);
+        if (StringUtils.isNotBlank(grouping)) {
+            builder.seriesName(grouping);
+        }
+
+        String trackNo = tag.getFirst(FieldKey.TRACK);
+        if (StringUtils.isNotBlank(trackNo)) {
+            try {
+                String trackNum = trackNo.contains("/") ? trackNo.split("/")[0] : trackNo;
+                builder.seriesNumber((float) Integer.parseInt(trackNum.trim()));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+
+        String trackTotal = tag.getFirst(FieldKey.TRACK_TOTAL);
+        if (StringUtils.isNotBlank(trackTotal)) {
+            try {
+                builder.seriesTotal(Integer.parseInt(trackTotal.trim()));
+            } catch (NumberFormatException ignored) {
+            }
+        }
+
+        return builder.build();
     }
 
     private void extractAudioHeaderInfo(AudiobookMetadata.AudiobookMetadataBuilder builder, AudioHeader header) {
@@ -218,7 +300,7 @@ public class AudiobookMetadataExtractor implements FileMetadataExtractor {
 
     public List<AudiobookMetadata.ChapterInfo> extractChaptersFromFile(File audioFile) {
         try {
-            AudioFile f = AudioFileIO.read(audioFile);
+            AudioFile f = readAudioFile(audioFile);
             return extractChapters(audioFile, f, f.getAudioHeader());
         } catch (Exception e) {
             log.warn("Failed to extract chapters from {}: {}", audioFile.getName(), e.getMessage());
@@ -353,23 +435,33 @@ public class AudiobookMetadataExtractor implements FileMetadataExtractor {
             );
             pb.redirectErrorStream(true);
 
+            Duration timeout = ffprobeTimeout();
             Process process = pb.start();
-            StringBuilder output = new StringBuilder();
+            String jsonOutput;
+            // The watchdog kills an ffprobe that hangs, which ends the read below; waitFor alone would never be reached
+            try (ProcessWatchdog.WatchedProcess watched = ProcessWatchdog.watch(process, timeout)) {
+                StringBuilder output = new StringBuilder();
 
-            try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
-                String line;
-                while ((line = reader.readLine()) != null) {
-                    output.append(line);
+                try (BufferedReader reader = new BufferedReader(new InputStreamReader(process.getInputStream()))) {
+                    String line;
+                    while ((line = reader.readLine()) != null) {
+                        output.append(line);
+                    }
                 }
-            }
 
-            int exitCode = process.waitFor();
-            if (exitCode != 0) {
-                log.debug("FFprobe exited with code {} for {}", exitCode, audioFile.getName());
-                return null;
-            }
+                boolean exited = process.waitFor(timeout.toNanos(), TimeUnit.NANOSECONDS);
+                if (!exited || watched.killed()) {
+                    log.debug("FFprobe timed out for {}", audioFile.getName());
+                    return null;
+                }
+                int exitCode = process.exitValue();
+                if (exitCode != 0) {
+                    log.debug("FFprobe exited with code {} for {}", exitCode, audioFile.getName());
+                    return null;
+                }
 
-            String jsonOutput = output.toString().trim();
+                jsonOutput = output.toString().trim();
+            }
             if (jsonOutput.isEmpty() || jsonOutput.equals("{}")) {
                 return null;
             }
@@ -424,6 +516,10 @@ public class AudiobookMetadataExtractor implements FileMetadataExtractor {
             }
 
             return chapters;
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            log.debug("Interrupted extracting chapters with ffprobe from {}", audioFile.getName());
+            return null;
         } catch (Exception e) {
             log.debug("Failed to extract chapters with ffprobe from {}: {}", audioFile.getName(), e.getMessage());
             return null;
@@ -456,27 +552,5 @@ public class AudiobookMetadataExtractor implements FileMetadataExtractor {
             }
         }
         return value / 1000.0;
-    }
-
-    @Override
-    public byte[] extractCover(File audioFile) {
-        try {
-            AudioFile f = AudioFileIO.read(audioFile);
-            Tag tag = f.getTag();
-
-            if (tag == null) {
-                return null;
-            }
-
-            Artwork artwork = tag.getFirstArtwork();
-            if (artwork != null) {
-                return artwork.getBinaryData();
-            }
-
-            return null;
-        } catch (Exception e) {
-            log.warn("Failed to extract cover from audio file {}: {}", audioFile.getName(), e.getMessage());
-            return null;
-        }
     }
 }
