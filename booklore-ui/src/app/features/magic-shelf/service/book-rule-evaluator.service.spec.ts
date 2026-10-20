@@ -1,7 +1,7 @@
 import {beforeEach, describe, expect, it} from 'vitest';
 import {TestBed} from '@angular/core/testing';
 import {BookRuleEvaluatorService} from './book-rule-evaluator.service';
-import {Book, ReadStatus} from '../../book/model/book.model';
+import {Book, BookType, ReadStatus} from '../../book/model/book.model';
 import {GroupRule} from '../component/magic-shelf-component';
 
 describe('BookRuleEvaluatorService', () => {
@@ -12,13 +12,14 @@ describe('BookRuleEvaluatorService', () => {
     service = TestBed.inject(BookRuleEvaluatorService);
   });
 
-  const createBook = (overrides: Partial<Book> = {}): Book => ({
+  // The evaluator reads the file type and size from primaryFile, so put them there
+  const createBook = ({bookType = 'EPUB', fileSizeKb, ...overrides}: Partial<Book> & {bookType?: BookType} = {}): Book => ({
     id: 1,
-    bookType: 'EPUB',
     libraryId: 1,
     libraryName: 'Test Library',
     fileName: 'test.epub',
     filePath: '/path/to/test.epub',
+    primaryFile: {id: 1, bookId: 1, bookType, fileSizeKb, fileName: 'test.epub', filePath: '/path/to/test.epub'},
     readStatus: ReadStatus.UNREAD,
     shelves: [],
     metadata: {

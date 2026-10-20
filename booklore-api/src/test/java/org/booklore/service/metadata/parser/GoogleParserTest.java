@@ -21,6 +21,7 @@ import java.util.Arrays;
 import java.util.List;
 
 import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertFalse;
 import static org.junit.jupiter.api.Assertions.assertTrue;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
@@ -77,15 +78,28 @@ class GoogleParserTest {
     }
 
     @Test
-    void testFetchMetadata_IsbnFail_FallbackToTitleAuthor() throws Exception {
-        // Mock ISBN Response (empty) then Title+Author Response (success)
-        mockResponseSequence(
-            "{\"totalItems\": 0}", 
-            "{\"totalItems\": 1, \"items\": [{\"volumeInfo\": {\"title\": \"TitleAuthor Found\", \"authors\": [\"Test Author\"]}}]}"
-        );
+    void testFetchMetadata_IsbnFail_DoesNotFallBackToTitleAuthor() throws Exception {
+        // A provided ISBN is authoritative: when it finds nothing, a title/author search could only
+        // return a different edition or a different book, so the parser stops there.
+        mockResponse("{\"totalItems\": 0}");
 
         FetchMetadataRequest request = FetchMetadataRequest.builder()
                 .isbn("1234567890")
+                .title("My Title")
+                .author("My Author")
+                .build();
+
+        List<BookMetadata> results = googleParser.fetchMetadata(Book.builder().build(), request);
+
+        assertTrue(results.isEmpty());
+        verify(httpClient, times(1)).send(any(), any());
+    }
+
+    @Test
+    void testFetchMetadata_NoIsbn_SearchesTitleAndAuthor() throws Exception {
+        mockResponse("{\"totalItems\": 1, \"items\": [{\"volumeInfo\": {\"title\": \"TitleAuthor Found\", \"authors\": [\"Test Author\"]}}]}");
+
+        FetchMetadataRequest request = FetchMetadataRequest.builder()
                 .title("My Title")
                 .author("My Author")
                 .build();
@@ -95,27 +109,21 @@ class GoogleParserTest {
         assertEquals(1, results.size());
         assertEquals("TitleAuthor Found", results.get(0).getTitle());
 
-        // Verify 2 calls
         ArgumentCaptor<HttpRequest> captor = ArgumentCaptor.forClass(HttpRequest.class);
-        verify(httpClient, times(2)).send(captor.capture(), any());
-        
-        List<HttpRequest> requests = captor.getAllValues();
-        String uri = requests.get(1).uri().toString();
+        verify(httpClient, times(1)).send(captor.capture(), any());
+        String uri = captor.getValue().uri().toString();
         assertTrue(uri.contains("inauthor") || uri.contains("inauthor%3A"));
         assertTrue(uri.contains("My") && uri.contains("Author"));
     }
 
     @Test
-    void testFetchMetadata_AllFail_FallbackToTitleOnly() throws Exception {
-        // ISBN fail, Title+Author fail, Title success
+    void testFetchMetadata_NoIsbn_TitleAuthorFail_FallbackToTitleOnly() throws Exception {
         mockResponseSequence(
-            "{\"totalItems\": 0}", // ISBN
             "{\"totalItems\": 0}", // Title+Author
             "{\"totalItems\": 1, \"items\": [{\"volumeInfo\": {\"title\": \"Title Only Found\", \"authors\": [\"Test Author\"]}}]}"  // Title
         );
 
         FetchMetadataRequest request = FetchMetadataRequest.builder()
-                .isbn("1234567890")
                 .title("My Title")
                 .author("My Author")
                 .build();
@@ -125,8 +133,11 @@ class GoogleParserTest {
         assertEquals(1, results.size());
         assertEquals("Title Only Found", results.get(0).getTitle());
 
-        // Verify 3 calls
-        verify(httpClient, times(3)).send(any(), any());
+        ArgumentCaptor<HttpRequest> captor = ArgumentCaptor.forClass(HttpRequest.class);
+        verify(httpClient, times(2)).send(captor.capture(), any());
+        String titleOnlyUri = captor.getAllValues().get(1).uri().toString();
+        assertTrue(titleOnlyUri.contains("intitle"));
+        assertFalse(titleOnlyUri.contains("inauthor"));
     }
 
     // Helper to mock single response

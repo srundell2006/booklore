@@ -1,5 +1,6 @@
 package org.booklore.service.bookdrop;
 
+import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
 import org.booklore.config.AppProperties;
 import org.booklore.mapper.BookdropFileMapper;
 import org.booklore.model.FileProcessResult;
@@ -87,6 +88,9 @@ class BookDropServiceTest {
     private FileMovingHelper fileMovingHelper;
     @Mock
     private KoboAutoShelfService koboAutoShelfService;
+
+    @Mock
+    private SidecarMetadataWriter sidecarMetadataWriter;
 
     @InjectMocks
     private BookDropService bookDropService;
