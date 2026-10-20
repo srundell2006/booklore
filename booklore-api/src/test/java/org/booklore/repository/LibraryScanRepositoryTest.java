@@ -1,0 +1,207 @@
+package org.booklore.repository;
+
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.PersistenceContext;
+import org.booklore.BookloreApplication;
+import org.booklore.model.entity.BookEntity;
+import org.booklore.model.entity.BookFileEntity;
+import org.booklore.model.entity.BookFileEntity.AudioFileChapter;
+import org.booklore.model.entity.BookMetadataEntity;
+import org.booklore.model.entity.LibraryEntity;
+import org.booklore.model.entity.LibraryPathEntity;
+import org.booklore.model.enums.BookFileType;
+import org.booklore.service.task.TaskCronService;
+import org.hibernate.Session;
+import org.hibernate.stat.Statistics;
+import org.junit.jupiter.api.BeforeEach;
+import org.junit.jupiter.api.Nested;
+import org.junit.jupiter.api.Test;
+import org.springframework.beans.factory.annotation.Autowired;
+import org.springframework.boot.test.context.SpringBootTest;
+import org.springframework.context.annotation.Bean;
+import org.springframework.context.annotation.Import;
+import org.springframework.context.annotation.Primary;
+import org.springframework.test.context.TestPropertySource;
+import org.springframework.transaction.annotation.Transactional;
+
+import java.time.Instant;
+import java.util.ArrayList;
+import java.util.List;
+
+import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.mock;
+
+/**
+ * Persistence behaviour a library rescan depends on, checked against H2.
+ */
+@SpringBootTest(classes = {
+        BookloreApplication.class
+})
+@Transactional
+@TestPropertySource(properties = {
+        "spring.flyway.enabled=false",
+        "spring.jpa.hibernate.ddl-auto=create-drop",
+        "spring.jpa.database-platform=org.hibernate.dialect.H2Dialect",
+        "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.H2Dialect",
+        "spring.jpa.properties.hibernate.generate_statistics=true",
+        "spring.datasource.url=jdbc:h2:mem:libraryscan;DB_CLOSE_DELAY=-1",
+        "spring.datasource.driver-class-name=org.h2.Driver",
+        "spring.datasource.username=sa",
+        "spring.datasource.password=",
+        "app.path-config=build/tmp/test-config",
+        "app.bookdrop-folder=build/tmp/test-bookdrop",
+        "spring.main.allow-bean-definition-overriding=true",
+        "spring.task.scheduling.enabled=false",
+        "app.task.scan-library-cron=*/1 * * * * *",
+        "app.task.process-bookdrop-cron=*/1 * * * * *",
+        "app.features.oidc-enabled=false"
+})
+@Import(LibraryScanRepositoryTest.TestConfig.class)
+class LibraryScanRepositoryTest {
+
+    @org.springframework.boot.test.context.TestConfiguration
+    public static class TestConfig {
+        @Bean("flyway")
+        @Primary
+        public org.flywaydb.core.Flyway flyway() {
+            return mock(org.flywaydb.core.Flyway.class);
+        }
+
+        @Bean
+        @Primary
+        public TaskCronService taskCronService() {
+            return mock(TaskCronService.class);
+        }
+    }
+
+    @PersistenceContext
+    private EntityManager entityManager;
+
+    @Autowired
+    private BookAdditionalFileRepository bookAdditionalFileRepository;
+
+    @Autowired
+    private BookRepository bookRepository;
+
+    private LibraryEntity library;
+    private LibraryPathEntity libraryPath;
+
+    @BeforeEach
+    void setUp() {
+        library = persist(LibraryEntity.builder().name("Books").icon("book").watch(false).build());
+        libraryPath = persist(LibraryPathEntity.builder().library(library).path("/books").build());
+    }
+
+    private Statistics statistics() {
+        return entityManager.unwrap(Session.class).getSessionFactory().getStatistics();
+    }
+
+    private <T> T persist(T entity) {
+        entityManager.persist(entity);
+        entityManager.flush();
+        return entity;
+    }
+
+    private BookEntity book(LibraryEntity owner, LibraryPathEntity path, boolean deleted) {
+        return persist(BookEntity.builder()
+                .library(owner)
+                .libraryPath(path)
+                .addedOn(Instant.now())
+                .deleted(deleted)
+                .build());
+    }
+
+    private BookFileEntity file(BookEntity book, String subPath, String name, BookFileType type, boolean bookFormat) {
+        return persist(BookFileEntity.builder()
+                .book(book)
+                .fileSubPath(subPath)
+                .fileName(name)
+                .bookType(type)
+                .isBookFormat(bookFormat)
+                .build());
+    }
+
+    private void metadata(BookEntity book, String title) {
+        persist(BookMetadataEntity.builder().book(book).bookId(book.getId()).title(title).build());
+    }
+
+    private void clear() {
+        entityManager.flush();
+        entityManager.clear();
+        statistics().clear();
+    }
+
+    @Nested
+    class AudioChapterDirtyChecking {
+
+        private Long audiobookFileId;
+        private Long audiobookBookId;
+
+        @BeforeEach
+        void persistAudiobookWithChapters() {
+            BookEntity book = book(library, libraryPath, false);
+            audiobookBookId = book.getId();
+            BookFileEntity audiobook = BookFileEntity.builder()
+                    .book(book)
+                    .fileSubPath("Author/Title")
+                    .fileName("Title")
+                    .bookType(BookFileType.AUDIOBOOK)
+                    .isBookFormat(true)
+                    .folderBased(true)
+                    .chapterCount(2)
+                    .chapters(new ArrayList<>(List.of(
+                            new AudioFileChapter(0, "Opening", 0L, 60_000L, 60_000L),
+                            new AudioFileChapter(1, "Ending", 60_000L, 90_000L, 30_000L))))
+                    .build();
+            audiobookFileId = persist(audiobook).getId();
+            clear();
+        }
+
+        @Test
+        void chaptersCompareByValue() {
+            AudioFileChapter chapter = new AudioFileChapter(0, "Opening", 0L, 60_000L, 60_000L);
+            AudioFileChapter same = new AudioFileChapter(0, "Opening", 0L, 60_000L, 60_000L);
+
+            assertThat(same).isEqualTo(chapter).hasSameHashCodeAs(chapter);
+            assertThat(List.of(same)).isEqualTo(List.of(chapter));
+            assertThat(new AudioFileChapter(0, "Opening", 0L, 60_000L, 59_999L)).isNotEqualTo(chapter);
+            assertThat(new AudioFileChapter(1, "Opening", 0L, 60_000L, 60_000L)).isNotEqualTo(chapter);
+            assertThat(new AudioFileChapter(0, null, 0L, 60_000L, 60_000L)).isNotEqualTo(chapter);
+        }
+
+        @Test
+        void loadingAnAudiobookFileWithChaptersAndFlushingIssuesNoUpdate() {
+            BookFileEntity loaded = entityManager.find(BookFileEntity.class, audiobookFileId);
+            assertThat(loaded.getChapters()).hasSize(2);
+
+            entityManager.flush();
+
+            assertThat(statistics().getEntityUpdateCount()).isZero();
+        }
+
+        @Test
+        void queryAutoFlushDoesNotUpdateLoadedAudiobookFiles() {
+            entityManager.find(BookFileEntity.class, audiobookFileId);
+
+            // A query on book_file auto-flushes, dirty-checking everything managed first; in the
+            // old one-transaction rescan every query did this against the whole library.
+            bookAdditionalFileRepository.findByBookId(audiobookBookId);
+            bookRepository.countByLibraryId(library.getId());
+
+            assertThat(statistics().getEntityUpdateCount()).isZero();
+        }
+
+        @Test
+        void changingAChapterIsStillWritten() {
+            BookFileEntity loaded = entityManager.find(BookFileEntity.class, audiobookFileId);
+            loaded.getChapters().getFirst().setTitle("Prologue");
+
+            entityManager.flush();
+
+            assertThat(statistics().getEntityUpdateCount()).isEqualTo(1);
+            entityManager.clear();
+            assertThat(entityManager.find(BookFileEntity.class, audiobookFileId).getChapters().getFirst().getTitle())
+                    .isEqualTo("Prologue");
+        }
+    }
+}

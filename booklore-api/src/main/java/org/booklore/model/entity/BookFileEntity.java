@@ -138,11 +138,17 @@ public class BookFileEntity {
         }
     }
 
+    /**
+     * Stored through {@link AudioFileChapterListConverter}. Hibernate dirty-checks converted
+     * attributes by comparing a deep copy with {@code equals}, so this needs value equality or
+     * every audiobook file row with chapters looks modified on each flush.
+     */
     @Getter
     @Setter
     @Builder
     @NoArgsConstructor
     @AllArgsConstructor
+    @EqualsAndHashCode
     public static class AudioFileChapter {
         private Integer index;
         private String title;
