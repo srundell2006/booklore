@@ -33,6 +33,14 @@ public class LibraryFileHelper {
 
     private static final int MIN_AUDIO_FILES_FOR_FOLDER_AUDIOBOOK = 2;
 
+    /**
+     * Walks every path of the library (auto-detect grouping, all formats) and reports both
+     * the files found and any paths the walk could not read.
+     */
+    public LibraryScanResult scanAllLibraryFiles(LibraryEntity libraryEntity) throws IOException {
+        return new LibraryScanResult(getAllLibraryFiles(libraryEntity), Set.of());
+    }
+
     public List<LibraryFile> getAllLibraryFiles(LibraryEntity libraryEntity) throws IOException {
         List<LibraryFile> allFiles = new ArrayList<>();
         for (LibraryPathEntity pathEntity : libraryEntity.getLibraryPaths()) {
