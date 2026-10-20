@@ -8,9 +8,14 @@ import io.documentnode.epub4j.epub.EpubReader;
 import io.documentnode.epub4j.epub.PackageDocumentReader;
 import io.documentnode.epub4j.util.ResourceUtil;
 import lombok.extern.slf4j.Slf4j;
-import net.lingala.zip4j.ZipFile;
 import net.lingala.zip4j.exception.ZipException;
+import net.lingala.zip4j.headers.HeaderReader;
+import net.lingala.zip4j.headers.HeaderUtil;
+import net.lingala.zip4j.io.inputstream.ZipInputStream;
 import net.lingala.zip4j.model.FileHeader;
+import net.lingala.zip4j.model.Zip4jConfig;
+import net.lingala.zip4j.model.ZipModel;
+import net.lingala.zip4j.util.InternalZipConstants;
 import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.booklore.model.dto.BookMetadata;
@@ -27,8 +32,10 @@ import javax.xml.parsers.DocumentBuilder;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileInputStream;
+import java.io.FileNotFoundException;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.RandomAccessFile;
 import java.net.URLDecoder;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
@@ -109,29 +116,34 @@ public class EpubMetadataExtractor implements FileMetadataExtractor {
     }
 
     /**
-     * Metadata and cover from a single open of the zip and a single parse of container.xml and the OPF,
+     * Metadata and cover from a single open of the file and a single parse of container.xml and the OPF,
      * each identical to what {@link #extractMetadata(File)} and {@link #extractCover(File)} return.
      */
     public MetadataAndCover extractMetadataAndCover(File epubFile) {
         return extract(epubFile, true, true);
     }
 
-    // Seam for tests that count how often an EPUB is opened
-    ZipFile openZip(File epubFile) {
-        return new ZipFile(epubFile);
+    // Seam for tests that watch how the EPUB file is opened and read
+    RandomAccessFile openFile(File epubFile) throws FileNotFoundException {
+        return new RandomAccessFile(epubFile, "r");
     }
 
     private MetadataAndCover extract(File epubFile, boolean withMetadata, boolean withCover) {
-        try (ZipFile zip = openZip(epubFile)) {
-            List<FileHeader> headers;
+        RandomAccessFile file;
+        try {
+            file = openFile(epubFile);
+        } catch (FileNotFoundException e) {
+            // zip4j reads a missing file as an empty zip, which has neither metadata nor cover and logs nothing
+            if (!epubFile.exists()) return new MetadataAndCover(null, null);
+            return unreadableZip(epubFile, e, withMetadata, withCover);
+        }
+
+        try (file) {
+            EpubZip zip;
             try {
-                headers = zip.getFileHeaders();
-            } catch (ZipException e) {
-                if (withMetadata) {
-                    log.error("Failed to read metadata from EPUB file {}: {}", epubFile.getName(), e.getMessage(), e);
-                }
-                // zip4j cannot read the central directory, but epub4j reads entries in sequence and may still get through
-                return new MetadataAndCover(null, withCover ? findCoverWithFullEpub4jRead(epubFile) : null);
+                zip = new EpubZip(file);
+            } catch (IOException e) {
+                return unreadableZip(epubFile, e, withMetadata, withCover);
             }
 
             // container.xml and OPF bytes as read, so epub4j's cover lookup does not read them a second time
@@ -151,7 +163,7 @@ public class EpubMetadataExtractor implements FileMetadataExtractor {
                 }
             }
 
-            byte[] cover = withCover ? findCover(zip, headers, opf, entriesRead) : null;
+            byte[] cover = withCover ? findCover(zip, opf, entriesRead) : null;
             return new MetadataAndCover(metadata, cover);
         } catch (Exception e) {
             log.error("Failed to read EPUB file {}: {}", epubFile.getName(), e.getMessage(), e);
@@ -160,11 +172,22 @@ public class EpubMetadataExtractor implements FileMetadataExtractor {
     }
 
     /**
+     * A file that cannot be opened or whose central directory zip4j cannot read: no metadata, but epub4j reads entries
+     * in sequence and may still get through to a cover.
+     */
+    private MetadataAndCover unreadableZip(File epubFile, IOException e, boolean withMetadata, boolean withCover) {
+        if (withMetadata) {
+            log.error("Failed to read metadata from EPUB file {}: {}", epubFile.getName(), e.getMessage(), e);
+        }
+        return new MetadataAndCover(null, withCover ? findCoverWithFullEpub4jRead(epubFile) : null);
+    }
+
+    /**
      * Finds the OPF through container.xml and parses it. Null when container.xml or the OPF is missing.
      */
-    private OpfPackage readOpfPackage(ZipFile zip, Map<FileHeader, byte[]> entriesRead) throws Exception {
+    private OpfPackage readOpfPackage(EpubZip zip, Map<FileHeader, byte[]> entriesRead) throws Exception {
         DocumentBuilder builder = SecureXmlUtils.createSecureDocumentBuilder(true);
-        FileHeader containerHdr = zip.getFileHeader(CONTAINER_PATH);
+        FileHeader containerHdr = zip.header(CONTAINER_PATH);
         if (containerHdr == null) return null;
 
         Document containerDoc = builder.parse(new ByteArrayInputStream(readEntry(zip, containerHdr, entriesRead)));
@@ -174,18 +197,16 @@ public class EpubMetadataExtractor implements FileMetadataExtractor {
         String opfPath = ((Element) roots.item(0)).getAttribute("full-path");
         if (StringUtils.isBlank(opfPath)) return null;
 
-        FileHeader opfHdr = zip.getFileHeader(opfPath);
+        FileHeader opfHdr = zip.header(opfPath);
         if (opfHdr == null) return null;
 
         return new OpfPackage(opfPath, builder.parse(new ByteArrayInputStream(readEntry(zip, opfHdr, entriesRead))));
     }
 
-    private static byte[] readEntry(ZipFile zip, FileHeader header, Map<FileHeader, byte[]> entriesRead) throws IOException {
-        try (InputStream in = zip.getInputStream(header)) {
-            byte[] data = in.readAllBytes();
-            entriesRead.put(header, data);
-            return data;
-        }
+    private static byte[] readEntry(EpubZip zip, FileHeader header, Map<FileHeader, byte[]> entriesRead) throws IOException {
+        byte[] data = zip.read(header);
+        entriesRead.put(header, data);
+        return data;
     }
 
     private BookMetadata parseMetadata(Document doc, File epubFile) {
@@ -573,11 +594,11 @@ public class EpubMetadataExtractor implements FileMetadataExtractor {
      * the OPF already parsed, and epub4j's decision comes from its own OPF reader run over lazy resources, so beyond
      * container.xml and the OPF only cover candidates are read.
      */
-    private byte[] findCover(ZipFile zip, List<FileHeader> headers, OpfPackage opf, Map<FileHeader, byte[]> entriesRead) {
+    private byte[] findCover(EpubZip zip, OpfPackage opf, Map<FileHeader, byte[]> entriesRead) {
         byte[] image = extractFileFromZip(zip, findCoverImageHrefInOpf(opf));
         if (image != null) return image;
 
-        Book epub = readPackageWithEpub4j(zip, headers, entriesRead);
+        Book epub = readPackageWithEpub4j(zip, entriesRead);
         if (epub != null && epub.getCoverImage() != null) {
             image = readResource(epub.getCoverImage());
             if (image != null) return image;
@@ -596,12 +617,12 @@ public class EpubMetadataExtractor implements FileMetadataExtractor {
             }
         }
 
-        return findCoverInZipByHeuristic(zip, headers);
+        return findCoverInZipByHeuristic(zip);
     }
 
     /**
-     * Last resort for a zip whose central directory zip4j cannot read: epub4j's full read of every entry, then the
-     * steps of {@link #findCover} that do not need zip4j.
+     * Last resort for a file that cannot be opened or whose central directory zip4j cannot read: epub4j's full read
+     * of every entry, then the steps of {@link #findCover} that do not need zip4j.
      */
     private byte[] findCoverWithFullEpub4jRead(File epubFile) {
         Book epub;
@@ -620,17 +641,17 @@ public class EpubMetadataExtractor implements FileMetadataExtractor {
      * the cover image or the resources), over resources that read from the open zip only when asked for their data.
      * Null where epub4j would have thrown.
      */
-    private Book readPackageWithEpub4j(ZipFile zip, List<FileHeader> headers, Map<FileHeader, byte[]> entriesRead) {
+    private Book readPackageWithEpub4j(EpubZip zip, Map<FileHeader, byte[]> entriesRead) {
         try {
             Resources resources = new Resources();
-            for (FileHeader header : headers) {
+            for (FileHeader header : zip.headers()) {
                 String name = header.getFileName();
                 // epub4j's streaming read skips directories by name, as zip local headers carry no attributes
                 if (name.endsWith("/") || name.endsWith("\\")) continue;
                 byte[] data = entriesRead.get(header);
                 resources.add(data != null
                         ? new Resource(data, name)
-                        : new LazyResource(href -> zip.getInputStream(header), name));
+                        : new LazyResource(href -> new ByteArrayInputStream(zip.read(header)), name));
             }
             resources.remove("mimetype");
             Resource opfResource = resources.remove(findOpfPathAsEpub4j(resources));
@@ -732,14 +753,12 @@ public class EpubMetadataExtractor implements FileMetadataExtractor {
         return null;
     }
 
-    private byte[] findCoverInZipByHeuristic(ZipFile zip, List<FileHeader> headers) {
+    private byte[] findCoverInZipByHeuristic(EpubZip zip) {
         try {
-            for (FileHeader header : headers) {
+            for (FileHeader header : zip.headers()) {
                 String name = header.getFileName().toLowerCase();
                 if (name.contains("cover") && (name.endsWith(".jpg") || name.endsWith(".jpeg") || name.endsWith(".png") || name.endsWith(".webp"))) {
-                    try (InputStream is = zip.getInputStream(header)) {
-                        return is.readAllBytes();
-                    }
+                    return zip.read(header);
                 }
             }
         } catch (Exception e) {
@@ -772,17 +791,77 @@ public class EpubMetadataExtractor implements FileMetadataExtractor {
         return String.join("/", parts);
     }
 
-    private byte[] extractFileFromZip(ZipFile zip, String path) {
+    private byte[] extractFileFromZip(EpubZip zip, String path) {
         if (path == null) return null;
         try {
-            FileHeader header = zip.getFileHeader(path);
+            FileHeader header = zip.header(path);
             if (header == null) return null;
-            try (InputStream is = zip.getInputStream(header)) {
-                return is.readAllBytes();
-            }
+            return zip.read(header);
         } catch (Exception e) {
             log.warn("Failed to extract file {} from zip", path);
             return null;
+        }
+    }
+
+    /**
+     * The EPUB's zip as zip4j's ZipFile reads it, but through the one file handle held for the whole extraction:
+     * ZipFile opens the file again to read the central directory and again for every entry, each a round trip on a
+     * network share. Headers, entry lookup and entry streams are zip4j's own, so names, inflating, CRC checks and
+     * failures are as before. Entries are read one at a time, each to the end before the next is opened.
+     * <p>
+     * One difference: every entry is read from this file. ZipFile looks for the other parts of a split archive beside
+     * it, so it could read nothing from an EPUB whose end record claims to be a later part, where epub4j's full read,
+     * reading the file front to back, still found the cover.
+     */
+    private static final class EpubZip {
+
+        private final RandomAccessFile file;
+        private final ZipModel model;
+
+        EpubZip(RandomAccessFile file) throws IOException {
+            this.file = file;
+            // ZipFile's defaults: charset left to zip4j, its standard buffer, UTF-8 passwords
+            this.model = new HeaderReader().readAllHeaders(file, new Zip4jConfig(null, InternalZipConstants.BUFF_SIZE, true));
+        }
+
+        // An empty file has no central directory, which ZipFile reports as no entries
+        List<FileHeader> headers() {
+            return model.getCentralDirectory() == null ? List.of() : model.getCentralDirectory().getFileHeaders();
+        }
+
+        FileHeader header(String name) throws ZipException {
+            return model.getCentralDirectory() == null ? null : HeaderUtil.getFileHeader(model, name);
+        }
+
+        byte[] read(FileHeader header) throws IOException {
+            try (InputStream in = open(header)) {
+                return in.readAllBytes();
+            }
+        }
+
+        // What UnzipUtil.createZipInputStream does, reading from the open file instead of opening it again
+        private InputStream open(FileHeader header) throws IOException {
+            file.seek(header.getOffsetLocalHeader());
+            ZipInputStream in = new ZipInputStream(fromCurrentPosition(), (char[]) null);
+            if (in.getNextEntry(header, false) == null) {
+                throw new ZipException("Could not locate local file header for corresponding file header");
+            }
+            return in;
+        }
+
+        // The file from wherever it was last positioned; closing the stream leaves the file open for the next entry
+        private InputStream fromCurrentPosition() {
+            return new InputStream() {
+                @Override
+                public int read() throws IOException {
+                    return file.read();
+                }
+
+                @Override
+                public int read(byte[] b, int off, int len) throws IOException {
+                    return file.read(b, off, len);
+                }
+            };
         }
     }
 }

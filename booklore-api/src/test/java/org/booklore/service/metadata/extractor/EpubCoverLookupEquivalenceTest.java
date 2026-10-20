@@ -1,17 +1,21 @@
 package org.booklore.service.metadata.extractor;
 
 import net.lingala.zip4j.ZipFile;
-import net.lingala.zip4j.io.inputstream.ZipInputStream;
 import net.lingala.zip4j.model.FileHeader;
 import org.booklore.model.dto.BookMetadata;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.condition.DisabledOnOs;
+import org.junit.jupiter.api.condition.OS;
 import org.junit.jupiter.api.io.TempDir;
 
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.FileNotFoundException;
 import java.io.IOException;
+import java.io.RandomAccessFile;
+import java.io.UncheckedIOException;
 import java.nio.ByteBuffer;
 import java.nio.ByteOrder;
 import java.nio.charset.StandardCharsets;
@@ -19,17 +23,20 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.Arrays;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.atomic.AtomicInteger;
+import java.util.function.Function;
 import java.util.zip.CRC32;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 
 /**
  * The cover lookup now shares one zip open with metadata extraction and reads epub4j's decision without epub4j's
@@ -497,59 +504,104 @@ class EpubCoverLookupEquivalenceTest {
             assertThat(sameCoverAsBefore(notZip)).isNull();
             assertThat(sameCoverAsBefore(missing)).isNull();
         }
-    }
-
-    @Nested
-    class SingleOpen {
 
         @Test
-        void metadataAndCoverComeFromOneZipOpen() throws IOException {
-            AtomicInteger opens = new AtomicInteger();
-            EpubMetadataExtractor counting = new EpubMetadataExtractor() {
+        void fileThatCannotBeOpenedFallsBackToEpub4jFullRead() throws IOException {
+            File epub = new EpubBuilder()
+                    .container("OEBPS/content.opf")
+                    .text("OEBPS/content.opf", opf(
+                            "<meta name=\"cover\" content=\"front\"/>",
+                            DISTRACTOR + "<item id=\"front\" href=\"images/front.jpg\" media-type=\"image/jpeg\"/>"))
+                    .image("OEBPS/images/cover-thumb.jpg")
+                    .image("OEBPS/images/front.jpg")
+                    .write();
+            // As zip4j did on a file it may not read: no metadata, and epub4j's full read is the only way left to a cover
+            EpubMetadataExtractor deniedOpen = new EpubMetadataExtractor() {
                 @Override
-                ZipFile openZip(File epubFile) {
-                    opens.incrementAndGet();
-                    return super.openZip(epubFile);
+                RandomAccessFile openFile(File epubFile) throws FileNotFoundException {
+                    throw new FileNotFoundException(epubFile + " (Permission denied)");
                 }
             };
+
+            EpubMetadataExtractor.MetadataAndCover result = deniedOpen.extractMetadataAndCover(epub);
+
+            assertThat(result.metadata()).isNull();
+            assertThat(result.cover()).isEqualTo(imageBytes("OEBPS/images/front.jpg"));
+        }
+
+        @Test
+        void zipClaimingToBeAPartOfASplitArchiveIsReadFromTheEpubItself() throws IOException {
             File epub = new EpubBuilder()
                     .container("OEBPS/content.opf")
                     .text("OEBPS/content.opf", opf(
                             "<meta name=\"cover\" content=\"front\"/>",
                             "<item id=\"front\" href=\"images/front.jpg\" media-type=\"image/jpeg\"/>"))
                     .image("OEBPS/images/front.jpg")
+                    .claimSecondDiskOfASplitArchive()
+                    .write();
+            // Intended difference: zip4j's ZipFile looks for the first part beside the EPUB, so it read no entry and lost the metadata
+            try (ZipFile zip = new ZipFile(epub)) {
+                assertThat(zip.isSplitArchive()).isTrue();
+                assertThatThrownBy(() -> zip.getInputStream(zip.getFileHeader("META-INF/container.xml"))).isInstanceOf(FileNotFoundException.class);
+            }
+
+            assertThat(sameCoverAsBefore(epub)).isEqualTo(imageBytes("OEBPS/images/front.jpg"));
+            assertThat(extractor.extractMetadata(epub).getTitle()).isEqualTo("Fixture");
+        }
+    }
+
+    @Nested
+    class SingleOpen {
+
+        private final AtomicInteger opens = new AtomicInteger();
+        private final AtomicInteger stats = new AtomicInteger();
+        private Path movedAside;
+
+        // Moves the file aside as soon as it is open, so any other open of its path, by zip4j, epub4j or anything else, finds nothing
+        private final EpubMetadataExtractor openOnceThenMoveAside = new EpubMetadataExtractor() {
+            @Override
+            RandomAccessFile openFile(File epubFile) throws FileNotFoundException {
+                opens.incrementAndGet();
+                RandomAccessFile file = super.openFile(epubFile);
+                try {
+                    movedAside = Files.move(epubFile.toPath(), epubFile.toPath().resolveSibling("moved-aside.epub"));
+                } catch (IOException e) {
+                    throw new UncheckedIOException(e);
+                }
+                return file;
+            }
+        };
+
+        @Test
+        @DisabledOnOs(value = OS.WINDOWS, disabledReason = "Windows cannot move a file that is open")
+        void everyEntryPointOpensTheFileOnceAndNeverStatsIt() throws IOException {
+            File epub2 = new EpubBuilder()
+                    .container("OEBPS/content.opf")
+                    .text("OEBPS/content.opf", opf(
+                            "<meta name=\"cover\" content=\"front\"/>",
+                            DISTRACTOR + "<item id=\"front\" href=\"images/front.jpg\" media-type=\"image/jpeg\"/>"))
+                    .image("OEBPS/images/cover-thumb.jpg")
+                    .image("OEBPS/images/front.jpg")
+                    .write();
+            File epub3 = new EpubBuilder()
+                    .container("OEBPS/content.opf")
+                    .text("OEBPS/content.opf", opf("", "<item id=\"c\" href=\"images/front.jpg\" media-type=\"image/jpeg\" properties=\"cover-image\"/>"))
+                    .image("OEBPS/images/front.jpg")
+                    .write();
+            File zipNameOnly = new EpubBuilder()
+                    .container("OEBPS/content.opf")
+                    .text("OEBPS/content.opf", opf("", "<item id=\"text\" href=\"chapter1.xhtml\" media-type=\"application/xhtml+xml\"/>"))
+                    .text("OEBPS/chapter1.xhtml", "<html/>")
+                    .image("OEBPS/images/cover.png")
                     .write();
 
-            EpubMetadataExtractor.MetadataAndCover result = counting.extractMetadataAndCover(epub);
-
-            assertThat(opens).hasValue(1);
-            assertThat(result.metadata().getTitle()).isEqualTo("Fixture");
-            assertThat(result.cover()).isEqualTo(imageBytes("OEBPS/images/front.jpg"));
-
-            opens.set(0);
-            counting.extractCover(epub);
-            assertThat(opens).hasValue(1);
-
-            opens.set(0);
-            counting.extractMetadata(epub);
-            assertThat(opens).hasValue(1);
+            assertOneOpenGives(epub2, imageBytes("OEBPS/images/front.jpg"));
+            assertOneOpenGives(epub3, imageBytes("OEBPS/images/front.jpg"));
+            assertOneOpenGives(zipNameOnly, imageBytes("OEBPS/images/cover.png"));
         }
 
         @Test
         void epub2CoverReadsOnlyContainerOpfAndTheCover() throws IOException {
-            List<String> entriesRead = new ArrayList<>();
-            EpubMetadataExtractor recording = new EpubMetadataExtractor() {
-                @Override
-                ZipFile openZip(File epubFile) {
-                    return new ZipFile(epubFile) {
-                        @Override
-                        public ZipInputStream getInputStream(FileHeader fileHeader) throws IOException {
-                            entriesRead.add(fileHeader.getFileName());
-                            return super.getInputStream(fileHeader);
-                        }
-                    };
-                }
-            };
             File epub = new EpubBuilder()
                     .container("OEBPS/content.opf")
                     .text("OEBPS/content.opf", opf(
@@ -563,11 +615,66 @@ class EpubCoverLookupEquivalenceTest {
                     .image("OEBPS/images/cover-thumb.jpg")
                     .image("OEBPS/images/front.jpg")
                     .write();
+            Map<Long, String> entryAtOffset = new HashMap<>();
+            try (ZipFile zip = new ZipFile(epub)) {
+                for (FileHeader header : zip.getFileHeaders()) {
+                    entryAtOffset.put(header.getOffsetLocalHeader(), header.getFileName());
+                }
+            }
+            // Every entry is read by seeking the one open file to the entry's local header
+            List<String> entriesRead = new ArrayList<>();
+            EpubMetadataExtractor recording = new EpubMetadataExtractor() {
+                @Override
+                RandomAccessFile openFile(File epubFile) throws FileNotFoundException {
+                    return new RandomAccessFile(epubFile, "r") {
+                        @Override
+                        public void seek(long pos) throws IOException {
+                            if (entryAtOffset.containsKey(pos)) entriesRead.add(entryAtOffset.get(pos));
+                            super.seek(pos);
+                        }
+                    };
+                }
+            };
 
             EpubMetadataExtractor.MetadataAndCover result = recording.extractMetadataAndCover(epub);
 
             assertThat(result.cover()).isEqualTo(imageBytes("OEBPS/images/front.jpg"));
             assertThat(entriesRead).containsExactly("META-INF/container.xml", "OEBPS/content.opf", "OEBPS/images/front.jpg");
+        }
+
+        private void assertOneOpenGives(File epub, byte[] cover) throws IOException {
+            EpubMetadataExtractor.MetadataAndCover both = callOnce(epub, openOnceThenMoveAside::extractMetadataAndCover);
+            assertThat(both.metadata().getTitle()).isEqualTo("Fixture");
+            assertThat(both.cover()).isEqualTo(cover);
+
+            assertThat(callOnce(epub, openOnceThenMoveAside::extractCover)).isEqualTo(cover);
+            assertThat(callOnce(epub, openOnceThenMoveAside::extractMetadata).getTitle()).isEqualTo("Fixture");
+        }
+
+        // One call on a File that counts the stats zip4j made before every open, putting the file back afterwards
+        private <T> T callOnce(File epub, Function<File, T> call) throws IOException {
+            opens.set(0);
+            stats.set(0);
+            File watched = new File(epub.getPath()) {
+                @Override
+                public boolean exists() {
+                    stats.incrementAndGet();
+                    return super.exists();
+                }
+
+                @Override
+                public boolean canRead() {
+                    stats.incrementAndGet();
+                    return super.canRead();
+                }
+            };
+            try {
+                return call.apply(watched);
+            } finally {
+                assertThat(opens).as("opens of %s", epub.getName()).hasValue(1);
+                assertThat(stats).as("stats of %s", epub.getName()).hasValue(0);
+                Files.move(movedAside, epub.toPath());
+            }
         }
     }
 
@@ -618,6 +725,7 @@ class EpubCoverLookupEquivalenceTest {
         private final Map<String, byte[]> entries = new LinkedHashMap<>();
         private final Set<String> corrupt = new HashSet<>();
         private boolean cutCentralDirectory;
+        private boolean secondDisk;
 
         EpubBuilder() {
             text("mimetype", "application/epub+zip");
@@ -656,6 +764,12 @@ class EpubCoverLookupEquivalenceTest {
             return this;
         }
 
+        // Marks the end of central directory as the second disk of a split archive, every entry staying on the first
+        EpubBuilder claimSecondDiskOfASplitArchive() {
+            secondDisk = true;
+            return this;
+        }
+
         File write() throws IOException {
             ByteArrayOutputStream bytes = new ByteArrayOutputStream();
             try (ZipOutputStream zos = new ZipOutputStream(bytes)) {
@@ -677,6 +791,9 @@ class EpubCoverLookupEquivalenceTest {
             for (String name : corrupt) {
                 int at = indexOf(zip, imageBytes(name));
                 zip[at + imageBytes(name).length - 1] ^= 0x01;
+            }
+            if (secondDisk) {
+                ByteBuffer.wrap(zip, zip.length - 22 + 4, 4).order(ByteOrder.LITTLE_ENDIAN).putShort((short) 1).putShort((short) 1);
             }
             if (cutCentralDirectory) {
                 int centralDirectoryOffset = ByteBuffer.wrap(zip, zip.length - 22 + 16, 4).order(ByteOrder.LITTLE_ENDIAN).getInt();
