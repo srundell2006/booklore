@@ -15,7 +15,7 @@ import java.util.Map;
  * Builds small PalmDB files with a MOBI header, an EXTH block and image records, laid out where
  * MobiBaseMetadataExtractor looks for them.
  */
-final class MobiFixture {
+public final class MobiFixture {
 
     private static final int MOBI_HEADER_LENGTH = 232;
 
@@ -25,42 +25,42 @@ final class MobiFixture {
     private final List<byte[]> images = new ArrayList<>();
     private boolean mobiIdentifier = true;
 
-    static MobiFixture book() {
+    public static MobiFixture book() {
         return new MobiFixture();
     }
 
-    MobiFixture title(String title) {
+    public MobiFixture title(String title) {
         this.title = title;
         return this;
     }
 
     /** 2 marks a KF8 (AZW3) book. */
-    MobiFixture mobiType(int mobiType) {
+    public MobiFixture mobiType(int mobiType) {
         this.mobiType = mobiType;
         return this;
     }
 
-    MobiFixture exth(int type, String value) {
+    public MobiFixture exth(int type, String value) {
         exth.computeIfAbsent(type, t -> new ArrayList<>()).add(value.getBytes(StandardCharsets.UTF_8));
         return this;
     }
 
-    MobiFixture exthInt(int type, int value) {
+    public MobiFixture exthInt(int type, int value) {
         exth.computeIfAbsent(type, t -> new ArrayList<>()).add(ByteBuffer.allocate(4).putInt(value).array());
         return this;
     }
 
-    MobiFixture image(byte[] image) {
+    public MobiFixture image(byte[] image) {
         images.add(image);
         return this;
     }
 
-    MobiFixture withoutMobiIdentifier() {
+    public MobiFixture withoutMobiIdentifier() {
         mobiIdentifier = false;
         return this;
     }
 
-    Path writeTo(Path file) throws IOException {
+    public Path writeTo(Path file) throws IOException {
         List<byte[]> records = new ArrayList<>();
         records.add(record0());
         records.add("Some text of the book.".getBytes(StandardCharsets.UTF_8));
