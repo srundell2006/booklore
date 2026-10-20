@@ -2,10 +2,14 @@ package org.booklore.service.metadata.extractor;
 
 import org.booklore.model.dto.BookMetadata;
 import org.booklore.model.dto.ComicMetadata;
+import org.booklore.util.CbxTestArchives;
+import org.booklore.util.CbxTestArchives.Entry;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -20,6 +24,10 @@ import java.util.zip.ZipOutputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.booklore.util.CbxTestArchives.comicInfo;
+import static org.booklore.util.CbxTestArchives.dir;
+import static org.booklore.util.CbxTestArchives.file;
+import static org.booklore.util.CbxTestArchives.imageFile;
 
 class CbxMetadataExtractorTest {
 
@@ -1363,6 +1371,127 @@ class CbxMetadataExtractorTest {
             byte[] cover = extractor.extractCover(cbzPath.toFile());
             assertThat(cover).isNotNull();
             assertThat(cover.length).isGreaterThan(0);
+        }
+    }
+
+    enum Format {
+        CBZ(".cbz"),
+        CB7(".cb7"),
+        CBR(".cbr");
+
+        private final String extension;
+
+        Format(String extension) {
+            this.extension = extension;
+        }
+    }
+
+    private File archive(Format format, String baseName, Entry... entries) throws IOException {
+        Path path = tempDir.resolve(baseName + format.extension);
+        switch (format) {
+            case CBZ -> CbxTestArchives.zip(path, entries);
+            case CB7 -> CbxTestArchives.sevenZip(path, entries);
+            case CBR -> CbxTestArchives.rar(path, entries);
+        }
+        return path.toFile();
+    }
+
+    @Nested
+    class ArchiveFormats {
+
+        @ParameterizedTest
+        @EnumSource(Format.class)
+        void readsComicInfoAmongNestedImagesAndOtherEntries(Format format) throws IOException {
+            File file = archive(format, "nested",
+                    dir("pages"),
+                    imageFile("pages/002.jpg", 2),
+                    file("notes.txt", "not metadata"),
+                    imageFile("pages/001.jpg", 1),
+                    file("ComicInfo.xml", comicInfo("""
+                            <Title>Nested</Title>
+                            <Series>Format Series</Series>
+                            <Number>3</Number>
+                            <Writer>Jane Doe; John Roe</Writer>
+                            """)));
+
+            BookMetadata metadata = extractor.extractMetadata(file);
+
+            assertThat(metadata.getTitle()).isEqualTo("Nested");
+            assertThat(metadata.getSeriesName()).isEqualTo("Format Series");
+            assertThat(metadata.getSeriesNumber()).isEqualTo(3f);
+            assertThat(metadata.getAuthors()).containsExactlyInAnyOrder("Jane Doe", "John Roe");
+            assertThat(metadata.getComicMetadata().getIssueNumber()).isEqualTo("3");
+        }
+
+        @ParameterizedTest
+        @EnumSource(Format.class)
+        void findsComicInfoInASubfolderRegardlessOfCase(Format format) throws IOException {
+            File file = archive(format, "subfolder",
+                    imageFile("001.jpg", 1),
+                    dir("meta"),
+                    file("meta/COMICINFO.Xml", comicInfo("<Title>In Subfolder</Title>")));
+
+            assertThat(extractor.extractMetadata(file).getTitle()).isEqualTo("In Subfolder");
+        }
+
+        @ParameterizedTest
+        @EnumSource(Format.class)
+        void firstComicInfoInArchiveOrderWins(Format format) throws IOException {
+            File file = archive(format, "two-infos",
+                    file("z/ComicInfo.xml", comicInfo("<Title>First In Archive</Title>")),
+                    imageFile("001.jpg", 1),
+                    file("ComicInfo.xml", comicInfo("<Title>Root</Title>")));
+
+            assertThat(extractor.extractMetadata(file).getTitle()).isEqualTo("First In Archive");
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = Format.class, names = {"CBZ", "CB7"})
+        void skipsDirectoryNamedComicInfo(Format format) throws IOException {
+            File file = archive(format, "dir-info",
+                    dir("ComicInfo.xml"),
+                    file("ComicInfo.xml/readme.txt", "inside a directory"),
+                    file("real/ComicInfo.xml", comicInfo("<Title>Real One</Title>")));
+
+            assertThat(extractor.extractMetadata(file).getTitle()).isEqualTo("Real One");
+        }
+
+        @ParameterizedTest
+        @EnumSource(Format.class)
+        void fallsBackToFileNameWithoutComicInfo(Format format) throws IOException {
+            File file = archive(format, "No_Info-01", imageFile("001.jpg", 1), file("ComicInfo.txt", "not xml"));
+
+            BookMetadata metadata = extractor.extractMetadata(file);
+
+            assertThat(metadata.getTitle()).isEqualTo("No_Info-01");
+            assertThat(metadata.getAuthors()).isNull();
+        }
+
+        @ParameterizedTest
+        @EnumSource(Format.class)
+        void fallsBackToFileNameForMalformedComicInfo(Format format) throws IOException {
+            File file = archive(format, "Malformed-01", file("ComicInfo.xml", "<ComicInfo><Title>open"), imageFile("001.jpg", 1));
+
+            assertThat(extractor.extractMetadata(file).getTitle()).isEqualTo("Malformed-01");
+        }
+
+        @ParameterizedTest
+        @EnumSource(Format.class)
+        void fallsBackToFileNameForUnreadableArchive(Format format) throws IOException {
+            Path path = tempDir.resolve("Unreadable-01" + format.extension);
+            Files.writeString(path, "this is not an archive of any kind");
+
+            assertThat(extractor.extractMetadata(path.toFile()).getTitle()).isEqualTo("Unreadable-01");
+        }
+
+        @Test
+        void detectsTypeByContentNotExtension() throws IOException {
+            File sevenZipNamedCbz = archive(Format.CB7, "actually-7z",
+                    file("ComicInfo.xml", comicInfo("<Title>Seven Zip Inside</Title>")));
+            File renamed = tempDir.resolve("actually-7z.cbz").toFile();
+            assertThat(sevenZipNamedCbz.renameTo(renamed)).isTrue();
+
+            assertThat(extractor.extractMetadata(renamed).getTitle()).isEqualTo("Seven Zip Inside");
         }
     }
 
