@@ -22,6 +22,7 @@ import org.booklore.service.monitoring.MonitoringRegistrationService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionTemplate;
 
+import java.io.IOException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
@@ -128,11 +129,10 @@ public class FileMoveService {
             String pattern = fileMoveHelper.getFileNamingPattern(targetLibrary);
             Path newFilePath = fileMoveHelper.generateNewFilePath(bookEntity, libraryPathEntity, pattern);
 
-            if (currentPrimaryFilePath.equals(newFilePath)) {
+            if (FileMoveHelper.isSamePathIgnoringNormalization(currentPrimaryFilePath, newFilePath)) {
                 return;
             }
 
-            String newFileSubPath = fileMoveHelper.extractSubPath(newFilePath, libraryPathEntity);
             Path targetParentDir = newFilePath.getParent();
 
             if (targetParentDir == null) {
@@ -150,21 +150,16 @@ public class FileMoveService {
                 }
             }
 
-            for (var bookFile : bookEntity.getBookFiles()) {
-                Path sourcePath = bookFile.getFullFilePath();
-                Path targetPath;
-                if (bookFile.isBook()) {
-                    targetPath = fileMoveHelper.generateNewFilePath(bookEntity, bookFile, libraryPathEntity, pattern);
-                } else {
-                    targetPath = targetParentDir.resolve(bookFile.getFileName());
-                }
+            // Work out every file's target, and leave the whole book in place if one of them is taken
+            List<FileTarget> fileTargets = planFileTargets(bookEntity, libraryPathEntity, pattern, targetParentDir);
+            if (!targetsAreFree(bookId, fileTargets)) {
+                return;
+            }
 
-                if (sourcePath.equals(targetPath)) {
-                    continue;
-                }
-
+            for (FileTarget fileTarget : fileTargets) {
+                Path sourcePath = fileTarget.source();
                 Path tempPath = fileMoveHelper.moveFileWithBackup(sourcePath);
-                plannedMovesByBookFileId.put(bookFile.getId(), new PlannedMove(sourcePath, tempPath, targetPath));
+                plannedMovesByBookFileId.put(fileTarget.bookFileId(), new PlannedMove(sourcePath, tempPath, fileTarget.target()));
                 if (sourcePath.getParent() != null) {
                     sourceParentsToCleanup.add(sourcePath.getParent());
                 }
@@ -174,6 +169,7 @@ public class FileMoveService {
                 return;
             }
 
+            Map<Long, Path> finalPathsByBookFileId = finalPaths(bookEntity, fileTargets);
             List<PlannedMove> committedMoves = new ArrayList<>();
 
             // Commit file moves FIRST before updating database
@@ -187,14 +183,9 @@ public class FileMoveService {
             try {
                 transactionTemplate.executeWithoutResult(status -> {
                     for (var bookFile : bookEntity.getBookFiles()) {
-                        String newFileName;
-                        if (bookFile.isBook()) {
-                            Path targetPath = fileMoveHelper.generateNewFilePath(bookEntity, bookFile, libraryPathEntity, pattern);
-                            newFileName = targetPath.getFileName().toString();
-                        } else {
-                            newFileName = bookFile.getFileName();
-                        }
-                        bookFileRepository.updateFileNameAndSubPath(bookFile.getId(), newFileName, newFileSubPath);
+                        Path finalPath = finalPathsByBookFileId.get(bookFile.getId());
+                        bookFileRepository.updateFileNameAndSubPath(bookFile.getId(), finalPath.getFileName().toString(),
+                                fileMoveHelper.extractSubPath(finalPath, libraryPathEntity));
                     }
 
                     bookRepository.updateLibrary(bookEntity.getId(), targetLibrary.getId(), libraryPathEntity);
@@ -278,7 +269,7 @@ public class FileMoveService {
             Path currentPrimaryFilePath = bookWithFiles.getFullFilePath();
             Path expectedPrimaryFilePath = fileMoveHelper.generateNewFilePath(bookWithFiles, bookWithFiles.getLibraryPath(), pattern);
 
-            if (currentPrimaryFilePath.equals(expectedPrimaryFilePath)) {
+            if (FileMoveHelper.isSamePathIgnoringNormalization(currentPrimaryFilePath, expectedPrimaryFilePath)) {
                 return FileMoveResult.builder().moved(false).build();
             }
 
@@ -302,6 +293,12 @@ public class FileMoveService {
                 }
             }
 
+            // Work out every file's target, and leave the whole book in place if one of them is taken
+            List<FileTarget> fileTargets = planFileTargets(bookWithFiles, bookWithFiles.getLibraryPath(), pattern, targetParentDir);
+            if (!targetsAreFree(bookWithFiles.getId(), fileTargets)) {
+                return FileMoveResult.builder().moved(false).build();
+            }
+
             if (isLibraryMonitoredWhenCalled) {
                 log.debug("Unregistering library {} before moving files", libraryId);
                 fileMoveHelper.unregisterLibrary(libraryId);
@@ -309,21 +306,10 @@ public class FileMoveService {
             }
 
             // Stage all files to temp locations
-            for (var bookFile : bookWithFiles.getBookFiles()) {
-                Path sourcePath = bookFile.getFullFilePath();
-                Path targetPath;
-                if (bookFile.isBook()) {
-                    targetPath = fileMoveHelper.generateNewFilePath(bookWithFiles, bookFile, bookWithFiles.getLibraryPath(), pattern);
-                } else {
-                    targetPath = targetParentDir.resolve(bookFile.getFileName());
-                }
-
-                if (sourcePath.equals(targetPath)) {
-                    continue;
-                }
-
+            for (FileTarget fileTarget : fileTargets) {
+                Path sourcePath = fileTarget.source();
                 Path tempPath = fileMoveHelper.moveFileWithBackup(sourcePath);
-                plannedMovesByBookFileId.put(bookFile.getId(), new PlannedMove(sourcePath, tempPath, targetPath));
+                plannedMovesByBookFileId.put(fileTarget.bookFileId(), new PlannedMove(sourcePath, tempPath, fileTarget.target()));
                 if (sourcePath.getParent() != null) {
                     sourceParentsToCleanup.add(sourcePath.getParent());
                 }
@@ -333,6 +319,7 @@ public class FileMoveService {
                 return FileMoveResult.builder().moved(false).build();
             }
 
+            Map<Long, Path> finalPathsByBookFileId = finalPaths(bookWithFiles, fileTargets);
             List<PlannedMove> committedMoves = new ArrayList<>();
 
             // Commit all file moves FIRST before updating database
@@ -347,14 +334,9 @@ public class FileMoveService {
             try {
                 transactionTemplate.executeWithoutResult(status -> {
                     for (var bookFile : finalBookWithFiles.getBookFiles()) {
-                        String newFileName;
-                        if (bookFile.isBook()) {
-                            Path targetPath = fileMoveHelper.generateNewFilePath(finalBookWithFiles, bookFile, finalBookWithFiles.getLibraryPath(), pattern);
-                            newFileName = targetPath.getFileName().toString();
-                        } else {
-                            newFileName = bookFile.getFileName();
-                        }
-                        bookFileRepository.updateFileNameAndSubPath(bookFile.getId(), newFileName, newFileSubPath);
+                        Path finalPath = finalPathsByBookFileId.get(bookFile.getId());
+                        bookFileRepository.updateFileNameAndSubPath(bookFile.getId(), finalPath.getFileName().toString(),
+                                fileMoveHelper.extractSubPath(finalPath, finalBookWithFiles.getLibraryPath()));
                     }
                 });
             } catch (Exception e) {
@@ -417,6 +399,57 @@ public class FileMoveService {
         }
 
         return FileMoveResult.builder().moved(false).build();
+    }
+
+    /** Where one of a book's files goes: never where it already is. */
+    private record FileTarget(Long bookFileId, Path source, Path target) {}
+
+    private List<FileTarget> planFileTargets(BookEntity book, LibraryPathEntity libraryPath, String pattern, Path targetParentDir) {
+        List<FileTarget> fileTargets = new ArrayList<>();
+        for (var bookFile : book.getBookFiles()) {
+            Path sourcePath = bookFile.getFullFilePath();
+            Path targetPath;
+            if (bookFile.isBook()) {
+                targetPath = fileMoveHelper.generateNewFilePath(book, bookFile, libraryPath, pattern);
+            } else {
+                targetPath = targetParentDir.resolve(bookFile.getFileName());
+            }
+
+            if (!FileMoveHelper.isSamePathIgnoringNormalization(sourcePath, targetPath)) {
+                fileTargets.add(new FileTarget(bookFile.getId(), sourcePath, targetPath));
+            }
+        }
+        return fileTargets;
+    }
+
+    /**
+     * Whether every target is free. A move never replaces another book's file or folder, so when
+     * something other than a file's own source is at its target, the whole book stays where it is.
+     */
+    private boolean targetsAreFree(Long bookId, List<FileTarget> fileTargets) throws IOException {
+        for (FileTarget fileTarget : fileTargets) {
+            if (fileMoveHelper.isTakenByAnotherFile(fileTarget.target(), fileTarget.source())) {
+                log.warn("Not moving book ID {}: {} would replace {}, which is another file",
+                        bookId, fileTarget.source(), fileTarget.target());
+                return false;
+            }
+        }
+        return true;
+    }
+
+    /**
+     * Where each of the book's files is once the move is done. A file left in place keeps the name
+     * it has on disk, which may be spelt decomposed where its target is composed.
+     */
+    private Map<Long, Path> finalPaths(BookEntity book, List<FileTarget> fileTargets) {
+        Map<Long, Path> finalPathsByBookFileId = new HashMap<>();
+        for (var bookFile : book.getBookFiles()) {
+            finalPathsByBookFileId.put(bookFile.getId(), bookFile.getFullFilePath());
+        }
+        for (FileTarget fileTarget : fileTargets) {
+            finalPathsByBookFileId.put(fileTarget.bookFileId(), fileTarget.target());
+        }
+        return finalPathsByBookFileId;
     }
 
     protected void sleep(long millis) {

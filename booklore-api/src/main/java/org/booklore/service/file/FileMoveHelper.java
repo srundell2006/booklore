@@ -15,12 +15,15 @@ import java.io.File;
 import java.io.IOException;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.DirectoryNotEmptyException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystemException;
 import java.nio.file.Files;
+import java.nio.file.LinkOption;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
+import java.text.Normalizer;
 import java.util.HashSet;
 import java.util.Set;
 
@@ -87,6 +90,30 @@ public class FileMoveHelper {
         return tempPath;
     }
 
+    /**
+     * Whether {@code target} is taken by a file or folder other than {@code source}. A target that
+     * finds the source itself is not: a case-only rename on a case-insensitive share, or a composed
+     * name that finds the decomposed file on a normalization-insensitive one.
+     */
+    public boolean isTakenByAnotherFile(Path target, Path source) throws IOException {
+        return Files.exists(target) && !Files.isSameFile(source, target);
+    }
+
+    /**
+     * Whether two paths name the same location once both are NFC-composed. Resolved targets are
+     * composed, but files created by macOS clients are often stored decomposed, and a file whose
+     * name differs from its target only in that is already in place.
+     */
+    public static boolean isSamePathIgnoringNormalization(Path first, Path second) {
+        return Normalizer.normalize(first.toString(), Normalizer.Form.NFC)
+                .equals(Normalizer.normalize(second.toString(), Normalizer.Form.NFC));
+    }
+
+    /**
+     * Moves a staged file or folder to its target, which must be free: the source has been moved
+     * aside, so whatever is at the target is something else, and it is never replaced. The
+     * FileAlreadyExistsException lets the caller roll the source back.
+     */
     public void commitMove(Path tempPath, Path target) throws IOException {
         if (!waitForFileAccessible(tempPath)) {
             throw new NoSuchFileException(tempPath.toString(), null, "Temporary file not accessible before commit");
@@ -96,7 +123,13 @@ public class FileMoveHelper {
             Files.createDirectories(target.getParent());
         }
         log.info("Committing move from temporary location {} to {}", tempPath, target);
-        executeWithRetry(() -> Files.move(tempPath, target, StandardCopyOption.REPLACE_EXISTING));
+        executeWithRetry(() -> {
+            // Files.move alone would also do nothing, without failing, when the target is another link to the same file
+            if (Files.exists(target, LinkOption.NOFOLLOW_LINKS)) {
+                throw new FileAlreadyExistsException(target.toString(), null, "Not replacing an existing file");
+            }
+            Files.move(tempPath, target);
+        });
     }
 
     public void rollbackMove(Path tempPath, Path originalSource) {
@@ -306,6 +339,10 @@ public class FileMoveHelper {
     }
 
     private boolean isRetryableException(IOException e) {
+        // A FileSystemException too, but the file in the way stays there however often the move is retried
+        if (e instanceof FileAlreadyExistsException) {
+            return false;
+        }
         return RETRYABLE_EXCEPTIONS.stream().anyMatch(type -> type.isInstance(e));
     }
 

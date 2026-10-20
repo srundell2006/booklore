@@ -12,9 +12,14 @@ import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
+import java.nio.file.FileAlreadyExistsException;
+import java.nio.file.FileSystem;
+import java.nio.file.FileSystems;
 import java.nio.file.Files;
 import java.nio.file.NoSuchFileException;
 import java.nio.file.Path;
+import java.text.Normalizer;
+import java.util.Map;
 import java.util.Set;
 import java.util.concurrent.Executors;
 import java.util.concurrent.ScheduledExecutorService;
@@ -171,6 +176,94 @@ class FileMoveHelperTest {
 
             assertDoesNotThrow(() -> fileMoveHelper.rollbackMove(tempPath, originalSource));
             assertFalse(Files.exists(originalSource));
+        }
+    }
+
+    @Nested
+    @DisplayName("Target Conflict Tests")
+    class TargetConflictTests {
+
+        @Test
+        @DisplayName("commitMove refuses to replace an existing file, without retrying")
+        void commitMove_existingTarget_throwsAndLeavesBothFiles() throws Exception {
+            Path tempPath = tempDir.resolve("book.epub.tmp_move");
+            Path target = tempDir.resolve("Title.epub");
+            Files.writeString(tempPath, "moving book");
+            Files.writeString(target, "another book");
+
+            long startTime = System.currentTimeMillis();
+            assertThrows(FileAlreadyExistsException.class, () -> fileMoveHelper.commitMove(tempPath, target));
+            long elapsed = System.currentTimeMillis() - startTime;
+
+            assertEquals("moving book", Files.readString(tempPath));
+            assertEquals("another book", Files.readString(target));
+            assertTrue(elapsed < 100, "Should fail at once instead of waiting to retry");
+        }
+
+        @Test
+        @DisplayName("commitMove refuses to replace an existing folder, even an empty one")
+        void commitMove_existingTargetFolder_throws() throws Exception {
+            Path tempPath = Files.createDirectories(tempDir.resolve("01. Audiobook (2001).tmp_move"));
+            Files.writeString(tempPath.resolve("part1.mp3"), "audio");
+            Path target = Files.createDirectories(tempDir.resolve("Title"));
+
+            assertThrows(FileAlreadyExistsException.class, () -> fileMoveHelper.commitMove(tempPath, target));
+
+            assertTrue(Files.exists(tempPath.resolve("part1.mp3")));
+            assertTrue(Files.isDirectory(target));
+        }
+
+        @Test
+        @DisplayName("commitMove refuses a target that is another link to the same file")
+        void commitMove_targetLinkedToTheSameFile_throws() throws Exception {
+            Path tempPath = tempDir.resolve("book.epub.tmp_move");
+            Files.writeString(tempPath, "the book");
+            Path target = Files.createLink(tempDir.resolve("Title.epub"), tempPath);
+
+            assertThrows(FileAlreadyExistsException.class, () -> fileMoveHelper.commitMove(tempPath, target));
+
+            assertTrue(Files.exists(tempPath));
+        }
+
+        @Test
+        @DisplayName("isTakenByAnotherFile: a free target, or the source itself, is not taken")
+        void isTakenByAnotherFile_freeOrSourceItself_isFalse() throws Exception {
+            Path source = tempDir.resolve("the hobbit.epub");
+            Files.writeString(source, "the book");
+            // A second name for the same file, as a case-insensitive share finds "The Hobbit.epub"
+            Path sameFile = Files.createLink(tempDir.resolve("The Hobbit.epub"), source);
+
+            assertFalse(fileMoveHelper.isTakenByAnotherFile(tempDir.resolve("Free.epub"), source));
+            assertFalse(fileMoveHelper.isTakenByAnotherFile(source, source));
+            assertFalse(fileMoveHelper.isTakenByAnotherFile(sameFile, source));
+        }
+
+        @Test
+        @DisplayName("isTakenByAnotherFile: another file or folder at the target takes it")
+        void isTakenByAnotherFile_anotherFileOrFolder_isTrue() throws Exception {
+            Path source = tempDir.resolve("book.epub");
+            Path folderSource = Files.createDirectories(tempDir.resolve("01. Audiobook"));
+            Files.writeString(source, "the book");
+            Path otherFile = Files.writeString(tempDir.resolve("Title.epub"), "another book");
+            Path otherFolder = Files.createDirectories(tempDir.resolve("Title"));
+
+            assertTrue(fileMoveHelper.isTakenByAnotherFile(otherFile, source));
+            assertTrue(fileMoveHelper.isTakenByAnotherFile(otherFolder, folderSource));
+        }
+
+        @Test
+        @DisplayName("isSamePathIgnoringNormalization: composed and decomposed spellings are the same path")
+        void isSamePathIgnoringNormalization_comparesComposedForms() throws Exception {
+            // A zip file system holds any name, where the default one cannot under a non-UTF-8 locale
+            try (FileSystem names = FileSystems.newFileSystem(tempDir.resolve("names.zip"), Map.of("create", "true"))) {
+                String composed = "/books/한강/소년이 온다.epub";
+                Path decomposed = names.getPath(Normalizer.normalize(composed, Normalizer.Form.NFD));
+
+                assertNotEquals(names.getPath(composed), decomposed);
+                assertTrue(FileMoveHelper.isSamePathIgnoringNormalization(names.getPath(composed), decomposed));
+                assertFalse(FileMoveHelper.isSamePathIgnoringNormalization(names.getPath(composed), names.getPath("/books/한강/채식주의자.epub")));
+                assertFalse(FileMoveHelper.isSamePathIgnoringNormalization(names.getPath("/books/a.epub"), names.getPath("/books/A.epub")));
+            }
         }
     }
 
