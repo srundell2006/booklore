@@ -27,6 +27,18 @@ import java.util.zip.ZipOutputStream;
  */
 public final class CbxTestArchives {
 
+    /*
+     * Solid CB7s, as 7-Zip writes by default (7z a -ms=on): every entry is in one LZMA2 block, so
+     * reading one entry after another goes on through the same decoder. SevenZOutputFile cannot
+     * write these, as it gives every entry a block of its own, so they are checked in (made with
+     * py7zr). Each holds pages/002.png, pages/001.png and pages/003.png in that order, images 2, 1
+     * and 3 pixels wide, plus a ComicInfo.xml with Series "Solid Series" and Number 3. In the
+     * first the ComicInfo.xml comes after the pages, with Title "Solid Last"; in the second it
+     * comes before them, with Title "Solid First".
+     */
+    public static final Path SOLID_CB7_COMIC_INFO_LAST = Path.of("src/test/resources/cbx/solid-comicinfo-last.cb7");
+    public static final Path SOLID_CB7_COMIC_INFO_FIRST = Path.of("src/test/resources/cbx/solid-comicinfo-first.cb7");
+
     private CbxTestArchives() {
     }
 

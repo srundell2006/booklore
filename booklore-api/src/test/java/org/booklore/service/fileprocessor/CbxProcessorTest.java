@@ -48,6 +48,8 @@ import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.booklore.util.CbxTestArchives.SOLID_CB7_COMIC_INFO_FIRST;
+import static org.booklore.util.CbxTestArchives.SOLID_CB7_COMIC_INFO_LAST;
 import static org.booklore.util.CbxTestArchives.comicInfo;
 import static org.booklore.util.CbxTestArchives.dir;
 import static org.booklore.util.CbxTestArchives.file;
@@ -442,6 +444,29 @@ class CbxProcessorTest {
             verify(fileService, never()).saveCoverImages(any(), anyLong());
             assertThat(book.getBookCoverHash()).isNull();
             assertThat(book.getMetadata().getTitle()).isEqualTo("Text Only");
+        }
+
+        private void assertCoverAndComicInfoFromSolidBlock(Path fixture, String title) throws IOException {
+            Path file = Files.copy(fixture, tempDir.resolve(fixture.getFileName()));
+            when(fileService.saveCoverImages(any(BufferedImage.class), eq(1L))).thenReturn(true);
+
+            BookEntity book = process(file);
+
+            assertThat(savedCoverWidth()).isEqualTo(1);
+            assertThat(book.getPrimaryBookFile().getArchiveType()).isEqualTo(ArchiveUtils.ArchiveType.SEVEN_ZIP);
+            assertThat(book.getMetadata().getTitle()).isEqualTo(title);
+            assertThat(book.getMetadata().getSeriesName()).isEqualTo("Solid Series");
+            assertThat(book.getMetadata().getSeriesNumber()).isEqualTo(3f);
+        }
+
+        @Test
+        void takesCoverAndComicInfoAfterItFromOneSolidBlock() throws IOException {
+            assertCoverAndComicInfoFromSolidBlock(SOLID_CB7_COMIC_INFO_LAST, "Solid Last");
+        }
+
+        @Test
+        void takesCoverAndComicInfoBeforeItFromOneSolidBlock() throws IOException {
+            assertCoverAndComicInfoFromSolidBlock(SOLID_CB7_COMIC_INFO_FIRST, "Solid First");
         }
 
         @Test

@@ -9,6 +9,8 @@ import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.MockedStatic;
 
+import javax.imageio.ImageIO;
+import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.FileNotFoundException;
 import java.io.IOException;
@@ -19,6 +21,7 @@ import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
+import static org.booklore.util.CbxTestArchives.SOLID_CB7_COMIC_INFO_LAST;
 import static org.booklore.util.CbxTestArchives.dir;
 import static org.booklore.util.CbxTestArchives.file;
 import static org.booklore.util.CbxTestArchives.imageFile;
@@ -39,6 +42,10 @@ class CbxArchiveTest {
 
     private static byte[] bytes(String text) {
         return text.getBytes(StandardCharsets.UTF_8);
+    }
+
+    private static int imageWidth(byte[] image) throws IOException {
+        return ImageIO.read(new ByteArrayInputStream(image)).getWidth();
     }
 
     @ParameterizedTest
@@ -136,6 +143,28 @@ class CbxArchiveTest {
         File garbage = Files.writeString(tempDir.resolve("garbage"), "not an archive").toFile();
 
         assertThatThrownBy(() -> CbxArchive.open(garbage, format.archiveType())).isInstanceOf(IOException.class);
+    }
+
+    @Nested
+    class SolidSevenZip {
+
+        @Test
+        void readsEntriesOfOneBlockInAnyOrderFromOneOpen() throws IOException {
+            try (CbxArchive archive = CbxArchive.open(SOLID_CB7_COMIC_INFO_LAST.toFile(), ArchiveUtils.ArchiveType.SEVEN_ZIP)) {
+                assertThat(archive.fileNames()).containsExactly("pages/002.png", "pages/001.png", "pages/003.png", "ComicInfo.xml");
+
+                // The cover as a scan reads it, decoding past 002.png in the block
+                assertThat(imageWidth(archive.readEntry("pages/001.png"))).isEqualTo(1);
+                // Then ComicInfo.xml further on: the decoder first drains the cover's entry stream,
+                // which the read above has already closed
+                assertThat(archive.readEntry("ComicInfo.xml")).asString(StandardCharsets.UTF_8)
+                        .contains("<Title>Solid Last</Title>");
+                // Entries before the last one read start decoding the block again
+                assertThat(imageWidth(archive.readEntry("pages/002.png"))).isEqualTo(2);
+                assertThat(imageWidth(archive.readEntry("pages/003.png"))).isEqualTo(3);
+                assertThat(imageWidth(archive.readEntry("pages/001.png"))).isEqualTo(1);
+            }
+        }
     }
 
     @Nested
