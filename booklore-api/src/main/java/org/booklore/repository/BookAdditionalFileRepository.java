@@ -1,6 +1,7 @@
 package org.booklore.repository;
 
 import org.booklore.model.entity.BookFileEntity;
+import org.booklore.repository.projection.BookFileScanRow;
 import org.springframework.data.jpa.repository.JpaRepository;
 import org.springframework.data.jpa.repository.Modifying;
 import org.springframework.data.jpa.repository.Query;
@@ -24,8 +25,20 @@ public interface BookAdditionalFileRepository extends JpaRepository<BookFileEnti
                                                                            @Param("fileSubPath") String fileSubPath,
                                                                            @Param("fileName") String fileName);
 
-    @Query("SELECT bf FROM BookFileEntity bf WHERE bf.book.library.id = :libraryId")
-    List<BookFileEntity> findByLibraryId(@Param("libraryId") Long libraryId);
+    /**
+     * One plain row per book_file of the library, soft-deleted books included, for rescans
+     * that must reason about the whole library without loading its entities. Rows come in no
+     * particular order.
+     */
+    @Query("""
+            SELECT new org.booklore.repository.projection.BookFileScanRow(
+                bf.id, b.id, lp.id, lp.path, bf.fileSubPath, bf.fileName, bf.isBookFormat, bf.bookType, b.deleted)
+            FROM BookFileEntity bf
+            JOIN bf.book b
+            LEFT JOIN b.libraryPath lp
+            WHERE b.library.id = :libraryId
+            """)
+    List<BookFileScanRow> findScanRowsByLibraryId(@Param("libraryId") Long libraryId);
 
     @Modifying
     @Query("""

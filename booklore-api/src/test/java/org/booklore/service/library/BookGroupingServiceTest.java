@@ -1,8 +1,12 @@
 package org.booklore.service.library;
 
 import org.booklore.model.dto.settings.LibraryFile;
+import org.booklore.model.entity.BookEntity;
+import org.booklore.model.entity.BookFileEntity;
+import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.LibraryPathEntity;
+import org.booklore.model.enums.BookFileExtension;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.model.enums.LibraryOrganizationMode;
 import org.booklore.repository.BookRepository;
@@ -18,6 +22,14 @@ import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
+import static org.mockito.Mockito.verifyNoMoreInteractions;
+import static org.mockito.Mockito.when;
 
 @ExtendWith(MockitoExtension.class)
 class BookGroupingServiceTest {
@@ -729,5 +741,173 @@ class BookGroupingServiceTest {
 
         assertThat(groupCount(groups)).isEqualTo(2);
         assertThat(totalFiles(groups)).isEqualTo(4);
+    }
+
+    // ---- rescan grouping: lookups are made once per call ----
+
+    private LibraryEntity rescanLibrary(LibraryOrganizationMode mode, LibraryPathEntity path) {
+        LibraryEntity lib = library(mode, path);
+        lib.setId(1L);
+        return lib;
+    }
+
+    private LibraryFile newFile(LibraryEntity lib, LibraryPathEntity path, String subPath, String name) {
+        return LibraryFile.builder()
+                .libraryEntity(lib)
+                .libraryPathEntity(path)
+                .fileSubPath(subPath)
+                .fileName(name)
+                .bookFileType(BookFileExtension.fromFileName(name).orElseThrow().getType())
+                .build();
+    }
+
+    private BookEntity bookWithFiles(long id, LibraryEntity lib, LibraryPathEntity path, String subPath, String... names) {
+        List<BookFileEntity> files = new ArrayList<>();
+        long fileId = id * 10;
+        for (String name : names) {
+            files.add(BookFileEntity.builder()
+                    .id(fileId++)
+                    .fileSubPath(subPath)
+                    .fileName(name)
+                    .isBookFormat(true)
+                    .bookType(BookFileExtension.fromFileName(name).orElseThrow().getType())
+                    .build());
+        }
+        return BookEntity.builder().id(id).library(lib).libraryPath(path).bookFiles(files).build();
+    }
+
+    private BookEntity filelessBook(long id, LibraryEntity lib, String title) {
+        return BookEntity.builder()
+                .id(id)
+                .library(lib)
+                .bookFiles(new ArrayList<>())
+                .metadata(BookMetadataEntity.builder().title(title).build())
+                .build();
+    }
+
+    private void verifyOldPerFileQueriesUnused() {
+        verify(bookRepository, never()).findFilelessBooksByLibraryId(any());
+        verify(bookRepository, never()).findAllByLibraryPathIdAndFileSubPath(anyLong(), anyString());
+    }
+
+    @Test
+    void rescan_bookPerFolder_queriesEachDirectoryOnceAndAttachesToItsBook() {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
+        BookEntity existing = bookWithFiles(100, lib, path, "Author/Title", "Title.epub");
+        LibraryFile mobi = newFile(lib, path, "Author/Title", "Title.mobi");
+        LibraryFile pdf = newFile(lib, path, "Author/Title", "Title.pdf");
+        LibraryFile other = newFile(lib, path, "Author/Other", "Other.epub");
+        when(bookRepository.findFilelessBooksWithMetadataByLibraryId(1L)).thenReturn(List.of());
+        when(bookRepository.findAllWithFilesByLibraryPathIdAndFileSubPath(1L, "Author/Title")).thenReturn(List.of(existing));
+        when(bookRepository.findAllWithFilesByLibraryPathIdAndFileSubPath(1L, "Author/Other")).thenReturn(List.of());
+
+        var result = bookGroupingService.groupForRescan(List.of(mobi, pdf, other), lib);
+
+        assertThat(result.filesToAttach()).containsOnlyKeys(existing);
+        assertThat(result.filesToAttach().get(existing)).containsExactly(mobi, pdf);
+        assertThat(result.newBookGroups()).containsOnlyKeys("1:Author/Other");
+        assertThat(result.newBookGroups().get("1:Author/Other")).containsExactly(other);
+
+        verify(bookRepository, times(1)).findFilelessBooksWithMetadataByLibraryId(1L);
+        verify(bookRepository, times(1)).findAllWithFilesByLibraryPathIdAndFileSubPath(1L, "Author/Title");
+        verify(bookRepository, times(1)).findAllWithFilesByLibraryPathIdAndFileSubPath(1L, "Author/Other");
+        verifyOldPerFileQueriesUnused();
+    }
+
+    @Test
+    void rescan_bookPerFolder_audiobookAbsorptionLooksUpEachAncestorOnce() {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
+        BookEntity ebookBook = bookWithFiles(200, lib, path, "Author/Book", "Book.epub");
+        LibraryFile ch1 = newFile(lib, path, "Author/Book/audio", "ch1.mp3");
+        LibraryFile ch2 = newFile(lib, path, "Author/Book/audio", "ch2.mp3");
+        LibraryFile ch3 = newFile(lib, path, "Author/Book/audio/disc2", "ch3.mp3");
+        when(bookRepository.findFilelessBooksWithMetadataByLibraryId(1L)).thenReturn(List.of());
+        when(bookRepository.findAllWithFilesByLibraryPathIdAndFileSubPath(1L, "Author/Book/audio/disc2")).thenReturn(List.of());
+        when(bookRepository.findAllWithFilesByLibraryPathIdAndFileSubPath(1L, "Author/Book/audio")).thenReturn(List.of());
+        when(bookRepository.findAllWithFilesByLibraryPathIdAndFileSubPath(1L, "Author/Book")).thenReturn(List.of(ebookBook));
+
+        var result = bookGroupingService.groupForRescan(List.of(ch1, ch2, ch3), lib);
+
+        assertThat(result.filesToAttach()).containsOnlyKeys(ebookBook);
+        assertThat(result.filesToAttach().get(ebookBook)).containsExactly(ch1, ch2, ch3);
+        assertThat(result.newBookGroups()).isEmpty();
+
+        // Before, each file queried its own directory and then every ancestor again.
+        verify(bookRepository, times(1)).findAllWithFilesByLibraryPathIdAndFileSubPath(1L, "Author/Book/audio/disc2");
+        verify(bookRepository, times(1)).findAllWithFilesByLibraryPathIdAndFileSubPath(1L, "Author/Book/audio");
+        verify(bookRepository, times(1)).findAllWithFilesByLibraryPathIdAndFileSubPath(1L, "Author/Book");
+        verify(bookRepository, times(1)).findFilelessBooksWithMetadataByLibraryId(1L);
+        verifyNoMoreInteractions(bookRepository);
+    }
+
+    @Test
+    void rescan_autoDetect_matchesFilelessAndExistingBooksWithOneFilelessQuery() {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        BookEntity physical = filelessBook(300, lib, "The Martian");
+        BookEntity hailMary = bookWithFiles(400, lib, path, "Weir/Hail Mary", "Project Hail Mary.epub");
+        LibraryFile martianEpub = newFile(lib, path, "Weir/Martian", "The Martian.epub");
+        LibraryFile martianAudio = newFile(lib, path, "Weir/Martian", "The Martian.m4b");
+        LibraryFile hailMaryPdf = newFile(lib, path, "Weir/Hail Mary", "Project Hail Mary.pdf");
+        LibraryFile unrelated = newFile(lib, path, "Weir/Hail Mary", "Unrelated Thing.pdf");
+        when(bookRepository.findFilelessBooksWithMetadataByLibraryId(1L)).thenReturn(List.of(physical));
+        when(bookRepository.findAllWithFilesByLibraryPathIdAndFileSubPath(1L, "Weir/Hail Mary")).thenReturn(List.of(hailMary));
+
+        var result = bookGroupingService.groupForRescan(List.of(martianEpub, martianAudio, hailMaryPdf, unrelated), lib);
+
+        assertThat(result.filesToAttach()).containsOnlyKeys(physical, hailMary);
+        assertThat(result.filesToAttach().get(physical)).containsExactly(martianEpub, martianAudio);
+        assertThat(result.filesToAttach().get(hailMary)).containsExactly(hailMaryPdf);
+        assertThat(result.newBookGroups().values()).containsExactly(List.of(unrelated));
+
+        verify(bookRepository, times(1)).findFilelessBooksWithMetadataByLibraryId(1L);
+        verify(bookRepository, times(1)).findAllWithFilesByLibraryPathIdAndFileSubPath(1L, "Weir/Hail Mary");
+        verifyNoMoreInteractions(bookRepository);
+    }
+
+    @Test
+    void rescan_bookPerFile_onlyMatchesFilelessBooksExactly() {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FILE, path);
+        BookEntity physical = filelessBook(300, lib, "Dune");
+        LibraryFile dune = newFile(lib, path, "Herbert", "Dune.epub");
+        LibraryFile duneMessiah = newFile(lib, path, "Herbert", "Dune Messiah.epub");
+        when(bookRepository.findFilelessBooksWithMetadataByLibraryId(1L)).thenReturn(List.of(physical));
+
+        var result = bookGroupingService.groupForRescan(List.of(dune, duneMessiah), lib);
+
+        assertThat(result.filesToAttach()).containsOnlyKeys(physical);
+        assertThat(result.filesToAttach().get(physical)).containsExactly(dune);
+        assertThat(result.newBookGroups()).containsOnlyKeys("1:Herbert:Dune Messiah.epub");
+        verify(bookRepository, times(1)).findFilelessBooksWithMetadataByLibraryId(1L);
+        verifyNoMoreInteractions(bookRepository);
+    }
+
+    @Test
+    void rescan_lookupsAreScopedToOneCall() {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
+        LibraryFile file = newFile(lib, path, "Author/Title", "Title.epub");
+        when(bookRepository.findFilelessBooksWithMetadataByLibraryId(1L)).thenReturn(List.of());
+        when(bookRepository.findAllWithFilesByLibraryPathIdAndFileSubPath(1L, "Author/Title")).thenReturn(List.of());
+
+        bookGroupingService.groupForRescan(List.of(file), lib);
+        bookGroupingService.groupForRescan(List.of(file), lib);
+
+        verify(bookRepository, times(2)).findFilelessBooksWithMetadataByLibraryId(1L);
+        verify(bookRepository, times(2)).findAllWithFilesByLibraryPathIdAndFileSubPath(1L, "Author/Title");
+    }
+
+    @Test
+    void rescan_noNewFiles_queriesNothing() {
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, pathEntity(1L, "/books"));
+
+        var result = bookGroupingService.groupForRescan(List.of(), lib);
+
+        assertThat(result.filesToAttach()).isEmpty();
+        assertThat(result.newBookGroups()).isEmpty();
+        verifyNoMoreInteractions(bookRepository);
     }
 }

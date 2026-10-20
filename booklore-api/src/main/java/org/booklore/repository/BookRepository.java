@@ -41,6 +41,24 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     @Query("SELECT DISTINCT b FROM BookEntity b JOIN b.bookFiles bf WHERE b.libraryPath.id = :libraryPathId AND bf.fileSubPath = :fileSubPath AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false)")
     List<BookEntity> findAllByLibraryPathIdAndFileSubPath(@Param("libraryPathId") Long libraryPathId, @Param("fileSubPath") String fileSubPath);
 
+    /**
+     * Same books as {@link #findAllByLibraryPathIdAndFileSubPath}, in id order, with every
+     * file (not just the matching ones) and the library fetched, so rescan grouping can
+     * pick primary files without a query per book.
+     */
+    @EntityGraph(attributePaths = {"bookFiles", "library", "libraryPath"})
+    @Query("""
+            SELECT DISTINCT b FROM BookEntity b
+            JOIN b.bookFiles bf
+            WHERE b.libraryPath.id = :libraryPathId
+            AND bf.fileSubPath = :fileSubPath
+            AND bf.isBookFormat = true
+            AND (b.deleted IS NULL OR b.deleted = false)
+            ORDER BY b.id
+            """)
+    List<BookEntity> findAllWithFilesByLibraryPathIdAndFileSubPath(@Param("libraryPathId") Long libraryPathId,
+                                                                   @Param("fileSubPath") String fileSubPath);
+
     @Query("SELECT b FROM BookEntity b JOIN b.bookFiles bf WHERE b.libraryPath.id = :libraryPathId AND bf.fileSubPath = :fileSubPath AND bf.fileName = :fileName AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false)")
     Optional<BookEntity> findByLibraryPath_IdAndFileSubPathAndFileName(@Param("libraryPathId") Long libraryPathId,
                                                                        @Param("fileSubPath") String fileSubPath,
@@ -198,6 +216,10 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     @Query("SELECT COUNT(b) FROM BookEntity b WHERE b.library.id = :libraryId AND (b.deleted IS NULL OR b.deleted = false)")
     long countByLibraryId(@Param("libraryId") Long libraryId);
 
+    /** Every book of the library, soft-deleted and fileless ones included. */
+    @Query("SELECT COUNT(b) FROM BookEntity b WHERE b.library.id = :libraryId")
+    long countIncludingDeletedByLibraryId(@Param("libraryId") Long libraryId);
+
     @Query("""
             SELECT b FROM BookEntity b
             LEFT JOIN b.bookFiles bf
@@ -207,6 +229,20 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
             HAVING COUNT(bf) = 0
             """)
     List<BookEntity> findFilelessBooksByLibraryId(@Param("libraryId") Long libraryId);
+
+    /**
+     * Same books as {@link #findFilelessBooksByLibraryId}, in id order, with the metadata and
+     * library path that rescan grouping matches on fetched up front.
+     */
+    @EntityGraph(attributePaths = {"metadata", "libraryPath"})
+    @Query("""
+            SELECT b FROM BookEntity b
+            WHERE b.library.id = :libraryId
+            AND (b.deleted IS NULL OR b.deleted = false)
+            AND NOT EXISTS (SELECT bf.id FROM BookFileEntity bf WHERE bf.book = b)
+            ORDER BY b.id
+            """)
+    List<BookEntity> findFilelessBooksWithMetadataByLibraryId(@Param("libraryId") Long libraryId);
 
     @Query("SELECT b.id as id, m.coverUpdatedOn as coverUpdatedOn FROM BookEntity b LEFT JOIN b.metadata m WHERE b.id IN :bookIds")
     List<BookCoverUpdateProjection> findCoverUpdateInfoByIds(@Param("bookIds") Collection<Long> bookIds);

@@ -1,7 +1,6 @@
 package org.booklore.service.library;
 
 import org.booklore.mapper.BookMapper;
-import org.booklore.model.dto.settings.LibraryFile;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.websocket.Topic;
@@ -16,8 +15,8 @@ import org.springframework.transaction.annotation.Transactional;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.List;
+import java.util.Map;
 import java.util.Set;
-import java.util.stream.Collectors;
 
 @Service
 @RequiredArgsConstructor
@@ -28,23 +27,29 @@ public class BookRestorationService {
     private final BookMapper bookMapper;
     private final NotificationService notificationService;
 
+    /**
+     * Un-deletes the soft-deleted books of the library whose primary file is back on disk.
+     * Only books that were already soft-deleted, with that primary file, when the walk started
+     * count: the walk may have listed a file just before it was removed and its book
+     * soft-deleted.
+     *
+     * @param currentPaths full paths of every file the scan found
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void restoreDeletedBooks(List<LibraryFile> libraryFiles) {
-        if (libraryFiles.isEmpty()) return;
+    public void restoreDeletedBooks(LibraryEntity libraryEntity, LibraryBookFiles bookFiles, Set<Path> currentPaths,
+                                    WalkCoverage coverage) {
+        if (currentPaths.isEmpty()) return;
 
-        LibraryEntity libraryEntity = libraryFiles.getFirst().getLibraryEntity();
-        Set<Path> currentPaths = libraryFiles.stream()
-                .map(LibraryFile::getFullPath)
-                .collect(Collectors.toSet());
+        List<Long> restoreIds = bookFiles.primaryFiles(libraryEntity.getFormatPriority()).entrySet().stream()
+                .filter(entry -> entry.getValue().isBookDeleted())
+                .filter(entry -> isOnDisk(entry.getValue().fullPath(), currentPaths))
+                .filter(entry -> !coverage.changedDuringWalk(entry.getValue()))
+                .map(Map.Entry::getKey)
+                .toList();
 
-        List<BookEntity> toRestore = libraryEntity.getBookEntities().stream()
-                .filter(book -> Boolean.TRUE.equals(book.getDeleted()))
-                .filter(book -> book.getBookFiles() != null && !book.getBookFiles().isEmpty())
-                .filter(book -> currentPaths.contains(book.getFullFilePath()))
-                .collect(Collectors.toList());
+        if (restoreIds.isEmpty()) return;
 
-        if (toRestore.isEmpty()) return;
-
+        List<BookEntity> toRestore = bookRepository.findAllById(restoreIds);
         toRestore.forEach(book -> {
             book.setDeleted(false);
             book.setDeletedAt(null);
@@ -53,10 +58,10 @@ public class BookRestorationService {
         });
         bookRepository.saveAll(toRestore);
 
-        List<Long> restoredIds = toRestore.stream()
-                .map(BookEntity::getId)
-                .toList();
+        log.info("Restored {} books in library: {}", toRestore.size(), libraryEntity.getName());
+    }
 
-        log.info("Restored {} books in library: {}", restoredIds.size(), libraryEntity.getName());
+    private static boolean isOnDisk(Path fullPath, Set<Path> currentPaths) {
+        return fullPath != null && currentPaths.contains(fullPath);
     }
 }
