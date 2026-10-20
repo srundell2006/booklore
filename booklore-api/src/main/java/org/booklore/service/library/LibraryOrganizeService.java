@@ -8,9 +8,11 @@ import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.LibraryPathEntity;
+import org.booklore.model.enums.BookFileExtension;
 import org.booklore.repository.BookFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
+import org.booklore.service.file.FileMoveHelper;
 import org.booklore.util.PathPatternResolver;
 import org.springframework.stereotype.Service;
 
@@ -101,16 +103,18 @@ public class LibraryOrganizeService {
         Path targetPath = Paths.get(libraryPath.getPath(), newRelativePathStr);
 
         // Resolve name conflicts: if target exists and isn't the current file, suffix (1), (2), …
-        targetPath = resolveConflict(targetPath, currentPath);
+        targetPath = resolveConflict(targetPath, currentPath, bookFile.isFolderBased());
 
-        // Already in the right place?
-        if (currentPath.toAbsolutePath().normalize().equals(targetPath.toAbsolutePath().normalize())) {
+        // Already in the right place? A name stored decomposed (by a macOS client) is the same name
+        if (FileMoveHelper.isSamePathIgnoringNormalization(currentPath.toAbsolutePath().normalize(), targetPath.toAbsolutePath().normalize())) {
             return false;
         }
 
         // Move the file
         Files.createDirectories(targetPath.getParent());
-        Files.move(currentPath, targetPath);
+        if (!moveFile(currentPath, targetPath)) {
+            return false;
+        }
         log.debug("Moved '{}' -> '{}'", currentPath, targetPath);
 
         // Update DB: subPath = library-root-relative dir; fileName = bare filename
@@ -156,27 +160,76 @@ public class LibraryOrganizeService {
     }
 
     /**
-     * If {@code targetPath} already exists and is not the source file,
-     * appends (1), (2), … to the base name until a free slot is found.
+     * Moves the file or folder to {@code targetPath}, where nothing but the source itself can be.
+     * When the source is already there under another spelling (a case-only rename on a
+     * case-insensitive share), Files.move sees the same file and does nothing, so the rename goes
+     * by way of a temporary name. Returns false, leaving the source in place, when the target is
+     * instead another link to the same file.
      */
-    private Path resolveConflict(Path targetPath, Path sourcePath) {
-        if (!Files.exists(targetPath)
-                || targetPath.toAbsolutePath().normalize().equals(sourcePath.toAbsolutePath().normalize())) {
+    private boolean moveFile(Path currentPath, Path targetPath) throws IOException {
+        if (!Files.exists(targetPath)) {
+            Files.move(currentPath, targetPath);
+            return true;
+        }
+        Path tempPath = currentPath.resolveSibling(currentPath.getFileName() + ".tmp_move");
+        Files.move(currentPath, tempPath);
+        if (Files.exists(targetPath)) {
+            Files.move(tempPath, currentPath);
+            return false;
+        }
+        try {
+            Files.move(tempPath, targetPath);
+        } catch (IOException e) {
+            Files.move(tempPath, currentPath);
+            throw e;
+        }
+        return true;
+    }
+
+    /**
+     * If {@code targetPath} is taken by something other than the source itself,
+     * appends (1), (2), … to the base name until a free slot is found. The
+     * number goes before a book file's extension, and after the whole name of a
+     * folder audiobook, whose dots are part of its name.
+     */
+    private Path resolveConflict(Path targetPath, Path sourcePath, boolean folderBased) throws IOException {
+        if (isFreeFor(targetPath, sourcePath)) {
             return targetPath;
         }
 
         String fileName = targetPath.getFileName().toString();
         Path targetDir = targetPath.getParent();
-        int dotIdx = fileName.lastIndexOf('.');
-        String base = dotIdx >= 0 ? fileName.substring(0, dotIdx) : fileName;
-        String ext = dotIdx >= 0 ? fileName.substring(dotIdx) : "";
+        int baseLength = folderBased ? fileName.length() : baseNameLength(fileName);
+        String base = fileName.substring(0, baseLength);
+        String ext = fileName.substring(baseLength);
 
         int counter = 1;
         Path candidate;
         do {
             candidate = targetDir.resolve(base + " (" + counter + ")" + ext);
             counter++;
-        } while (Files.exists(candidate));
+        } while (!isFreeFor(candidate, sourcePath));
         return candidate;
+    }
+
+    /**
+     * Whether nothing but the source is at {@code path}: a case-insensitive or
+     * normalization-insensitive share finds the source itself under another
+     * spelling, and a source already numbered by an earlier run keeps its number.
+     */
+    private boolean isFreeFor(Path path, Path sourcePath) throws IOException {
+        return !Files.exists(path) || Files.isSameFile(path, sourcePath);
+    }
+
+    /** The length of a file name without its book extension, or without its last extension for other files. */
+    private int baseNameLength(String fileName) {
+        int bookExtensionLength = BookFileExtension.fromFileName(fileName)
+                .map(extension -> extension.getExtension().length() + 1)
+                .orElse(0);
+        if (bookExtensionLength > 0 && bookExtensionLength < fileName.length()) {
+            return fileName.length() - bookExtensionLength;
+        }
+        int dotIdx = fileName.lastIndexOf('.');
+        return dotIdx > 0 ? dotIdx : fileName.length();
     }
 }
