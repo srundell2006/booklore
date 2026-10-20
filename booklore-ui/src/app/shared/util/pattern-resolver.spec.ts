@@ -3,6 +3,18 @@ import {sanitize} from './pattern-resolver';
 
 // The move preview must show the names PathPatternResolver.sanitize writes on the server,
 // so these cases mirror the backend tests. Invisible characters are written as escapes.
+
+/** sanitize() as it was before non-Latin text was kept: decompose, then drop every non-ASCII code point. */
+function asciiOnlySanitize(input: string): string {
+  return input.normalize('NFD')
+    .replace(/[^\p{ASCII}]/gu, '')
+    .replace(/[\\/:*?"<>|]/g, '')
+    // eslint-disable-next-line no-control-regex
+    .replace(/[\x00-\x1F\x7F]/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
 describe('pattern-resolver', () => {
 
   describe('sanitize', () => {
@@ -26,8 +38,16 @@ describe('pattern-resolver', () => {
       ['Star Wars™ © 2015 ½', 'Star Wars 2015'],
       ['Title: Sub/Part *1*?', 'Title SubPart 1'],
       ['  Spaced \t  Out  ', 'Spaced Out'],
+      ['Love ≠ Hate', 'Love = Hate'],
+      ['Auf\u200Clage', 'Auflage'],
+      ['a\u200D\u0301b', 'ab'],
+      ['\uFEFFZero\u200Bwidth\u200C\u200Djoiners', 'Zerowidthjoiners'],
+      ['Stray marks on e\u200B\u0301 and 1\u0301', 'Stray marks on e and 1'],
+      ['Tab\tand bell\u0007', 'Taband bell'],
+      ['C1\u0085 and \u0092 controls', 'C1 and controls'],
     ])('should clean Latin text as before: %j', (input, expected) => {
       expect(sanitize(input)).toBe(expected);
+      expect(sanitize(input)).toBe(asciiOnlySanitize(input));
     });
 
     it('should keep Latin letters that have no accent mark to strip', () => {
@@ -47,8 +67,18 @@ describe('pattern-resolver', () => {
       ['Korean', '소년이 온다'],
       ['Persian with a zero-width non-joiner', 'می\u200Cخواهم'],
       ['Devanagari with a zero-width joiner', 'क्\u200Dष'],
+      ['Bengali with a zero-width joiner before a virama', 'র\u200D্যাব'],
+      ['Sinhala touching letters', 'ක\u200D්ව'],
+      ['Arabic with a mark after a zero-width non-joiner', 'ب\u200C\u064E'],
+      ['Arabic-Indic digits', 'الجزء ٣'],
+      ['Thai', 'สวัสดี'],
     ])('should keep %s text whole', (_, text) => {
       expect(sanitize(text)).toBe(text);
+    });
+
+    it('should keep Hebrew points, in canonical order', () => {
+      const shalom = '\u05E9\u05C1\u05B8\u05DC\u05D5\u05B9\u05DD';
+      expect(sanitize(shalom)).toBe(shalom.normalize('NFC'));
     });
 
     it('should strip Latin accents and keep other scripts in mixed text', () => {
@@ -68,10 +98,17 @@ describe('pattern-resolver', () => {
       expect(sanitize('soft\u00ADhyphen')).toBe('softhyphen');
     });
 
-    it('should drop joiners that do not sit between letters', () => {
+    it('should drop joiners that do not sit between non-Latin letters', () => {
       expect(sanitize('\u200Cمی\u200C')).toBe('می');
       expect(sanitize('می\u200E\u200Cخ')).toBe('می\u200Cخ');
       expect(sanitize('a \u200D b')).toBe('a b');
+      expect(sanitize('é\u200Cb')).toBe('eb');
+      expect(sanitize('ک\u200C \u0628')).toBe('ک \u0628');
+      expect(sanitize('ک\u200C\u{1F600}')).toBe('ک');
+    });
+
+    it('should keep one of two joiners in a row', () => {
+      expect(sanitize('می\u200C\u200Cخواهم')).toBe('می\u200Cخواهم');
     });
 
     it('should drop emoji along with their modifiers, selectors and joiners', () => {
@@ -87,6 +124,17 @@ describe('pattern-resolver', () => {
     });
 
     it.each([
+      '0085', '0092', '009F', '200E', '200F', '202A', '202B', '202C', '202D', '202E', '2066', '2067', '2068',
+      '2069', 'FEFF', '200B', '00AD', '2060', '2122', '00A9', '00BD', '2764', '1F600', '1F1EB', '1F3FD',
+      'E000', 'F0000', '0378', 'D800', 'DC00',
+    ])('should never put U+%s in a name', hex => {
+      const char = String.fromCodePoint(parseInt(hex, 16));
+      expect(sanitize(`Naguib${char}Mahfouz`)).toBe('NaguibMahfouz');
+      expect(sanitize(`قصر${char}الشوق`)).toBe('قصرالشوق');
+      expect(sanitize(`中国${char} ${char}文化`)).toBe('中国 文化');
+    });
+
+    it.each([
       'Harry Potter and the Philosopher’s Stone',
       'Gabriel García Márquez',
       'ガイドがある'.normalize('NFD'),
@@ -94,6 +142,16 @@ describe('pattern-resolver', () => {
       'Titre\u00A0:\u00A0sous-titre',
       '\u1100?\u1161',
       'Title \u2764\uFE0F \uD800',
+      'e\u200B\u0301',
+      '\u0301leading mark',
+      'ک\u200C\u200C\u0628',
+      'ک\u200C\u{1F600}\u0628',
+      'ක\u200D්ව',
+      'ක\u2764\u200D්',
+      'a\u200D\u0301b',
+      'Love ≠ Hate',
+      '\u202Bقصر\u200F الشوق\u202C',
+      '1\uFE0F\u20E3',
     ])('should give a stable NFC result for %j', input => {
       const once = sanitize(input);
       expect(sanitize(once)).toBe(once);
