@@ -15,12 +15,21 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.time.Duration;
 import java.util.UUID;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ExecutionException;
+import java.util.concurrent.Future;
+import java.util.concurrent.FutureTask;
 import java.util.concurrent.locks.ReentrantLock;
 
 /**
- * Provides the ffprobe binary, downloading it on first use. Callers on many threads at once share one setup: the
- * first downloads to a temporary file and renames it into place, the others wait for it. A failed setup is not retried
+ * Provides the ffprobe binary, downloading it on first use. Callers on many threads at once share one setup, which
+ * downloads to a temporary file and renames it into place while they all wait for it. A failed setup is not retried
  * for ten minutes, so a missing network does not stall every audiobook import on its own download attempt.
+ * <p>
+ * The setup runs on a thread of its own, and callers wait for it in a way an interrupt ends. An import that is given up
+ * on at its file's deadline, and interrupted, then stops waiting, but does not stop the download, which on a slow link
+ * can take longer than one file's deadline: stopped, it would fail every audiobook after it for ten minutes, and they
+ * would be saved without their chapters.
  */
 @Slf4j
 @Service
@@ -41,6 +50,8 @@ public class FfprobeService {
     private final FileService fileService;
 
     private final ReentrantLock setupLock = new ReentrantLock();
+    // Guarded by setupLock: the setup running now, or the last one
+    private Future<Path> setup;
     private volatile Path binary;
     private volatile boolean setupFailed;
     private volatile long retrySetupAtNanos;
@@ -51,29 +62,46 @@ public class FfprobeService {
             return ready;
         }
         try {
-            setupLock.lockInterruptibly();
+            return currentSetup().get();
         } catch (InterruptedException e) {
             Thread.currentThread().interrupt();
             return null;
+        } catch (ExecutionException e) {
+            log.warn("Failed to set up ffprobe binary: {}", e.getCause().toString());
+            return null;
         }
+    }
+
+    /** The setup running now, started if there is none, or the outcome of the last one if it is still good. */
+    private Future<Path> currentSetup() {
+        setupLock.lock();
         try {
-            // Another caller may have finished, or failed, while this one waited
-            ready = readyBinary();
-            if (ready != null || setupFailedRecently()) {
-                return ready;
+            if (setup == null || setup.isDone()) {
+                // Another caller's setup may have finished, or failed, since this one looked
+                Path ready = readyBinary();
+                if (ready != null || setupFailedRecently()) {
+                    return CompletableFuture.completedFuture(ready);
+                }
+                FutureTask<Path> task = new FutureTask<>(this::runSetup);
+                Thread.ofPlatform().daemon(true).name("ffprobe-setup").start(task);
+                setup = task;
             }
-            try {
-                binary = setupFfprobeBinary();
-                setupFailed = false;
-                return binary;
-            } catch (Exception e) {
-                log.warn("Failed to set up ffprobe binary: {}", e.getMessage());
-                retrySetupAtNanos = System.nanoTime() + RETRY_FAILED_SETUP_AFTER.toNanos();
-                setupFailed = true;
-                return null;
-            }
+            return setup;
         } finally {
             setupLock.unlock();
+        }
+    }
+
+    private Path runSetup() {
+        try {
+            binary = setupFfprobeBinary();
+            setupFailed = false;
+            return binary;
+        } catch (Exception e) {
+            log.warn("Failed to set up ffprobe binary: {}", e.getMessage());
+            retrySetupAtNanos = System.nanoTime() + RETRY_FAILED_SETUP_AFTER.toNanos();
+            setupFailed = true;
+            return null;
         }
     }
 

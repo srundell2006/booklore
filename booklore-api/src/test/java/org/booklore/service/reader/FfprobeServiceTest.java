@@ -12,6 +12,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 import java.io.ByteArrayInputStream;
 import java.io.IOException;
 import java.io.InputStream;
+import java.io.SequenceInputStream;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
@@ -213,6 +214,70 @@ class FfprobeServiceTest {
         release.countDown();
         downloader.join(5000);
         assertThat(service.getFfprobeBinary()).isEqualTo(tempDir.resolve("tools/ffprobe").resolve(getExpectedBinaryName()));
+    }
+
+    @Test
+    void callerGivenUpOnDuringTheDownloadDoesNotStopItForTheOthers() throws Exception {
+        CountDownLatch downloading = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        AtomicInteger downloads = new AtomicInteger();
+        FfprobeService service = new FfprobeService(fileService) {
+            @Override
+            InputStream openDownload(String url) {
+                downloads.incrementAndGet();
+                // A slow download: the first bytes come at once, the rest only later, and an interrupt does not end
+                // the wait for them, as it does not end a socket read
+                InputStream rest = new InputStream() {
+                    private final InputStream bytes = new ByteArrayInputStream("binary".getBytes());
+
+                    @Override
+                    public int read() throws IOException {
+                        downloading.countDown();
+                        boolean interrupted = false;
+                        while (true) {
+                            try {
+                                release.await();
+                                break;
+                            } catch (InterruptedException e) {
+                                interrupted = true;
+                            }
+                        }
+                        if (interrupted) {
+                            Thread.currentThread().interrupt();
+                        }
+                        return bytes.read();
+                    }
+                };
+                return new SequenceInputStream(new ByteArrayInputStream("complete-".getBytes()), rest);
+            }
+        };
+        AtomicReference<Path> callerResult = new AtomicReference<>(Path.of("unset"));
+        AtomicBoolean callerInterrupted = new AtomicBoolean();
+        // The first audiobook of a scan, whose import is given up on at its file's deadline
+        Thread caller = Thread.ofPlatform().daemon().start(() -> {
+            callerResult.set(service.getFfprobeBinary());
+            callerInterrupted.set(Thread.currentThread().isInterrupted());
+        });
+        try {
+            assertThat(downloading.await(5, TimeUnit.SECONDS)).isTrue();
+
+            caller.interrupt();
+            caller.join(1000);
+
+            assertThat(caller.isAlive()).as("the caller to stop waiting").isFalse();
+            assertThat(callerResult.get()).isNull();
+            assertThat(callerInterrupted).isTrue();
+        } finally {
+            release.countDown();
+        }
+        // The download went on, so the next audiobook gets its chapters
+        Path toolsDir = tempDir.resolve("tools/ffprobe");
+        assertThat(service.getFfprobeBinary()).isEqualTo(toolsDir.resolve(getExpectedBinaryName()));
+        assertThat(Files.readString(toolsDir.resolve(getExpectedBinaryName()))).isEqualTo("complete-binary");
+        assertThat(downloads).hasValue(1);
+        try (Stream<Path> files = Files.list(toolsDir)) {
+            assertThat(files).extracting(file -> file.getFileName().toString()).containsExactly(getExpectedBinaryName());
+        }
     }
 
     @Test
