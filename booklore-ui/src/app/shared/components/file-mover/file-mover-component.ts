@@ -14,7 +14,7 @@ import {LibraryService} from "../../../features/book/service/library.service";
 import {AppSettingsService} from '../../service/app-settings.service';
 import {Select} from 'primeng/select';
 import {Library, LibraryPath} from '../../../features/book/model/library.model';
-import {replacePlaceholders, sanitize} from '../../util/pattern-resolver';
+import {MAX_COMPONENT_BYTES, resolveFilePath, sanitize, truncateAuthorsForFilesystem, truncatePathComponent} from '../../util/pattern-resolver';
 
 interface FilePreview {
   bookId: number;
@@ -153,8 +153,8 @@ export class FileMoverComponent implements OnDestroy {
 
   applyPattern(): void {
     this.filePreviews = this.books.map(book => {
-      const fileName = book.fileName ?? '';
-      const fileSubPath = book.fileSubPath ? `${book.fileSubPath.replace(/\/+$/g, '')}/` : '';
+      const fileName = book.primaryFile?.fileName ?? '';
+      const fileSubPath = book.primaryFile?.fileSubPath ? `${book.primaryFile.fileSubPath.replace(/\/+$/g, '')}/` : '';
 
       const relativeOriginalPath = `${fileSubPath}${fileName}`;
 
@@ -247,34 +247,23 @@ export class FileMoverComponent implements OnDestroy {
 
   private updatePreviewPaths(preview: FilePreview, book: Book): void {
     const meta = book.metadata!;
-    const fileName = book.fileName ?? '';
-    const extension = fileName.match(/\.[^.]+$/)?.[0] ?? '';
+    const fileName = book.primaryFile?.fileName?.trim() ?? '';
     const pattern = this.getPatternForLibrary(preview.targetLibraryId);
 
     const values: Record<string, string> = {
-      authors: sanitize(meta.authors?.join(', ') || 'Unknown Author'),
-      title: sanitize(meta.title || 'Untitled'),
-      subtitle: sanitize(meta.subtitle || ''),
+      authors: sanitize(truncateAuthorsForFilesystem(meta.authors?.join(', ') || 'Unknown Author')),
+      title: truncatePathComponent(sanitize(meta.title || 'Untitled'), MAX_COMPONENT_BYTES),
+      subtitle: truncatePathComponent(sanitize(meta.subtitle || ''), MAX_COMPONENT_BYTES),
       year: this.formatYear(meta.publishedDate),
-      series: sanitize(meta.seriesName || ''),
+      series: truncatePathComponent(sanitize(meta.seriesName || ''), MAX_COMPONENT_BYTES),
       seriesIndex: this.formatSeriesIndex(meta.seriesNumber ?? undefined),
       language: sanitize(meta.language || ''),
-      publisher: sanitize(meta.publisher || ''),
+      publisher: truncatePathComponent(sanitize(meta.publisher || ''), MAX_COMPONENT_BYTES),
       isbn: sanitize(meta.isbn13 || meta.isbn10 || ''),
       currentFilename: fileName
     };
 
-    let newPath: string;
-
-    if (!pattern?.trim()) {
-      newPath = fileName;
-    } else {
-      newPath = replacePlaceholders(pattern, values);
-
-      if (!newPath.endsWith(extension)) {
-        newPath += extension;
-      }
-    }
+    const newPath = resolveFilePath(pattern, values, fileName, book.primaryFile?.folderBased ?? false);
 
     preview.relativeNewPath = newPath;
     preview.newPath = this.getFullPath(preview.targetLibraryId, newPath);

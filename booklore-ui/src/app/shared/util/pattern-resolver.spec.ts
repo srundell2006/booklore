@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {sanitize} from './pattern-resolver';
+import {resolveFilePath, sanitize, truncateAuthorsForFilesystem, truncatePathComponent} from './pattern-resolver';
 
 // The move preview must show the names PathPatternResolver.sanitize writes on the server,
 // so these cases mirror the backend tests. Invisible characters are written as escapes.
@@ -156,6 +156,93 @@ describe('pattern-resolver', () => {
       const once = sanitize(input);
       expect(sanitize(once)).toBe(once);
       expect(once.normalize('NFC')).toBe(once);
+    });
+  });
+
+  // PathPatternResolver caps values and path components in UTF-8 bytes, which non-Latin names
+  // reach long before Latin ones do
+  describe('truncatePathComponent', () => {
+
+    it('should leave a component within the limit unchanged', () => {
+      expect(truncatePathComponent('The Hobbit', 200)).toBe('The Hobbit');
+      expect(truncatePathComponent('ب'.repeat(100), 200)).toBe('ب'.repeat(100));
+    });
+
+    it('should cut at the last whole code point that fits', () => {
+      expect(truncatePathComponent('ب'.repeat(120), 200)).toBe('ب'.repeat(100));
+      expect(truncatePathComponent('某'.repeat(70), 200)).toBe('某'.repeat(66));
+      expect(truncatePathComponent('\u{10000}'.repeat(60), 202)).toBe('\u{10000}'.repeat(50));
+    });
+  });
+
+  describe('truncateAuthorsForFilesystem', () => {
+
+    it('should leave an author list within 180 bytes unchanged', () => {
+      expect(truncateAuthorsForFilesystem('John Doe, Jane Smith')).toBe('John Doe, Jane Smith');
+      expect(truncateAuthorsForFilesystem('某'.repeat(60))).toBe('某'.repeat(60));
+    });
+
+    it('should cut the list after the last author that fits and add et al.', () => {
+      const authors = Array.from({length: 10}, () => 'A'.repeat(20));
+      expect(truncateAuthorsForFilesystem(authors.join(', '))).toBe(`${authors.slice(0, 8).join(', ')} et al.`);
+    });
+
+    it('should cut a first author that alone is too long', () => {
+      expect(truncateAuthorsForFilesystem('某'.repeat(100))).toBe(`${'某'.repeat(57)} et al.`);
+      expect(truncateAuthorsForFilesystem(`${'某'.repeat(100)}, Jane Smith`)).toBe(`${'某'.repeat(57)} et al.`);
+    });
+  });
+
+  describe('resolveFilePath', () => {
+
+    const hobbit = {authors: 'J.R.R. Tolkien', title: 'The Hobbit', series: ''};
+
+    it('should give a book file the extension of its current name', () => {
+      expect(resolveFilePath('{authors}/{title}', hobbit, 'the_hobbit.epub', false)).toBe('J.R.R. Tolkien/The Hobbit.epub');
+    });
+
+    it('should not add the extension again when the pattern places it', () => {
+      expect(resolveFilePath('{title}.{extension}', hobbit, 'the_hobbit.epub', false)).toBe('The Hobbit.epub');
+      expect(resolveFilePath('{authors}/{currentFilename}', {...hobbit, currentFilename: 'the_hobbit.epub'}, 'the_hobbit.epub', false))
+        .toBe('J.R.R. Tolkien/the_hobbit.epub');
+    });
+
+    it('should not give a folder audiobook an extension from the dot in its name', () => {
+      const values = {seriesIndex: '01', title: 'The Assassin\'s Blade', authors: 'Sarah J. Maas', year: '2015'};
+      expect(resolveFilePath('{seriesIndex}. {title} - {authors} ({year})', values, '01. The Assassin\'s Blade', true))
+        .toBe('01. The Assassin\'s Blade - Sarah J. Maas (2015)');
+    });
+
+    it('should drop trailing dots from the folders of a book file but not of a folder audiobook', () => {
+      const values = {authors: 'Tolkien J.R.R.', title: 'The Hobbit'};
+      expect(resolveFilePath('{authors}/{title}', values, 'the_hobbit.epub', false)).toBe('Tolkien J.R.R/The Hobbit.epub');
+      expect(resolveFilePath('{authors}/{title}', values, 'The Hobbit', true)).toBe('Tolkien J.R.R./The Hobbit');
+    });
+
+    it('should fall back to the current name when the pattern resolves to nothing', () => {
+      expect(resolveFilePath('{series}', hobbit, 'the_hobbit.epub', false)).toBe('the_hobbit.epub');
+      expect(resolveFilePath('  ', hobbit, 'the_hobbit.epub', false)).toBe('the_hobbit.epub');
+    });
+
+    it('should keep unknown placeholders, as the server does', () => {
+      expect(resolveFilePath('{title} {titel}', hobbit, 'the_hobbit.epub', false)).toBe('The Hobbit {titel}.epub');
+    });
+
+    it('should cut a long file name to 245 bytes and keep its extension', () => {
+      const values = {title: 'ب'.repeat(100), authors: `${'某'.repeat(57)} et al.`};
+      expect(resolveFilePath('{title} - {authors}', values, 'book.epub', false)).toBe(`${'ب'.repeat(100)} - ${'某'.repeat(12)}.epub`);
+      expect(resolveFilePath('{title} - {authors}', values, 'Book', true)).toBe(`${'ب'.repeat(100)} - ${'某'.repeat(14)}`);
+    });
+
+    it('should cut every folder in the path to 245 bytes', () => {
+      const values = {series: 'Ж'.repeat(100), publisher: 'Ж'.repeat(30), title: 'Ж'};
+      expect(resolveFilePath('{series} - {publisher}/{title}', values, 'book.epub', false))
+        .toBe(`${'Ж'.repeat(100)} - ${'Ж'.repeat(21)}/Ж.epub`);
+    });
+
+    it('should keep the space a title cut to its byte limit ends with, as the server does', () => {
+      const title = truncatePathComponent(sanitize(`${'ب'.repeat(99)} ب`), 200);
+      expect(resolveFilePath('{title}', {title}, 'book.epub', false)).toBe(`${'ب'.repeat(99)} .epub`);
     });
   });
 });
