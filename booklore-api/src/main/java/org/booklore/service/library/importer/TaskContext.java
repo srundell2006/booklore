@@ -18,9 +18,10 @@ import java.util.concurrent.atomic.AtomicBoolean;
  * The {@link PrepareContext} of one import task. Its checkpoints stop the work once the task is abandoned, and it
  * hands out the shared render permits and heap, waiting for them no longer than the task's deadline.
  *
- * <p>Everything the task holds is released exactly once: by the task when it is done with it, or by
- * {@link #revokeAll()} when the task is abandoned, which gives it to the next task at once. Each render permit and
- * reservation is released through its own compare-and-set, so the two can race safely.
+ * <p>Everything the task holds is released exactly once: by the task when it is done with it, or when the task is
+ * abandoned, by {@link #revoke()} for its render permit, which goes to the next task at once, and by
+ * {@link #revokeHeap()} for its heap, which the executor calls only if the task's thread does not return soon. Each
+ * render permit and reservation is released through its own compare-and-set, so the two can race safely.
  */
 @Slf4j
 final class TaskContext implements PrepareContext {
@@ -112,16 +113,23 @@ final class TaskContext implements PrepareContext {
     }
 
     /**
-     * Takes back the render permit and heap of an abandoned task for other tasks to use, and kills any process it
-     * registers from now on. Its thread may still be using that heap, so the bytes count as orphaned until it returns.
-     *
-     * @return the heap taken back, in bytes
+     * Takes back the render permit of an abandoned task for other tasks to use, and kills any process it registers from
+     * now on. Its heap stays reserved for it until {@link #revokeHeap()}.
      */
-    synchronized long revokeAll() {
+    synchronized void revoke() {
         revoked = true;
         if (renderHeld.compareAndSet(true, false)) {
             renderPermits.release();
         }
+    }
+
+    /**
+     * Takes back the heap an abandoned task still holds for other tasks to use. Its thread may still be using that heap,
+     * so the bytes count as orphaned until it returns.
+     *
+     * @return the heap taken back, in bytes
+     */
+    synchronized long revokeHeap() {
         long bytes = 0;
         for (HeapBudget.Reservation reservation : reservations) {
             if (reservation.release()) {
@@ -133,7 +141,7 @@ final class TaskContext implements PrepareContext {
         return bytes;
     }
 
-    /** The heap {@link #revokeAll()} took back while the task's thread was still running. */
+    /** The heap {@link #revokeHeap()} took back while the task's thread was still running. */
     synchronized long orphanedBytes() {
         return orphanedBytes;
     }

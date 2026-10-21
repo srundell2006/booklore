@@ -503,8 +503,8 @@ class ImportExecutorTest {
     }
 
     @Test
-    void heapOfAnAbandonedTaskCountsAsOrphanedUntilItsThreadReturns() throws Exception {
-        ImportExecutor executor = executor(1, Duration.ofMillis(300), 16, 2, 64 * MIB);
+    void heapOfAnAbandonedTaskCountsAsOrphanedFromAnotherTimeoutOnUntilItsThreadReturns() throws Exception {
+        ImportExecutor executor = executor(1, Duration.ofSeconds(1), 16, 2, 64 * MIB);
         FileTask<String> task = submit(executor, "parse", ctx -> {
             try (HeapReservation ignored = ctx.reserveHeap(40 * MIB)) {
                 return wedge();
@@ -512,7 +512,12 @@ class ImportExecutorTest {
         });
 
         assertThat(outcome(task)).isInstanceOf(Outcome.TimedOut.class);
-        assertThat(executor.orphanedHeapBytes()).isEqualTo(40 * MIB);
+        // Its thread may be about to return, and until then the heap is still its own
+        assertThat(executor.orphanedHeapBytes()).isZero();
+        assertThat(executor.availableHeapBytes()).isEqualTo(24 * MIB);
+        assertThat(executor.breakerOpen()).isFalse();
+
+        awaitUntil("the heap to be given to other tasks", () -> executor.orphanedHeapBytes() == 40 * MIB);
         // One stuck thread is far from the limit of 16; the orphaned heap alone opens the breaker
         assertThat(executor.breakerOpen()).isTrue();
         // The budget is whole again for other tasks
@@ -520,6 +525,41 @@ class ImportExecutorTest {
 
         release.countDown();
         awaitUntil("the stuck thread to return", () -> executor.stuckThreads() == 0);
+        assertThat(executor.orphanedHeapBytes()).isZero();
+        assertThat(executor.breakerOpen()).isFalse();
+        assertThat(executor.availableHeapBytes()).isEqualTo(64 * MIB);
+    }
+
+    @Test
+    void aFileGivenUpOnWithMostOfTheHeapDoesNotOpenTheBreakerWhenItsThreadReturnsSoonAfter() throws Exception {
+        // As a scanned PDF whose page render reserves most of the budget and is still in a decode at its deadline,
+        // which no interrupt ends: its thread returns once the decode is done
+        ImportExecutor executor = executor(1, Duration.ofSeconds(1), 16, 2, 64 * MIB);
+        FileTask<String> scan = submit(executor, "scan.pdf", ctx -> {
+            try (HeapReservation ignored = ctx.reserveHeap(48 * MIB)) {
+                return wedge();
+            }
+        });
+        List<FileTask<String>> queued = new ArrayList<>();
+        for (int i = 0; i < 5; i++) {
+            queued.add(submit(executor, "book-" + i + ".epub", ctx -> ctx.render(4 * MIB, () -> "read")));
+        }
+
+        assertThat(outcome(scan)).isInstanceOf(Outcome.TimedOut.class);
+        // The files queued behind it are read, not skipped as if storage were stuck
+        for (FileTask<String> task : queued) {
+            assertThat(valueOf(task)).isEqualTo("read");
+        }
+        assertThat(executor.breakerOpen()).isFalse();
+        // Nothing was given the heap its thread may still be using
+        assertThat(executor.availableHeapBytes()).isEqualTo(16 * MIB);
+
+        release.countDown();
+        awaitUntil("the stuck thread to return", () -> executor.stuckThreads() == 0);
+        assertThat(executor.availableHeapBytes()).isEqualTo(64 * MIB);
+        assertThat(executor.orphanedHeapBytes()).isZero();
+        // Nor is it orphaned later
+        Thread.sleep(1200);
         assertThat(executor.orphanedHeapBytes()).isZero();
         assertThat(executor.breakerOpen()).isFalse();
         assertThat(executor.availableHeapBytes()).isEqualTo(64 * MIB);

@@ -75,6 +75,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.BooleanSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -575,6 +576,32 @@ class ParallelBookImporterTest {
         assertThat(logged(Level.ERROR)).containsExactly("Storage for library 'Books' is not responding: 1 import threads are "
                 + "stuck; 2 new books were not started and will be picked up by the next scan. Check the share, or restart "
                 + "Booklore if it stays stuck.");
+    }
+
+    @Test
+    void aFileGivenUpOnWhileHoldingMostOfTheHeapDoesNotStopTheScan() throws Exception {
+        // As a scanned PDF whose page render reserves most of the heap budget and is still in a decode at its deadline,
+        // which no interrupt ends: its thread returns once the decode is done
+        Duration timeout = Duration.ofSeconds(1);
+        doAnswer(inv -> {
+            PrepareContext ctx = inv.getArgument(1);
+            try (HeapReservation ignored = ctx.reserveHeap(48 * MIB)) {
+                long decoded = System.nanoTime() + timeout.plusMillis(300).toNanos();
+                while (System.nanoTime() < decoded) {
+                    LockSupport.parkNanos(decoded - System.nanoTime());
+                }
+            }
+            return prepare(inv.getArgument(0));
+        }).when(processor).prepare(argThat(request -> request.fileName().equals("scan.pdf")), any());
+
+        ImportSummary summary = importer(executor(1, 4, timeout, 16)).importGroups(groups(
+                List.of(epub("one")), List.of(file("scan.pdf", BookFileType.PDF)), List.of(epub("two")), List.of(epub("three"))), library);
+
+        assertThat(summary.stoppedStorageStuck()).isFalse();
+        assertThat(summary.timedOut()).isEqualTo(1);
+        assertThat(summary.notStarted()).isZero();
+        assertThat(summary.added()).isEqualTo(3);
+        assertThat(logged(Level.ERROR)).isEmpty();
     }
 
     @Test
