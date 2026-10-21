@@ -61,11 +61,13 @@ public class AudiobookMergeController {
                     "bookId", bookId));
         }
 
-        // Virtual threads start with an empty ThreadLocal, so without this the
+        // A new thread starts with an empty ThreadLocal, so without this the
         // SecurityContext is missing and every progress notification is silently
-        // dropped by NotificationService.
+        // dropped by NotificationService. A platform thread, because merging reads
+        // and writes audio files on library storage, and a virtual thread blocked
+        // in file IO on JDK 25 holds its carrier, stalling every virtual thread.
         SecurityContext securityContext = SecurityContextHolder.getContext();
-        Thread.startVirtualThread(() -> {
+        Thread.ofPlatform().daemon(true).name("audiobook-merge-" + bookId).start(() -> {
             SecurityContextHolder.setContext(securityContext);
             AtomicBoolean cancelFlag = running.get(bookId);
             try {

@@ -36,7 +36,9 @@ public class EbookConversionController {
             @Parameter(description = "Target format, e.g. epub") @RequestParam(required = false) String target) {
 
         SecurityContext securityContext = SecurityContextHolder.getContext();
-        Thread.startVirtualThread(() -> {
+        // A platform thread: conversion reads and writes the book on library storage, and a virtual
+        // thread blocked in file IO on JDK 25 holds its carrier, stalling every other virtual thread.
+        Thread.ofPlatform().daemon(true).name("ebook-conversion-" + bookId).start(() -> {
             SecurityContextHolder.setContext(securityContext);
             try {
                 notificationService.sendMessage(Topic.LOG, "Converting book " + bookId + "...");
