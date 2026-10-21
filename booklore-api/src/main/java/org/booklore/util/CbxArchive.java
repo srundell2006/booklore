@@ -53,9 +53,20 @@ public abstract class CbxArchive implements AutoCloseable {
      * through the unrar CLI when it is installed.
      */
     public static CbxArchive open(File file, ArchiveUtils.ArchiveType type) throws IOException {
+        return open(file, type, Integer.MAX_VALUE);
+    }
+
+    /**
+     * As {@link #open(File, ArchiveUtils.ArchiveType)}, with a 7z decoding with no more than
+     * {@code sevenZipMemoryLimitKib} of heap. Its LZMA decoder allocates the whole dictionary when
+     * it starts, up to 1.5 GiB, and keeps it until the archive is closed; one that would need more
+     * than the limit throws {@link org.apache.commons.compress.MemoryLimitException}, saying how
+     * much, instead. The limit does nothing for a ZIP or RAR.
+     */
+    public static CbxArchive open(File file, ArchiveUtils.ArchiveType type, int sevenZipMemoryLimitKib) throws IOException {
         return switch (type) {
             case ZIP -> openZip(file);
-            case SEVEN_ZIP -> new SevenZ(SevenZFile.builder().setFile(file).get());
+            case SEVEN_ZIP -> new SevenZ(SevenZFile.builder().setFile(file).setMaxMemoryLimitKiB(sevenZipMemoryLimitKib).get());
             case RAR -> openRar(file);
             case UNKNOWN -> throw new IOException("Not a ZIP, 7z or RAR archive: " + file.getName());
         };

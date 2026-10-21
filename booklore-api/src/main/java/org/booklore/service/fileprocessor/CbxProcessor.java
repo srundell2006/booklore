@@ -21,11 +21,13 @@ import org.booklore.util.FileService;
 import org.booklore.util.FileUtils;
 import org.booklore.util.cover.RenderedCover;
 import lombok.extern.slf4j.Slf4j;
+import org.apache.commons.compress.MemoryLimitException;
 import org.apache.commons.io.FilenameUtils;
 import org.springframework.stereotype.Service;
 
 import java.awt.image.BufferedImage;
 import java.io.File;
+import java.io.IOException;
 import java.util.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -39,6 +41,10 @@ public class CbxProcessor extends AbstractFileProcessor implements BookFileProce
 
     private static final Pattern UNDERSCORE_HYPHEN_PATTERN = Pattern.compile("[_\\-]");
     private static final Pattern IMAGE_EXTENSION_CASE_INSENSITIVE_PATTERN = Pattern.compile("(?i).*\\.(jpg|jpeg|png|webp)");
+    // Heap a 7z read reserves for its decoder: xz takes 64.1 MiB for a 64 MiB dictionary, the largest of 7-Zip's presets
+    static final int SEVEN_ZIP_DECODER_KIB = 66 * 1024;
+    // The most heap a 7z decoder is given: a quarter of the heap, what the import's heap budget is by default
+    private static final long MAX_SEVEN_ZIP_DECODER_KIB = Runtime.getRuntime().maxMemory() / 4 / 1024;
     private final CbxMetadataExtractor cbxMetadataExtractor;
 
     public CbxProcessor(BookRepository bookRepository,
@@ -62,6 +68,9 @@ public class CbxProcessor extends AbstractFileProcessor implements BookFileProce
         // Detect the type and open the archive once for both the cover and ComicInfo.xml: on a
         // network share every open costs round trips, and junrar walks every RAR header per open
         ArchiveUtils.ArchiveType archiveType = ArchiveUtils.detectArchiveType(file);
+        if (archiveType == ArchiveUtils.ArchiveType.SEVEN_ZIP) {
+            return readSevenZip(request, file, baseName, covers, ctx);
+        }
         RenderedCover cover = null;
         BookMetadata extracted;
         try (CbxArchive archive = CbxArchive.open(file, archiveType)) {
@@ -80,6 +89,81 @@ public class CbxProcessor extends AbstractFileProcessor implements BookFileProce
             log.warn("Could not find cover image in CBZ file '{}'", request.fileName());
         }
         return new ExtractedContent(extracted, cover, archiveType);
+    }
+
+    /**
+     * {@link #readContent} for a 7z. Its LZMA decoder allocates the whole dictionary when it starts, up to 64 MiB
+     * with 7-Zip's presets, and keeps it until the archive is closed: with many 7z files read at once, and each held
+     * open while its cover waits to render, that is heap the import's budget would not know of. So the archive is
+     * read under heap reserved for its decoder, and closed before the cover is rendered. One with a larger dictionary
+     * than the presets' is opened again under heap for what its decoder needs, unless that is more than a quarter of
+     * the heap. As before, only the first image is tried.
+     */
+    private ExtractedContent readSevenZip(PrepareRequest request, File file, String baseName, CoverMaker covers,
+                                          PrepareContext ctx) {
+        SevenZipEntries entries;
+        try {
+            try {
+                entries = readSevenZipEntries(file, baseName, SEVEN_ZIP_DECODER_KIB, ctx);
+            } catch (MemoryLimitException e) {
+                if (e.getMemoryNeededInKb() > MAX_SEVEN_ZIP_DECODER_KIB) {
+                    throw new IOException("its 7z decoder needs " + e.getMemoryNeededInKb() / 1024
+                            + " MiB of heap, more than a quarter of the heap", e);
+                }
+                entries = readSevenZipEntries(file, baseName, (int) e.getMemoryNeededInKb(), ctx);
+            }
+        } catch (PrepareAbandonedException | PrepareDeadlineException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("Could not open comic archive '{}': {}", request.fileName(), e.getMessage());
+            // What CbxMetadataExtractor returns for an archive it cannot open
+            entries = new SevenZipEntries(null, null, BookMetadata.builder().title(baseName).build());
+        }
+
+        RenderedCover cover = null;
+        if (entries.coverImage() != null) {
+            try {
+                cover = covers.fromEncodedOrThrow(entries.coverImage(), true);
+            } catch (PrepareAbandonedException | PrepareDeadlineException e) {
+                throw e;
+            } catch (Exception e) {
+                log.warn("Failed to read image from archive entry {}: {}", entries.coverName(), e.getMessage());
+            }
+        }
+        if (cover == null) {
+            log.warn("Could not find cover image in CBZ file '{}'", request.fileName());
+        }
+        return new ExtractedContent(entries.metadata(), cover, ArchiveUtils.ArchiveType.SEVEN_ZIP);
+    }
+
+    /**
+     * The first image's bytes and the ComicInfo.xml metadata of a 7z, read under {@code decoderKib} of heap for its
+     * decoder.
+     *
+     * @throws MemoryLimitException when its decoder needs more than {@code decoderKib}
+     */
+    private SevenZipEntries readSevenZipEntries(File file, String baseName, int decoderKib, PrepareContext ctx)
+            throws IOException {
+        try (HeapReservation ignored = ctx.reserveHeap(decoderKib * 1024L);
+             CbxArchive archive = CbxArchive.open(file, ArchiveUtils.ArchiveType.SEVEN_ZIP, decoderKib)) {
+            String coverName = imageNames(archive).stream().findFirst().orElse(null);
+            byte[] coverImage = null;
+            if (coverName != null) {
+                ctx.checkpoint();
+                try {
+                    coverImage = archive.readEntry(coverName);
+                } catch (MemoryLimitException e) {
+                    throw e;
+                } catch (Exception e) {
+                    log.warn("Failed to read image from archive entry {}: {}", coverName, e.getMessage());
+                }
+            }
+            ctx.checkpoint();
+            return new SevenZipEntries(coverName, coverImage, cbxMetadataExtractor.extractMetadata(archive, baseName));
+        }
+    }
+
+    private record SevenZipEntries(String coverName, byte[] coverImage, BookMetadata metadata) {
     }
 
     @Override

@@ -160,6 +160,43 @@ public final class CbxTestArchives {
         return path;
     }
 
+    /**
+     * Rewrites a CB7 that {@link #sevenZip} wrote so that every LZMA2 block in it claims a
+     * dictionary of {@code dictionaryBytes}, a size LZMA2 can state: 2 or 3 times a power of two.
+     * Its data, compressed with a smaller dictionary, still decodes, through a decoder that
+     * allocates the larger one. SevenZOutputFile leaves the header uncompressed.
+     */
+    public static Path claimLzma2Dictionary(Path sevenZip, long dictionaryBytes) throws IOException {
+        int property = 0;
+        while ((long) (2 | (property & 1)) << (property / 2 + 11) != dictionaryBytes) {
+            if (++property == 40) {
+                throw new IllegalArgumentException("LZMA2 cannot state a dictionary of " + dictionaryBytes + " bytes");
+            }
+        }
+        byte[] bytes = Files.readAllBytes(sevenZip);
+        ByteBuffer startHeader = ByteBuffer.wrap(bytes).order(ByteOrder.LITTLE_ENDIAN);
+        int headerStart = Math.toIntExact(32 + startHeader.getLong(12));
+        int headerLength = Math.toIntExact(startHeader.getLong(20));
+        int claimed = 0;
+        // Each block's coders: one coder, LZMA2's ID 0x21 with properties, one byte of them
+        for (int i = headerStart; i + 4 < headerStart + headerLength; i++) {
+            if (bytes[i] == 0x01 && bytes[i + 1] == 0x21 && bytes[i + 2] == 0x21 && bytes[i + 3] == 0x01) {
+                bytes[i + 4] = (byte) property;
+                claimed++;
+            }
+        }
+        if (claimed == 0) {
+            throw new IllegalArgumentException("No LZMA2 block in " + sevenZip);
+        }
+        CRC32 headerCrc = new CRC32();
+        headerCrc.update(bytes, headerStart, headerLength);
+        startHeader.putInt(28, (int) headerCrc.getValue());
+        CRC32 startHeaderCrc = new CRC32();
+        startHeaderCrc.update(bytes, 12, 20);
+        startHeader.putInt(8, (int) startHeaderCrc.getValue());
+        return Files.write(sevenZip, bytes);
+    }
+
     public static Path rar(Path path, Entry... entries) throws IOException {
         try (OutputStream out = Files.newOutputStream(path)) {
             out.write(new byte[]{0x52, 0x61, 0x72, 0x21, 0x1A, 0x07, 0x00});

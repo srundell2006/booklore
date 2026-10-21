@@ -19,6 +19,7 @@ import org.booklore.service.fileprocessor.prepare.IoCallable;
 import org.booklore.service.fileprocessor.prepare.PrepareAbandonedException;
 import org.booklore.service.fileprocessor.prepare.PrepareContext;
 import org.booklore.service.fileprocessor.prepare.PrepareRequest;
+import org.booklore.service.fileprocessor.prepare.PreparedBookFile;
 import org.booklore.service.metadata.MetadataMatchService;
 import org.booklore.service.metadata.extractor.CbxMetadataExtractor;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
@@ -44,6 +45,7 @@ import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.tukaani.xz.LZMA2InputStream;
 
 import javax.imageio.ImageIO;
 import java.awt.image.BufferedImage;
@@ -54,6 +56,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.List;
 import java.util.concurrent.atomic.AtomicBoolean;
@@ -64,19 +67,23 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.booklore.util.CbxTestArchives.SOLID_CB7_COMIC_INFO_FIRST;
 import static org.booklore.util.CbxTestArchives.SOLID_CB7_COMIC_INFO_LAST;
+import static org.booklore.util.CbxTestArchives.claimLzma2Dictionary;
 import static org.booklore.util.CbxTestArchives.comicInfo;
 import static org.booklore.util.CbxTestArchives.dir;
 import static org.booklore.util.CbxTestArchives.file;
 import static org.booklore.util.CbxTestArchives.image;
 import static org.booklore.util.CbxTestArchives.imageFile;
 import static org.mockito.ArgumentMatchers.any;
+import static org.mockito.ArgumentMatchers.anyInt;
 import static org.mockito.ArgumentMatchers.anyLong;
 import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.lenient;
 import static org.mockito.Mockito.mockStatic;
 import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.spy;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -610,8 +617,104 @@ class CbxProcessorTest {
                 assertThat(writtenCoverWidth()).isEqualTo(1);
                 assertThat(book.getMetadata().getTitle()).isEqualTo("Once");
                 archiveUtils.verify(() -> ArchiveUtils.detectArchiveType(any(File.class)), times(1));
-                cbxArchive.verify(() -> CbxArchive.open(any(File.class), eq(format.archiveType())), times(1));
+                // Every open goes through the one that takes a 7z memory limit
+                cbxArchive.verify(() -> CbxArchive.open(any(File.class), eq(format.archiveType()), anyInt()), times(1));
             }
+        }
+
+        /** A context that records, in order, the heap reserved and given back and the renders. */
+        private PrepareContext recordingContext(List<String> events) {
+            return new PrepareContext() {
+                @Override
+                public void checkpoint() {
+                }
+
+                @Override
+                public <T> T render(long estimatedBytes, IoCallable<T> work) throws Exception {
+                    events.add("render");
+                    return work.call();
+                }
+
+                @Override
+                public HeapReservation reserveHeap(long bytes) {
+                    events.add("reserve " + bytes / 1024 + " KiB");
+                    return () -> events.add("release");
+                }
+
+                @Override
+                public void registerProcess(Process process) {
+                }
+            };
+        }
+
+        private PreparedBookFile prepare(Path file, List<String> events) throws Exception {
+            return processor.prepare(PrepareRequest.of(libraryFileFor(file), CropPolicy.NONE), recordingContext(events));
+        }
+
+        @Test
+        void sevenZipIsReadUnderHeapForItsDecoderAndClosedBeforeTheCoverRenders() throws Exception {
+            Path file = archive(Format.CB7, "budgeted",
+                    imageFile("001.jpg", 1),
+                    file("ComicInfo.xml", comicInfo("<Title>Budgeted</Title>")));
+            List<String> events = new ArrayList<>();
+            PreparedBookFile prepared;
+
+            try (MockedStatic<CbxArchive> cbxArchive = mockStatic(CbxArchive.class, CALLS_REAL_METHODS)) {
+                cbxArchive.when(() -> CbxArchive.open(any(File.class), any(ArchiveUtils.ArchiveType.class), anyInt()))
+                        .thenAnswer(open -> {
+                            CbxArchive archive = spy((CbxArchive) open.callRealMethod());
+                            doAnswer(close -> {
+                                events.add("close");
+                                return close.callRealMethod();
+                            }).when(archive).close();
+                            return archive;
+                        });
+
+                prepared = prepare(file, events);
+            }
+
+            // The decoder's dictionary lives as long as the archive is open: 8 MiB, as SevenZOutputFile writes it
+            assertThat(CbxProcessor.SEVEN_ZIP_DECODER_KIB).isGreaterThanOrEqualTo(LZMA2InputStream.getMemoryUsage(8 << 20));
+            assertThat(events).containsExactly(
+                    "reserve " + CbxProcessor.SEVEN_ZIP_DECODER_KIB + " KiB", "close", "release", "render");
+            assertThat(prepared.cover()).isNotNull();
+            assertThat(prepared.metadata().getTitle()).isEqualTo("Budgeted");
+        }
+
+        @Test
+        void sevenZipWithALargerDictionaryThanThePresetsIsReadAgainUnderHeapForWhatItNeeds() throws Exception {
+            // 96 MiB, one of the sizes 7-Zip offers beyond its Ultra preset's 64 MiB
+            Path file = claimLzma2Dictionary(archive(Format.CB7, "large-dictionary",
+                    imageFile("001.jpg", 1),
+                    file("ComicInfo.xml", comicInfo("<Title>Large Dictionary</Title>"))), 96L << 20);
+            List<String> events = new ArrayList<>();
+
+            PreparedBookFile prepared = prepare(file, events);
+
+            assertThat(events).containsExactly(
+                    "reserve " + CbxProcessor.SEVEN_ZIP_DECODER_KIB + " KiB", "release",
+                    "reserve " + LZMA2InputStream.getMemoryUsage(96 << 20) + " KiB", "release",
+                    "render");
+            assertThat(prepared.cover()).isNotNull();
+            assertThat(prepared.metadata().getTitle()).isEqualTo("Large Dictionary");
+        }
+
+        @Test
+        void sevenZipClaimingMoreDictionaryThanTheHeapCanSpareIsNotRead() throws Exception {
+            // 1.5 GiB, the largest 7-Zip writes, and more than a quarter of the test heap
+            long dictionaryBytes = 1536L << 20;
+            assertThat(Runtime.getRuntime().maxMemory() / 4).isLessThan(dictionaryBytes);
+            Path file = claimLzma2Dictionary(archive(Format.CB7, "My_Comic-01",
+                    imageFile("001.jpg", 1),
+                    file("ComicInfo.xml", comicInfo("<Title>Too Large</Title>"))), dictionaryBytes);
+            List<String> events = new ArrayList<>();
+
+            PreparedBookFile prepared = prepare(file, events);
+
+            assertThat(events).containsExactly("reserve " + CbxProcessor.SEVEN_ZIP_DECODER_KIB + " KiB", "release");
+            assertThat(prepared.cover()).isNull();
+            assertThat(prepared.metadata().getTitle()).isEqualTo("My_Comic-01");
+            assertThat(prepared.archiveType()).isEqualTo(ArchiveUtils.ArchiveType.SEVEN_ZIP);
         }
 
         @Test
