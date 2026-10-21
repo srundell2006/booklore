@@ -1,5 +1,6 @@
 package org.booklore.service.metadata.sidecar;
 
+import jakarta.persistence.EntityManager;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.booklore.exception.ApiError;
@@ -18,6 +19,7 @@ import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.file.Path;
@@ -38,6 +40,7 @@ public class SidecarService {
     private final SidecarMetadataMapper sidecarMapper;
     private final BookMetadataUpdater bookMetadataUpdater;
     private final PlatformTransactionManager transactionManager;
+    private final EntityManager entityManager;
 
     public Optional<SidecarMetadata> getSidecarContent(Long bookId) {
         BookEntity book = bookRepository.findByIdWithBookFiles(bookId)
@@ -149,11 +152,27 @@ public class SidecarService {
                 }
             } catch (Exception e) {
                 log.warn("Failed to import sidecar for book ID {}: {}", bookId, e.getMessage());
+            } finally {
+                forgetBooksRead();
             }
         }
 
         log.info("Bulk imported {} sidecar files for library {}", imported, library.getName());
         return imported;
+    }
+
+    /**
+     * Run from a request, each book's transaction uses the request's EntityManager (open in view),
+     * which keeps every book read so far until the request ends: each later book's flush would
+     * dirty-check all of them again, and an import over a large library would take days of CPU
+     * even with no sidecar to import. So it is cleared once each book's transaction is over.
+     * Within a transaction of the caller's, each book's transaction has an EntityManager of its
+     * own, and the caller's is left alone.
+     */
+    private void forgetBooksRead() {
+        if (!TransactionSynchronizationManager.isActualTransactionActive()) {
+            entityManager.clear();
+        }
     }
 
     private boolean importSidecar(Long bookId) {

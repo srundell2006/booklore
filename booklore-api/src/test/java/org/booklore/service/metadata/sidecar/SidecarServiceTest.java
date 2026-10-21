@@ -1,5 +1,6 @@
 package org.booklore.service.metadata.sidecar;
 
+import jakarta.persistence.EntityManager;
 import org.booklore.model.MetadataUpdateContext;
 import org.booklore.model.dto.BookMetadata;
 import org.booklore.model.dto.sidecar.SidecarMetadata;
@@ -42,6 +43,7 @@ class SidecarServiceTest {
     @Mock private SidecarMetadataMapper sidecarMapper;
     @Mock private BookMetadataUpdater bookMetadataUpdater;
     @Mock private PlatformTransactionManager transactionManager;
+    @Mock private EntityManager entityManager;
     @InjectMocks private SidecarService sidecarService;
 
     private LibraryEntity library;
@@ -79,6 +81,31 @@ class SidecarServiceTest {
         inOrder.verify(transactionManager).getTransaction(any());
         inOrder.verify(bookMetadataUpdater).setBookMetadata(argThat((MetadataUpdateContext context) -> context.getBookEntity() == book2));
         inOrder.verify(transactionManager).commit(status2);
+    }
+
+    @Test
+    void bulkImport_forgetsEachBookOnceItsTransactionIsOver() {
+        BookEntity book1 = book(1L, "one.epub");
+        BookEntity book2 = book(2L, "two.epub");
+        when(bookRepository.findBookIdsByLibraryId(1L)).thenReturn(new LinkedHashSet<>(List.of(1L, 2L)));
+        when(bookRepository.findByIdWithBookFiles(1L)).thenReturn(Optional.of(book1));
+        when(bookRepository.findByIdWithBookFiles(2L)).thenReturn(Optional.of(book2));
+        SidecarMetadata sidecar = SidecarMetadata.builder().build();
+        when(sidecarReader.readSidecarMetadata(any(Path.class))).thenReturn(Optional.of(sidecar)).thenReturn(Optional.empty());
+        when(sidecarMapper.toBookMetadata(sidecar)).thenReturn(new BookMetadata());
+        TransactionStatus status1 = mock(TransactionStatus.class);
+        TransactionStatus status2 = mock(TransactionStatus.class);
+        when(transactionManager.getTransaction(any())).thenReturn(status1, status2);
+
+        sidecarService.bulkImport(1L);
+
+        // Under open-in-view every book's transaction uses the request's EntityManager, which would keep them all
+        InOrder inOrder = inOrder(transactionManager, entityManager);
+        inOrder.verify(transactionManager).commit(status1);
+        inOrder.verify(entityManager).clear();
+        inOrder.verify(transactionManager).getTransaction(any());
+        inOrder.verify(transactionManager).commit(status2);
+        inOrder.verify(entityManager).clear();
     }
 
     @Test

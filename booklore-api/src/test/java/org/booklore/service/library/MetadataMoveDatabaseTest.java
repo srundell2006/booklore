@@ -1,5 +1,7 @@
 package org.booklore.service.library;
 
+import jakarta.persistence.EntityManager;
+import jakarta.persistence.EntityManagerFactory;
 import org.booklore.BookloreApplication;
 import org.booklore.model.dto.BookMetadata;
 import org.booklore.model.dto.settings.MetadataPersistenceSettings;
@@ -20,10 +22,12 @@ import org.booklore.service.appsettings.AppSettingService;
 import org.booklore.service.file.FileMoveService;
 import org.booklore.service.metadata.MetadataManagementService;
 import org.booklore.service.metadata.extractor.MetadataExtractorFactory;
+import org.booklore.service.metadata.sidecar.SidecarService;
 import org.booklore.service.task.TaskCronService;
 import org.booklore.task.options.LibraryRescanOptions;
 import org.booklore.task.options.RescanLibraryContext;
 import org.apache.commons.io.FilenameUtils;
+import org.hibernate.Session;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -33,12 +37,17 @@ import org.springframework.boot.test.context.SpringBootTest;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
+import org.springframework.mock.web.MockHttpServletRequest;
+import org.springframework.orm.jpa.EntityManagerHolder;
+import org.springframework.orm.jpa.support.OpenEntityManagerInViewInterceptor;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoBean;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 import org.springframework.transaction.support.TransactionTemplate;
+import org.springframework.web.context.request.ServletWebRequest;
 
 import java.io.File;
 import java.io.IOException;
@@ -112,6 +121,12 @@ class MetadataMoveDatabaseTest {
     private LibraryRescanHelper libraryRescanHelper;
     @Autowired
     private MetadataManagementService metadataManagementService;
+    @Autowired
+    private SidecarService sidecarService;
+    @Autowired
+    private OpenEntityManagerInViewInterceptor openEntityManagerInViewInterceptor;
+    @Autowired
+    private EntityManagerFactory entityManagerFactory;
     @Autowired
     private AppSettingService appSettingService;
     @Autowired
@@ -213,6 +228,35 @@ class MetadataMoveDatabaseTest {
         assertThat(libraryRoot.resolve("New Saga/A.epub")).exists();
         assertThat(libraryRoot.resolve("New Saga/B.epub")).exists();
         assertThat(libraryRoot.resolve("Old Saga")).doesNotExist();
+    }
+
+    @Test
+    void importingAllSidecarsFromARequestKeepsNoBookInTheRequestsEntityManager() throws IOException {
+        LibraryEntity library = library("{title}");
+        Long withSidecar = book(library, "old", "One", null).getId();
+        Long withoutSidecar = book(library, "old", "Two", null).getId();
+        book(library, "old", "Three", null);
+        Files.writeString(libraryRoot.resolve("old/One.metadata.json"), "{\"metadata\":{\"title\":\"New One\"}}");
+
+        // The import is a request of its own, and a request's EntityManager is open for its whole duration
+        ServletWebRequest request = new ServletWebRequest(new MockHttpServletRequest());
+        openEntityManagerInViewInterceptor.preHandle(request);
+        int imported;
+        int entitiesKept;
+        try {
+            EntityManager requestEntityManager = ((EntityManagerHolder) TransactionSynchronizationManager.getResource(entityManagerFactory)).getEntityManager();
+            imported = sidecarService.bulkImport(library.getId());
+            // Every book kept there would be dirty-checked again by the flush of each book after it
+            entitiesKept = requestEntityManager.unwrap(Session.class).getStatistics().getEntityCount();
+        } finally {
+            openEntityManagerInViewInterceptor.afterCompletion(request, null);
+        }
+
+        assertThat(imported).isEqualTo(1);
+        assertThat(entitiesKept).isZero();
+        assertThat(committedPath(withSidecar)).isEqualTo("/New One.epub");
+        assertThat(committedPath(withoutSidecar)).isEqualTo("old/Two.epub");
+        assertThat(libraryRoot.resolve("New One.epub")).exists();
     }
 
     private LibraryEntity library(String fileNamingPattern) {
