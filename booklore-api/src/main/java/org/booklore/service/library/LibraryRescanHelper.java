@@ -22,7 +22,10 @@ import org.booklore.model.enums.TaskType;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.context.annotation.Lazy;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.util.List;
 
@@ -37,8 +40,9 @@ public class LibraryRescanHelper {
     private final TaskCancellationManager cancellationManager;
     private final BookRepository bookRepository;
     private final AudiobookProcessor audiobookProcessor;
+    private final PlatformTransactionManager transactionManager;
 
-    public LibraryRescanHelper(LibraryRepository libraryRepository, MetadataExtractorFactory metadataExtractorFactory, @Lazy BookMetadataUpdater bookMetadataUpdater, NotificationService notificationService, TaskCancellationManager cancellationManager, BookRepository bookRepository, AudiobookProcessor audiobookProcessor) {
+    public LibraryRescanHelper(LibraryRepository libraryRepository, MetadataExtractorFactory metadataExtractorFactory, @Lazy BookMetadataUpdater bookMetadataUpdater, NotificationService notificationService, TaskCancellationManager cancellationManager, BookRepository bookRepository, AudiobookProcessor audiobookProcessor, PlatformTransactionManager transactionManager) {
         this.libraryRepository = libraryRepository;
         this.metadataExtractorFactory = metadataExtractorFactory;
         this.bookMetadataUpdater = bookMetadataUpdater;
@@ -46,9 +50,18 @@ public class LibraryRescanHelper {
         this.cancellationManager = cancellationManager;
         this.bookRepository = bookRepository;
         this.audiobookProcessor = audiobookProcessor;
+        this.transactionManager = transactionManager;
     }
 
-    @Transactional
+    /**
+     * Reads each book's metadata from its file again and saves it. The books are listed in one
+     * read-only transaction, and each book is saved in a transaction of its own. With "move files
+     * to library pattern" on, saving a book's metadata can move its files, and their new paths
+     * must then be committed right after the move: a refresh over a large library that stops
+     * partway (a restart) must never leave files moved while their rows still name the old paths,
+     * or the next rescan would delete those books and import their files as new ones.
+     */
+    @Transactional(readOnly = true)
     public void handleRescanOptions(RescanLibraryContext context, String taskId) {
 
         LibraryEntity library = libraryRepository.findById(context.getLibraryId()).orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(context.getLibraryId()));
@@ -90,29 +103,7 @@ public class LibraryRescanHelper {
                     TaskStatus.IN_PROGRESS);
 
             try {
-                BookMetadata bookMetadata = metadataExtractorFactory.extractMetadata(bookEntity.getPrimaryBookFile().getBookType(), bookEntity.getFullFilePath().toFile());
-                if (bookMetadata == null) {
-                    log.warn("No metadata extracted for book id={} path={}", bookEntity.getId(), bookEntity.getFullFilePath());
-                    continue;
-                }
-                MetadataUpdateContext metadataUpdateContext = MetadataUpdateContext.builder()
-                        .bookEntity(bookEntity)
-                        .metadataUpdateWrapper(
-                                MetadataUpdateWrapper.builder()
-                                        .metadata(bookMetadata)
-                                        .build()
-                        )
-                        .replaceMode(context.getOptions().getMetadataReplaceMode())
-                        .updateThumbnail(false)
-                        .mergeCategories(false)
-                        .mergeMoods(true)
-                        .mergeTags(true)
-                        .build();
-                bookMetadataUpdater.setBookMetadata(metadataUpdateContext);
-
-                if (bookEntity.getPrimaryBookFile().getBookType() == BookFileType.AUDIOBOOK && bookMetadata.getAudiobookMetadata() != null) {
-                    audiobookProcessor.setAudiobookTechnicalMetadata(bookEntity, bookMetadata);
-                }
+                refreshBookMetadata(bookEntity.getId(), context);
             } catch (Exception e) {
                 log.error("Failed to update metadata for book id={} path={}: {}", bookEntity.getId(), bookEntity.getFullFilePath(), e.getMessage(), e);
             } finally {
@@ -125,6 +116,41 @@ public class LibraryRescanHelper {
                     String.format("Rescan completed for library: %s (%d books processed)", library.getName(), processedBooks),
                     TaskStatus.COMPLETED);
         }
+    }
+
+    private void refreshBookMetadata(Long bookId, RescanLibraryContext context) {
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+        transactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        transactionTemplate.executeWithoutResult(status -> {
+            BookEntity bookEntity = bookRepository.findByIdWithBookFiles(bookId).orElse(null);
+            if (bookEntity == null || !bookEntity.hasFiles()) {
+                log.warn("Book id={} was deleted or lost its files before its metadata was refreshed", bookId);
+                return;
+            }
+            BookMetadata bookMetadata = metadataExtractorFactory.extractMetadata(bookEntity.getPrimaryBookFile().getBookType(), bookEntity.getFullFilePath().toFile());
+            if (bookMetadata == null) {
+                log.warn("No metadata extracted for book id={} path={}", bookEntity.getId(), bookEntity.getFullFilePath());
+                return;
+            }
+            MetadataUpdateContext metadataUpdateContext = MetadataUpdateContext.builder()
+                    .bookEntity(bookEntity)
+                    .metadataUpdateWrapper(
+                            MetadataUpdateWrapper.builder()
+                                    .metadata(bookMetadata)
+                                    .build()
+                    )
+                    .replaceMode(context.getOptions().getMetadataReplaceMode())
+                    .updateThumbnail(false)
+                    .mergeCategories(false)
+                    .mergeMoods(true)
+                    .mergeTags(true)
+                    .build();
+            bookMetadataUpdater.setBookMetadata(metadataUpdateContext);
+
+            if (bookEntity.getPrimaryBookFile().getBookType() == BookFileType.AUDIOBOOK && bookMetadata.getAudiobookMetadata() != null) {
+                audiobookProcessor.setAudiobookTechnicalMetadata(bookEntity, bookMetadata);
+            }
+        });
     }
 
     private void sendTaskProgressNotification(String taskId, int progress, String message, TaskStatus taskStatus) {

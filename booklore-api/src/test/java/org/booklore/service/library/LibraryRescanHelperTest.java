@@ -27,9 +27,12 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.ArgumentCaptor;
 import org.mockito.Captor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
 
 import java.io.File;
 import java.util.ArrayList;
@@ -49,6 +52,7 @@ class LibraryRescanHelperTest {
     @Mock private TaskCancellationManager cancellationManager;
     @Mock private BookRepository bookRepository;
     @Mock private AudiobookProcessor audiobookProcessor;
+    @Mock private PlatformTransactionManager transactionManager;
     @InjectMocks private LibraryRescanHelper libraryRescanHelper;
 
     @Captor private ArgumentCaptor<TaskProgressPayload> payloadCaptor;
@@ -374,6 +378,69 @@ class LibraryRescanHelperTest {
         verify(audiobookProcessor, never()).setAudiobookTechnicalMetadata(any(), any());
     }
 
+    @Test
+    void handleRescanOptions_shouldCommitEachBookBeforeReadingTheNext() {
+        BookEntity book1 = createBookEntity(1L, "book1.epub", BookFileType.EPUB);
+        BookEntity book2 = createBookEntity(2L, "book2.pdf", BookFileType.PDF);
+        TransactionStatus status1 = mock(TransactionStatus.class);
+        TransactionStatus status2 = mock(TransactionStatus.class);
+
+        when(libraryRepository.findById(1L)).thenReturn(Optional.of(library));
+        when(bookRepository.findAllWithMetadataByLibraryId(1L)).thenReturn(List.of(book1, book2));
+        when(metadataExtractorFactory.extractMetadata(any(BookFileType.class), any(File.class))).thenReturn(new BookMetadata());
+        when(cancellationManager.isTaskCancelled(taskId)).thenReturn(false);
+        when(transactionManager.getTransaction(any())).thenReturn(status1, status2);
+
+        libraryRescanHelper.handleRescanOptions(rescanContext, taskId);
+
+        // Saving a book's metadata may move its files, and their new paths are committed before the next book
+        InOrder inOrder = inOrder(transactionManager, metadataExtractorFactory, bookMetadataUpdater);
+        inOrder.verify(transactionManager).getTransaction(any());
+        inOrder.verify(metadataExtractorFactory).extractMetadata(eq(BookFileType.EPUB), any(File.class));
+        inOrder.verify(bookMetadataUpdater).setBookMetadata(argThat(context -> context.getBookEntity() == book1));
+        inOrder.verify(transactionManager).commit(status1);
+        inOrder.verify(transactionManager).getTransaction(any());
+        inOrder.verify(metadataExtractorFactory).extractMetadata(eq(BookFileType.PDF), any(File.class));
+        inOrder.verify(bookMetadataUpdater).setBookMetadata(argThat(context -> context.getBookEntity() == book2));
+        inOrder.verify(transactionManager).commit(status2);
+    }
+
+    @Test
+    void handleRescanOptions_shouldRollBackOnlyTheBookThatFailed() {
+        BookEntity book1 = createBookEntity(1L, "book1.epub", BookFileType.EPUB);
+        BookEntity book2 = createBookEntity(2L, "book2.pdf", BookFileType.PDF);
+        TransactionStatus status1 = mock(TransactionStatus.class);
+        TransactionStatus status2 = mock(TransactionStatus.class);
+
+        when(libraryRepository.findById(1L)).thenReturn(Optional.of(library));
+        when(bookRepository.findAllWithMetadataByLibraryId(1L)).thenReturn(List.of(book1, book2));
+        when(metadataExtractorFactory.extractMetadata(any(BookFileType.class), any(File.class))).thenReturn(new BookMetadata());
+        when(cancellationManager.isTaskCancelled(taskId)).thenReturn(false);
+        when(transactionManager.getTransaction(any())).thenReturn(status1, status2);
+        doThrow(new RuntimeException("Update failed")).doNothing()
+                .when(bookMetadataUpdater).setBookMetadata(any(MetadataUpdateContext.class));
+
+        libraryRescanHelper.handleRescanOptions(rescanContext, taskId);
+
+        verify(transactionManager).rollback(status1);
+        verify(transactionManager).commit(status2);
+        verify(transactionManager, never()).commit(status1);
+    }
+
+    @Test
+    void handleRescanOptions_shouldSkipBookDeletedSinceTheLibraryWasRead() {
+        BookEntity book1 = createBookEntity(1L, "book1.epub", BookFileType.EPUB);
+        when(bookRepository.findByIdWithBookFiles(1L)).thenReturn(Optional.empty());
+
+        when(libraryRepository.findById(1L)).thenReturn(Optional.of(library));
+        when(bookRepository.findAllWithMetadataByLibraryId(1L)).thenReturn(List.of(book1));
+        when(cancellationManager.isTaskCancelled(taskId)).thenReturn(false);
+
+        libraryRescanHelper.handleRescanOptions(rescanContext, taskId);
+
+        verifyNoInteractions(metadataExtractorFactory, bookMetadataUpdater);
+    }
+
     private BookEntity createBookEntity(Long id, String fileName, BookFileType bookType) {
         LibraryPathEntity libraryPath = new LibraryPathEntity();
         libraryPath.setPath("/test/path");
@@ -388,6 +455,8 @@ class LibraryRescanHelperTest {
         primaryFile.setFileSubPath("");
         primaryFile.setBookType(bookType);
         book.setBookFiles(List.of(primaryFile));
+        // Each book is read again in the transaction it is refreshed in
+        lenient().when(bookRepository.findByIdWithBookFiles(id)).thenReturn(Optional.of(book));
         return book;
     }
 }

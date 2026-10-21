@@ -15,12 +15,16 @@ import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
 import org.booklore.service.metadata.BookMetadataUpdater;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 
 @Slf4j
 @Service
@@ -33,6 +37,7 @@ public class SidecarService {
     private final SidecarMetadataWriter sidecarWriter;
     private final SidecarMetadataMapper sidecarMapper;
     private final BookMetadataUpdater bookMetadataUpdater;
+    private final PlatformTransactionManager transactionManager;
 
     public Optional<SidecarMetadata> getSidecarContent(Long bookId) {
         BookEntity book = bookRepository.findByIdWithBookFiles(bookId)
@@ -121,50 +126,69 @@ public class SidecarService {
         return exported;
     }
 
-    @Transactional
+    /**
+     * Imports the sidecar of each book of the library, each book in a transaction of its own. With
+     * "move files to library pattern" on, saving a book's metadata can move its files, and their
+     * new paths must then be committed right after the move: an import over a large library that
+     * stops partway (a restart) must never leave files moved while their rows still name the old
+     * paths, or the next rescan would delete those books and import their files as new ones.
+     */
     public int bulkImport(Long libraryId) {
         LibraryEntity library = libraryRepository.findById(libraryId)
                 .orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(libraryId));
 
-        List<BookEntity> books = bookRepository.findAllByLibraryIdWithFiles(libraryId);
+        Set<Long> bookIds = bookRepository.findBookIdsByLibraryId(libraryId);
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+        transactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
         int imported = 0;
 
-        for (BookEntity book : books) {
+        for (Long bookId : bookIds) {
             try {
-                Path bookPath = book.getFullFilePath();
-                if (bookPath == null) {
-                    continue;
-                }
-
-                Optional<SidecarMetadata> sidecarOpt = sidecarReader.readSidecarMetadata(bookPath);
-                if (sidecarOpt.isEmpty()) {
-                    continue;
-                }
-
-                SidecarMetadata sidecar = sidecarOpt.get();
-                BookMetadata bookMetadata = sidecarMapper.toBookMetadata(sidecar);
-
-                if (bookMetadata != null) {
-                    MetadataUpdateWrapper wrapper = MetadataUpdateWrapper.builder()
-                            .metadata(bookMetadata)
-                            .build();
-
-                    MetadataUpdateContext context = MetadataUpdateContext.builder()
-                            .bookEntity(book)
-                            .metadataUpdateWrapper(wrapper)
-                            .updateThumbnail(false)
-                            .replaceMode(MetadataReplaceMode.REPLACE_WHEN_PROVIDED)
-                            .build();
-
-                    bookMetadataUpdater.setBookMetadata(context);
+                if (Boolean.TRUE.equals(transactionTemplate.execute(status -> importSidecar(bookId)))) {
                     imported++;
                 }
             } catch (Exception e) {
-                log.warn("Failed to import sidecar for book ID {}: {}", book.getId(), e.getMessage());
+                log.warn("Failed to import sidecar for book ID {}: {}", bookId, e.getMessage());
             }
         }
 
         log.info("Bulk imported {} sidecar files for library {}", imported, library.getName());
         return imported;
+    }
+
+    private boolean importSidecar(Long bookId) {
+        BookEntity book = bookRepository.findByIdWithBookFiles(bookId).orElse(null);
+        if (book == null) {
+            return false;
+        }
+        Path bookPath = book.getFullFilePath();
+        if (bookPath == null) {
+            return false;
+        }
+
+        Optional<SidecarMetadata> sidecarOpt = sidecarReader.readSidecarMetadata(bookPath);
+        if (sidecarOpt.isEmpty()) {
+            return false;
+        }
+
+        SidecarMetadata sidecar = sidecarOpt.get();
+        BookMetadata bookMetadata = sidecarMapper.toBookMetadata(sidecar);
+        if (bookMetadata == null) {
+            return false;
+        }
+
+        MetadataUpdateWrapper wrapper = MetadataUpdateWrapper.builder()
+                .metadata(bookMetadata)
+                .build();
+
+        MetadataUpdateContext context = MetadataUpdateContext.builder()
+                .bookEntity(book)
+                .metadataUpdateWrapper(wrapper)
+                .updateThumbnail(false)
+                .replaceMode(MetadataReplaceMode.REPLACE_WHEN_PROVIDED)
+                .build();
+
+        bookMetadataUpdater.setBookMetadata(context);
+        return true;
     }
 }

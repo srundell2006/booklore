@@ -15,9 +15,14 @@ import org.booklore.service.metadata.writer.MetadataWriterFactory;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionStatus;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import org.booklore.service.file.FileFingerprint;
 import org.mockito.MockedStatic;
@@ -43,6 +48,7 @@ class MetadataManagementServiceTest {
     @Mock private MetadataWriterFactory metadataWriterFactory;
     @Mock private FileMoveService fileMoveService;
     @Mock private BookRepository bookRepository;
+    @Mock private PlatformTransactionManager transactionManager;
 
     @InjectMocks
     private MetadataManagementService service;
@@ -305,15 +311,20 @@ class MetadataManagementServiceTest {
 
         when(bookMetadataRepository.findAllByAuthorsContaining(oldAuthor)).thenReturn(List.of(metadata));
         when(metadataWriterFactory.getWriter(BookFileType.EPUB)).thenReturn(Optional.empty());
+        when(bookRepository.findByIdWithBookFiles(1L)).thenReturn(Optional.of(book));
         when(fileMoveService.moveSingleFile(book)).thenReturn(
                 FileMoveResult.builder().moved(true).newFileName("new.epub").newFileSubPath("new/sub").build()
         );
+        TransactionStatus moveTransaction = mock(TransactionStatus.class);
+        when(transactionManager.getTransaction(any())).thenReturn(moveTransaction);
 
         service.consolidateMetadata(MergeMetadataType.authors, List.of("Target"), List.of("Old"));
 
-        assertThat(bookFile.getFileName()).isEqualTo("new.epub");
-        assertThat(bookFile.getFileSubPath()).isEqualTo("new/sub");
-        verify(bookRepository).saveAndFlush(book);
+        // The move writes the new paths itself, in a transaction of its own
+        InOrder inOrder = inOrder(transactionManager, fileMoveService);
+        inOrder.verify(transactionManager).getTransaction(any());
+        inOrder.verify(fileMoveService).moveSingleFile(book);
+        inOrder.verify(transactionManager).commit(moveTransaction);
 
         java.nio.file.Files.deleteIfExists(tempFile);
         java.nio.file.Files.deleteIfExists(subDir);
@@ -498,6 +509,63 @@ class MetadataManagementServiceTest {
     }
 
     @Test
+    void consolidateAuthors_movesFilesOnlyOnceTheMergeIsCommitted() {
+        when(appSettingService.getAppSettings()).thenReturn(
+                AppSettings.builder()
+                        .metadataPersistenceSettings(MetadataPersistenceSettings.builder()
+                                .moveFilesToLibraryPattern(true)
+                                .build())
+                        .build()
+        );
+
+        AuthorEntity oldAuthor = AuthorEntity.builder().id(1L).name("Old").build();
+        AuthorEntity targetAuthor = AuthorEntity.builder().id(2L).name("Target").build();
+        when(authorRepository.findByNameIgnoreCase("Target")).thenReturn(Optional.of(targetAuthor));
+        when(authorRepository.save(targetAuthor)).thenReturn(targetAuthor);
+        when(authorRepository.findByNameIgnoreCase("Old")).thenReturn(Optional.of(oldAuthor));
+
+        BookFileEntity bookFile = BookFileEntity.builder()
+                .fileName("test.epub")
+                .fileSubPath("sub")
+                .bookType(BookFileType.EPUB)
+                .isBookFormat(true)
+                .build();
+        LibraryPathEntity libraryPath = new LibraryPathEntity();
+        libraryPath.setPath("/library");
+        BookEntity book = BookEntity.builder()
+                .id(1L)
+                .bookFiles(new ArrayList<>(List.of(bookFile)))
+                .libraryPath(libraryPath)
+                .build();
+        BookMetadataEntity metadata = BookMetadataEntity.builder()
+                .authors(new ArrayList<>(List.of(oldAuthor)))
+                .book(book)
+                .build();
+        book.setMetadata(metadata);
+
+        when(bookMetadataRepository.findAllByAuthorsContaining(oldAuthor)).thenReturn(List.of(metadata));
+        when(metadataWriterFactory.getWriter(BookFileType.EPUB)).thenReturn(Optional.empty());
+        when(bookRepository.findByIdWithBookFiles(1L)).thenReturn(Optional.of(book));
+        when(fileMoveService.moveSingleFile(book)).thenReturn(
+                FileMoveResult.builder().moved(true).newFileName("test.epub").newFileSubPath("Target").build()
+        );
+
+        TransactionSynchronizationManager.initSynchronization();
+        try {
+            service.consolidateMetadata(MergeMetadataType.authors, List.of("Target"), List.of("Old"));
+
+            // A restart before the merge commits must find every file where its committed row says it is
+            verify(fileMoveService, never()).moveSingleFile(any());
+
+            TransactionSynchronizationManager.getSynchronizations().forEach(TransactionSynchronization::afterCommit);
+        } finally {
+            TransactionSynchronizationManager.clearSynchronization();
+        }
+
+        verify(fileMoveService).moveSingleFile(book);
+    }
+
+    @Test
     void consolidateAuthors_fileMoveNotMovedDoesNotUpdateFileName() throws Exception {
         when(appSettingService.getAppSettings()).thenReturn(
                 AppSettings.builder()
@@ -541,6 +609,7 @@ class MetadataManagementServiceTest {
 
         when(bookMetadataRepository.findAllByAuthorsContaining(oldAuthor)).thenReturn(List.of(metadata));
         when(metadataWriterFactory.getWriter(BookFileType.EPUB)).thenReturn(Optional.empty());
+        when(bookRepository.findByIdWithBookFiles(1L)).thenReturn(Optional.of(book));
         when(fileMoveService.moveSingleFile(book)).thenReturn(
                 FileMoveResult.builder().moved(false).build()
         );

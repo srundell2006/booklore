@@ -1,7 +1,6 @@
 package org.booklore.service.metadata;
 
 import org.booklore.config.AppProperties;
-import org.booklore.model.dto.FileMoveResult;
 import org.booklore.model.dto.settings.MetadataPersistenceSettings;
 import org.booklore.model.entity.*;
 import org.booklore.model.enums.BookFileType;
@@ -15,9 +14,15 @@ import org.booklore.service.metadata.writer.MetadataWriterFactory;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronization;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.File;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 
@@ -36,6 +41,7 @@ public class MetadataManagementService {
     private final MetadataWriterFactory metadataWriterFactory;
     private final FileMoveService fileMoveService;
     private final BookRepository bookRepository;
+    private final PlatformTransactionManager transactionManager;
 
 
     @Transactional
@@ -56,6 +62,7 @@ public class MetadataManagementService {
     }
 
     private void writeMetadataToFile(List<BookMetadataEntity> metadataList, boolean moveFile) {
+        List<Long> bookIdsToMove = new ArrayList<>();
         for (BookMetadataEntity metadata : metadataList) {
             if (metadata.getBook() != null) {
                 BookEntity book = metadata.getBook();
@@ -75,17 +82,49 @@ public class MetadataManagementService {
                 }
 
                 if (moveFile) {
-                    FileMoveResult result = fileMoveService.moveSingleFile(book);
-                    if (result.isMoved()) {
-                        primaryFile.setFileName(result.getNewFileName());
-                        primaryFile.setFileSubPath(result.getNewFileSubPath());
-                        bookModified = true;
-                    }
+                    bookIdsToMove.add(book.getId());
                 }
 
                 if (bookModified) {
                     bookRepository.saveAndFlush(book);
                 }
+            }
+        }
+        if (!bookIdsToMove.isEmpty()) {
+            moveFilesOnceCommitted(bookIdsToMove);
+        }
+    }
+
+    /**
+     * Moves the books' files to the library's pattern once the change to their metadata is
+     * committed, each book in a transaction of its own that commits its files' new paths right
+     * after the move. Moved inside the change's transaction, the files would sit at their new
+     * paths until it committed while the committed rows still named the old ones, and a restart
+     * before then would leave it so: the next rescan would delete those books and import their
+     * files as new ones.
+     */
+    private void moveFilesOnceCommitted(List<Long> bookIds) {
+        if (!TransactionSynchronizationManager.isSynchronizationActive()) {
+            moveFiles(bookIds);
+            return;
+        }
+        TransactionSynchronizationManager.registerSynchronization(new TransactionSynchronization() {
+            @Override
+            public void afterCommit() {
+                moveFiles(bookIds);
+            }
+        });
+    }
+
+    private void moveFiles(List<Long> bookIds) {
+        TransactionTemplate transactionTemplate = new TransactionTemplate(transactionManager);
+        transactionTemplate.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        for (Long bookId : bookIds) {
+            try {
+                transactionTemplate.executeWithoutResult(status ->
+                        bookRepository.findByIdWithBookFiles(bookId).ifPresent(fileMoveService::moveSingleFile));
+            } catch (Exception e) {
+                log.warn("Failed to move files for book ID {} after a metadata change: {}", bookId, e.getMessage());
             }
         }
     }
