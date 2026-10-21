@@ -34,8 +34,12 @@ public class PathPatternResolver {
     private final Pattern CONTROL_CHARACTER_PATTERN = Pattern.compile("\\p{Cntrl}");
     private final Pattern INVALID_CHARS_PATTERN = Pattern.compile("[\\\\/:*?\"<>|]");
     private final Pattern LATIN_ACCENT_PATTERN = Pattern.compile("(?<=\\p{IsLatin})\\p{M}+");
+    private final Pattern ASCII_LETTERS_AND_DIGITS_PATTERN = Pattern.compile("[A-Za-z0-9]+");
     private final int ZERO_WIDTH_NON_JOINER = 0x200C;
     private final int ZERO_WIDTH_JOINER = 0x200D;
+    // Apostrophes, and the marks typed in their place, sit inside a word ("п’ять", "д’Артаньян", Hebrew ג׳ורג׳):
+    // they are dropped like other punctuation but never become a space
+    private final String APOSTROPHES = "\u2018\u2019\u201B\u2032\u00B4\u055A\u05F3\u05F4\uFF07";
     private final Pattern PLACEHOLDER_PATTERN = Pattern.compile("\\{(.*?)}");
     private final Pattern MODIFIER_PLACEHOLDER_PATTERN = Pattern.compile("\\{([^}:]+)(?::([^}]+))?}");
     private final Pattern COMMA_SPACE_PATTERN = Pattern.compile(", ");
@@ -322,29 +326,42 @@ public class PathPatternResolver {
      * <p>
      * Steps:
      * 1. NFD-decompose accented characters so combining marks become separate code points
-     *    (e.g. é → e + ́, ñ → n + ̃), and strip the marks that sit on Latin letters, leaving
-     *    the base letter.
-     * 2. Turn every Unicode space separator (no-break, ideographic, thin spaces) into a space.
-     * 3. Keep every ASCII character, and of the rest only what names are spelt with: letters,
+     *    (e.g. é → e + ́, ñ → n + ̃).
+     * 2. Write each letter or digit that is only another form of ASCII letters or digits as those
+     *    (its NFKC form): ligatures (ﬁ → fi), fullwidth and mathematical letters and digits
+     *    (Ａ１ → A1, 𝐁𝐨𝐥𝐝 → Bold), ordinal, superscript and circled letters (º → o, ᵉ → e, Ⓐ → A).
+     *    Numbers that are not decimal digits (² ½ ① Ⅻ), symbols that spell letters (™ №) and the
+     *    letters that are emoji (ℹ Ⓜ) stay as they are, for step 5 to drop like other numbers and
+     *    symbols, as they always were.
+     * 3. Strip the marks that sit on Latin letters, leaving the base letter.
+     * 4. Turn every Unicode space separator (no-break, ideographic, thin spaces) into a space.
+     * 5. Keep every ASCII character, and of the rest only what names are spelt with: letters,
      *    decimal digits, the combining marks on those letters (Japanese が, Devanagari vowel
      *    signs and Cyrillic й are a letter plus a mark, not an accent), and the zero-width
-     *    (non-)joiners between non-Latin letters that Persian and Indic text need. Punctuation
-     *    (’ – « »), symbols and emoji, control and format characters (bidi marks, zero-width
-     *    space, soft hyphen), lone surrogates and private-use or unassigned code points are
-     *    dropped. Apart from those spaces and from letters with no accent to strip (ø, ł, æ, ß),
-     *    which are now kept, Latin text so comes out as it did when every non-ASCII code point
-     *    was dropped.
-     * 4. Remove filesystem-illegal characters (\ / : * ? " < > |).
-     * 5. Remove control characters.
-     * 6. NFC-recompose.
-     * 7. Collapse runs of whitespace to a single space and strip.
+     *    (non-)joiners between non-Latin letters that Persian and Indic text need. A modifier letter
+     *    that belongs to no script (ー ـ ʼ ˈ) is kept only where it follows a non-Latin letter or
+     *    digit, as in コーヒー, and is dropped next to Latin text (Winterʼs → Winters). Punctuation
+     *    (’ – « »), symbols and emoji, control and format characters (bidi marks, zero-width space,
+     *    soft hyphen), lone surrogates and private-use or unassigned code points are dropped.
+     *    Punctuation or a symbol whose nearest kept neighbours on both sides are non-Latin letters or
+     *    digits (not ASCII) becomes a space instead, so that it keeps the words apart
+     *    (三体·黑暗森林 → 三体 黑暗森林), unless it is an apostrophe (п’ять → пять).
+     *    Apart from the spaces of step 4, from letters with no accent to strip (ø, ł, æ, ß), which are
+     *    now kept, and from the letters of step 2, Latin text so comes out as it did when every
+     *    non-ASCII code point was dropped.
+     * 6. Remove filesystem-illegal characters (\ / : * ? " < > |).
+     * 7. Remove control characters.
+     * 8. NFC-recompose.
+     * 9. Collapse runs of whitespace to a single space and strip.
      * <p>
-     * Sanitizing an already sanitized string returns it unchanged.
+     * Sanitizing an already sanitized string returns it unchanged. The move preview in the UI
+     * (pattern-resolver.ts) mirrors this method exactly.
      */
     private String sanitize(String input) {
         if (input == null) return "";
-        // Strip accents from Latin letters: decompose to NFD and drop their combining marks
-        String unaccented = LATIN_ACCENT_PATTERN.matcher(Normalizer.normalize(input, Normalizer.Form.NFD)).replaceAll("");
+        String decomposed = writeCompatibilityFormsInAscii(Normalizer.normalize(input, Normalizer.Form.NFD));
+        // Strip accents from Latin letters: drop the combining marks that follow them
+        String unaccented = LATIN_ACCENT_PATTERN.matcher(decomposed).replaceAll("");
         String legal = CONTROL_CHARACTER_PATTERN.matcher(
                 INVALID_CHARS_PATTERN.matcher(keepNameCharacters(unaccented)).replaceAll("")
         ).replaceAll("");
@@ -352,24 +369,65 @@ public class PathPatternResolver {
     }
 
     /**
-     * Steps 2 and 3 of {@link #sanitize}, on decomposed text. A combining mark belongs to the
+     * Step 2 of {@link #sanitize}. It runs before accents are stripped, so that a mark on a
+     * mathematical letter (𝐀 + ́) is stripped from the A it becomes.
+     */
+    private String writeCompatibilityFormsInAscii(String decomposed) {
+        StringBuilder written = new StringBuilder(decomposed.length());
+        decomposed.codePoints().forEach(codePoint -> {
+            String ascii = asciiFormOf(codePoint);
+            if (ascii != null) {
+                written.append(ascii);
+            } else {
+                written.appendCodePoint(codePoint);
+            }
+        });
+        return written.toString();
+    }
+
+    /** The ASCII letters and digits a non-ASCII letter or digit stands for, or null when it is more than a form of them. */
+    private String asciiFormOf(int codePoint) {
+        if (codePoint < 0x80 || Character.isExtendedPictographic(codePoint)) {
+            return null;
+        }
+        int type = Character.getType(codePoint);
+        boolean letterOrDigit = Character.isLetter(codePoint)
+                || type == Character.DECIMAL_DIGIT_NUMBER
+                // Circled and squared Latin letters (Ⓐ 🄰) are symbols, but alphabetic ones
+                || (type == Character.OTHER_SYMBOL && Character.isAlphabetic(codePoint));
+        if (!letterOrDigit) {
+            return null;
+        }
+        String compatible = Normalizer.normalize(Character.toString(codePoint), Normalizer.Form.NFKC);
+        return ASCII_LETTERS_AND_DIGITS_PATTERN.matcher(compatible).matches() ? compatible : null;
+    }
+
+    /**
+     * Steps 4 and 5 of {@link #sanitize}, on decomposed text. A combining mark belongs to the
      * code point before it, so it is kept only along with a letter (or the mark or joiner that
      * follows one), never moved onto whatever came before a dropped emoji or symbol.
      */
     private String keepNameCharacters(String decomposed) {
         int[] codePoints = decomposed.codePoints().toArray();
+        boolean[] keptModifiers = modifierLettersOfNonLatinWords(codePoints);
+        boolean[] spaced = punctuationBetweenNonLatinWords(codePoints, keptModifiers);
         StringBuilder kept = new StringBuilder(decomposed.length());
         boolean previousTakesMarks = false;
         for (int i = 0; i < codePoints.length; i++) {
             int codePoint = codePoints[i];
             boolean keep;
-            if (isKeptOnItsOwn(codePoint)) {
+            if (spaced[i]) {
+                codePoint = ' ';
+                keep = true;
+            } else if (isCommonModifierLetter(codePoint)) {
+                keep = keptModifiers[i];
+            } else if (isKeptOnItsOwn(codePoint)) {
                 codePoint = Character.isSpaceChar(codePoint) ? ' ' : codePoint;
                 keep = true;
             } else if (isMark(codePoint)) {
                 keep = previousTakesMarks;
             } else if (isJoiner(codePoint)) {
-                keep = joinsNonLatinLetters(kept, codePoints, i);
+                keep = joinsNonLatinLetters(kept, codePoints, i, keptModifiers, spaced);
             } else {
                 keep = false;
             }
@@ -382,11 +440,75 @@ public class PathPatternResolver {
     }
 
     /**
+     * Which of {@code codePoints} are modifier letters of the Common script (ー ـ ʼ) kept as part
+     * of a non-Latin word: those that follow a non-Latin letter or digit with nothing but marks,
+     * joiners and other such modifier letters between (コーヒー, ｶﾞｰﾙ, Ukrainian мʼята). Anywhere
+     * else, next to Latin letters, ASCII, punctuation or a space, they are dropped as they always were.
+     */
+    private boolean[] modifierLettersOfNonLatinWords(int[] codePoints) {
+        boolean[] kept = new boolean[codePoints.length];
+        boolean inNonLatinWord = false;
+        for (int i = 0; i < codePoints.length; i++) {
+            int codePoint = codePoints[i];
+            if (isCommonModifierLetter(codePoint)) {
+                kept[i] = inNonLatinWord;
+            } else if (!isMark(codePoint) && !isJoiner(codePoint)) {
+                inNonLatinWord = isNonLatinLetterOrDigit(codePoint);
+            }
+        }
+        return kept;
+    }
+
+    /**
+     * Which of {@code codePoints} are non-ASCII punctuation or symbols that become a space: those
+     * whose nearest kept neighbours on both sides are non-Latin letters or digits (or the marks and
+     * modifier letters kept with them), so that "三体·黑暗森林" and "東京・大阪" keep their words apart.
+     * Marks, joiners, other punctuation and whatever is dropped are looked through. An ASCII
+     * character (a space, a digit, a Latin letter) or a non-ASCII Latin letter on either side leaves
+     * it dropped as it always was, so Latin names do not change. Apostrophes are always dropped.
+     */
+    private boolean[] punctuationBetweenNonLatinWords(int[] codePoints, boolean[] keptModifiers) {
+        int length = codePoints.length;
+        boolean[] afterNonLatin = new boolean[length];
+        boolean nonLatin = false;
+        for (int i = 0; i < length; i++) {
+            afterNonLatin[i] = nonLatin;
+            if (keptModifiers[i] || isKeptOnItsOwn(codePoints[i])) {
+                nonLatin = keptModifiers[i] || isNonLatinLetterOrDigit(codePoints[i]);
+            }
+        }
+        boolean[] spaced = new boolean[length];
+        nonLatin = false;
+        for (int i = length - 1; i >= 0; i--) {
+            spaced[i] = afterNonLatin[i] && nonLatin && separatesWords(codePoints[i]);
+            if (keptModifiers[i] || isKeptOnItsOwn(codePoints[i])) {
+                nonLatin = keptModifiers[i] || isNonLatinLetterOrDigit(codePoints[i]);
+            }
+        }
+        return spaced;
+    }
+
+    /** Non-ASCII punctuation, symbols and emoji, apostrophes aside. */
+    private boolean separatesWords(int codePoint) {
+        if (codePoint < 0x80 || APOSTROPHES.indexOf(codePoint) >= 0) {
+            return false;
+        }
+        return switch (Character.getType(codePoint)) {
+            case Character.CONNECTOR_PUNCTUATION, Character.DASH_PUNCTUATION, Character.START_PUNCTUATION,
+                 Character.END_PUNCTUATION, Character.INITIAL_QUOTE_PUNCTUATION, Character.FINAL_QUOTE_PUNCTUATION,
+                 Character.OTHER_PUNCTUATION, Character.MATH_SYMBOL, Character.CURRENCY_SYMBOL,
+                 Character.MODIFIER_SYMBOL, Character.OTHER_SYMBOL -> true;
+            // ℹ is a letter, but an emoji too
+            default -> Character.isLetter(codePoint) && Character.isExtendedPictographic(codePoint);
+        };
+    }
+
+    /**
      * Whether the zero-width (non-)joiner at {@code index} sits between non-Latin letters or
      * marks once dropped characters are gone. Persian and Indic text need it there; anywhere
      * else it is invisible noise that Latin names never had.
      */
-    private boolean joinsNonLatinLetters(CharSequence kept, int[] codePoints, int index) {
+    private boolean joinsNonLatinLetters(CharSequence kept, int[] codePoints, int index, boolean[] keptModifiers, boolean[] spaced) {
         if (kept.isEmpty()) {
             return false;
         }
@@ -397,12 +519,20 @@ public class PathPatternResolver {
         boolean skippedDropped = false;
         for (int i = index + 1; i < codePoints.length; i++) {
             int next = codePoints[i];
-            if (isMark(next)) {
+            if (spaced[i]) {
+                // Punctuation that becomes a space ends the word
+                return false;
+            } else if (isMark(next)) {
                 if (!skippedDropped) {
                     // The mark sits on the joiner itself (Sinhala touching letters) and is kept with it
                     return true;
                 }
                 // Dropped along with the character it sits on
+            } else if (isCommonModifierLetter(next)) {
+                if (keptModifiers[i]) {
+                    return true;
+                }
+                skippedDropped = true;
             } else if (!isKeptOnItsOwn(next) && !isJoiner(next)) {
                 skippedDropped = true;
             } else {
@@ -412,10 +542,14 @@ public class PathPatternResolver {
         return false;
     }
 
-    /** ASCII, letters, decimal digits and space separators: kept whatever surrounds them. */
+    /**
+     * ASCII, letters, decimal digits and space separators: kept whatever surrounds them. Modifier
+     * letters of the Common script depend on what they follow, and the letters that are emoji (ℹ)
+     * are dropped with the other emoji.
+     */
     private boolean isKeptOnItsOwn(int codePoint) {
         return codePoint < 0x80
-                || Character.isLetter(codePoint)
+                || (Character.isLetter(codePoint) && !isCommonModifierLetter(codePoint) && !Character.isExtendedPictographic(codePoint))
                 || Character.getType(codePoint) == Character.DECIMAL_DIGIT_NUMBER
                 || Character.isSpaceChar(codePoint);
     }
@@ -429,8 +563,22 @@ public class PathPatternResolver {
         return codePoint == ZERO_WIDTH_NON_JOINER || codePoint == ZERO_WIDTH_JOINER;
     }
 
+    /** ー ـ ʼ ˈ and the like: modifier letters used by several scripts, or by none. */
+    private boolean isCommonModifierLetter(int codePoint) {
+        return Character.getType(codePoint) == Character.MODIFIER_LETTER
+                && Character.UnicodeScript.of(codePoint) == Character.UnicodeScript.COMMON;
+    }
+
     private boolean isNonLatinLetter(int codePoint) {
         return Character.isLetter(codePoint) && Character.UnicodeScript.of(codePoint) != Character.UnicodeScript.LATIN;
+    }
+
+    /** A non-ASCII letter or decimal digit kept on its own that is not Latin: Arabic, CJK, Cyrillic or Devanagari, say. */
+    private boolean isNonLatinLetterOrDigit(int codePoint) {
+        return codePoint >= 0x80
+                && isKeptOnItsOwn(codePoint)
+                && !Character.isSpaceChar(codePoint)
+                && Character.UnicodeScript.of(codePoint) != Character.UnicodeScript.LATIN;
     }
 
     private String truncateAuthorsForFilesystem(String authors) {

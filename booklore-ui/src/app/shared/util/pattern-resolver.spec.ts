@@ -45,6 +45,16 @@ describe('pattern-resolver', () => {
       ['Stray marks on e\u200B\u0301 and 1\u0301', 'Stray marks on e and 1'],
       ['Tab\tand bell\u0007', 'Taband bell'],
       ['C1\u0085 and \u0092 controls', 'C1 and controls'],
+      // Modifier letters of no script (U+02BC apostrophe, okina, stress mark) are dropped next to Latin letters
+      ['Winter\u02BCs Tale', 'Winters Tale'],
+      ['Hawai\u02BBi and \u02C8stress', 'Hawaii and stress'],
+      // Numbers that are not digits, symbols that spell letters and the letters that are emoji are dropped
+      ['E=mc\u00B2 \u00BD', 'E=mc'],
+      ['Henry \u2167', 'Henry'],
+      ['Chapter \u2460', 'Chapter'],
+      ['Star Wars\u2122 \u2116 4', 'Star Wars 4'],
+      ['Info \u2139\uFE0F and Metro \u24C2\uFE0F', 'Info and Metro'],
+      ['Parenthesized \u249C\u249D', 'Parenthesized'],
     ])('should clean Latin text as before: %j', (input, expected) => {
       expect(sanitize(input)).toBe(expected);
       expect(sanitize(input)).toBe(asciiOnlySanitize(input));
@@ -86,6 +96,64 @@ describe('pattern-resolver', () => {
       expect(sanitize('Saint-Exupéry — 《三体》。')).toBe('Saint-Exupery 三体');
     });
 
+    it.each([
+      // These letters used to vanish ("Signicance", "XIX siecle"); they are now written as the ASCII they stand for
+      ['The Signi\uFB01cance of \uFB02ow', 'The Significance of flow'],
+      ['N\u00BA 5 and 1\u00AA edici\u00F3n', 'No 5 and 1a edicion'],
+      ['XIX\u1D49 si\u00E8cle', 'XIXe siecle'],
+      ['\uFF28\uFF41\uFF52\uFF52\uFF59 \uFF11', 'Harry 1'],
+      ['\u{1D401}\u{1D428}\u{1D425}\u{1D41D} \u{1D7CF}', 'Bold 1'],
+      ['\u24B6\u24D1\u24D2 \u{1F130}BC', 'Abc ABC'],
+      ['\u0132sselmeer', 'IJsselmeer'],
+      ['Wei\u017Fs and \u01C8ubljana', 'Weiss and Ljubljana'],
+      ['\u{1D400}\u0301 and \uFF25\u0301', 'A and E'],
+    ])('should write letters that are another form of ASCII ones in ASCII: %j', (input, expected) => {
+      expect(sanitize(input)).toBe(expected);
+    });
+
+    it('should leave alone compatibility characters that are more than ASCII letters', () => {
+      // Ǆ is D + Ž, not plain ASCII, and stays the letter it is; the rest are not letters and are dropped as before
+      expect(sanitize('\u01C4 \u00B2\u00BD\u2460\u2167\u2122\u2116\u249C \u2139\u24C2 x')).toBe('\u01C4 x');
+    });
+
+    it.each([
+      ['Katakana with prolonged sound marks', '\u30B3\u30FC\u30D2\u30FC'],
+      ['halfwidth katakana', '\uFF76\uFF9E\uFF70\uFF99'],
+      ['Arabic with a tatweel', '\u06A9\u0640\u062A\u0627\u0628'],
+      ['Ukrainian with a modifier apostrophe', '\u043C\u02BC\u044F\u0442\u0430'],
+    ])('should keep the modifier letters of %s', (_, text) => {
+      expect(sanitize(text)).toBe(text);
+    });
+
+    it.each([
+      ['三体·黑暗森林', '三体 黑暗森林'],
+      ['東京・大阪', '東京 大阪'],
+      ['こんにちは。世界', 'こんにちは 世界'],
+      ['ハリー・ポッター', 'ハリー ポッター'],
+      ['Война—мир', 'Война мир'],
+      ['《三体》《黑暗森林》', '三体 黑暗森林'],
+    ])('should turn punctuation between non-Latin words into a space: %j', (input, expected) => {
+      // It used to glue the words together ("三体黑暗森林")
+      expect(sanitize(input)).toBe(expected);
+    });
+
+    it.each([
+      ['《三体》', '三体'],
+      ['こんにちは。', 'こんにちは'],
+      ['الثلاثية، الجزء الأول', 'الثلاثية الجزء الأول'],
+      ['三体 · 黑暗森林', '三体 黑暗森林'],
+      ['三体·2', '三体2'],
+      ['東京·Tokyo', '東京Tokyo'],
+      ['Bjørk·東京', 'Bjørk東京'],
+      ['п\u2019ять', 'пять'],
+      ['Жанна д\u2019Арк', 'Жанна дАрк'],
+      ['三体-黑暗', '三体-黑暗'],
+      ['三体:黑暗', '三体黑暗'],
+    ])('should drop punctuation at the edge of a word, next to ASCII or Latin text, or inside a word: %j', (input, expected) => {
+      // ASCII and Latin neighbours keep Latin names as they were; an apostrophe sits inside a word
+      expect(sanitize(input)).toBe(expected);
+    });
+
     it('should turn Unicode spaces into plain spaces', () => {
       expect(sanitize('Titre\u00A0:\u00A0sous-titre')).toBe('Titre sous-titre');
       expect(sanitize('A\u3000B\u2009C\u202FD')).toBe('A B C D');
@@ -105,6 +173,7 @@ describe('pattern-resolver', () => {
       expect(sanitize('é\u200Cb')).toBe('eb');
       expect(sanitize('ک\u200C \u0628')).toBe('ک \u0628');
       expect(sanitize('ک\u200C\u{1F600}')).toBe('ک');
+      expect(sanitize('ک\u200C\u00B7ب')).toBe('ک ب');
     });
 
     it('should keep one of two joiners in a row', () => {
@@ -116,6 +185,7 @@ describe('pattern-resolver', () => {
       expect(sanitize('\u{1F44D}\u{1F3FD} Good')).toBe('Good');
       expect(sanitize('\u{1F468}\u200D\u{1F469}\u200D\u{1F467} Family')).toBe('Family');
       expect(sanitize('1\uFE0F\u20E3 One')).toBe('1 One');
+      expect(sanitize('猫\u{1F468}\u200D\u{1F469}\u200D\u{1F467}狗')).toBe('猫 狗');
     });
 
     it('should drop lone surrogates and private-use characters', () => {
@@ -125,14 +195,21 @@ describe('pattern-resolver', () => {
 
     it.each([
       '0085', '0092', '009F', '200E', '200F', '202A', '202B', '202C', '202D', '202E', '2066', '2067', '2068',
-      '2069', 'FEFF', '200B', '00AD', '2060', '2122', '00A9', '00BD', '2764', '1F600', '1F1EB', '1F3FD',
-      'E000', 'F0000', '0378', 'D800', 'DC00',
+      '2069', 'FEFF', '200B', '00AD', '2060', '00BD', '00B2', '2460', '2167', 'E000', 'F0000', '0378', 'D800', 'DC00',
     ])('should never put U+%s in a name', hex => {
       const char = String.fromCodePoint(parseInt(hex, 16));
       expect(sanitize(`Naguib${char}Mahfouz`)).toBe('NaguibMahfouz');
       expect(sanitize(`قصر${char}الشوق`)).toBe('قصرالشوق');
       expect(sanitize(`中国${char} ${char}文化`)).toBe('中国 文化');
     });
+
+    it.each(['2122', '00A9', '2764', '1F600', '1F1EB', '1F3FD', '2116', '2139', '24C2', '00B7', '2014'])(
+      'should never put U+%s in a name, but keep non-Latin words apart with it', hex => {
+        const char = String.fromCodePoint(parseInt(hex, 16));
+        expect(sanitize(`Naguib${char}Mahfouz`)).toBe('NaguibMahfouz');
+        expect(sanitize(`قصر${char}الشوق`)).toBe('قصر الشوق');
+        expect(sanitize(`中国${char} ${char}文化`)).toBe('中国 文化');
+      });
 
     it.each([
       'Harry Potter and the Philosopher’s Stone',
@@ -152,10 +229,148 @@ describe('pattern-resolver', () => {
       'Love ≠ Hate',
       '\u202Bقصر\u200F الشوق\u202C',
       '1\uFE0F\u20E3',
+      '三体·黑暗森林',
+      'ハリー・ポッター',
+      'ک\u200C\u00B7\u0628',
+      '\u30AB\u00B7\u30FC\u30AD',
+      '\u6771\u30FC\u00B7a',
+      'ک\u200D\u0640',
+      '\uFF76\uFF9E\uFF70',
+      'Winter\u02BCs',
+      '\u{1D400}\u0301',
+      '\u24B6\u2139\u24C2',
+      '\u4E2D\u3001\u3001\u200C\u6587',
+      '\u30AB\u3099\u00B7\u3099\u30AD',
     ])('should give a stable NFC result for %j', input => {
       const once = sanitize(input);
       expect(sanitize(once)).toBe(once);
       expect(once.normalize('NFC')).toBe(once);
+    });
+
+    // The cases the move preview must agree on with the server: PathPatternResolverScriptTest in booklore-api asserts
+    // this same table (SHARED_SANITIZE_CASES), so a row added or changed here belongs there too. Each row is a
+    // description, a title and the name sanitize() makes of it.
+    const SHARED_SANITIZE_CASES: [string, string, string][] = [
+      // Punctuation and symbols between non-Latin words become a space
+      ["middle dot between Chinese words", "三体·黑暗森林", "三体 黑暗森林"],
+      ["katakana middle dot", "東京・大阪", "東京 大阪"],
+      ["middle dot after a prolonged sound mark", "ハリー・ポッター", "ハリー ポッター"],
+      ["fullwidth colon", "三体\uFF1A黑暗森林", "三体 黑暗森林"],
+      ["ideographic full stop", "こんにちは。世界", "こんにちは 世界"],
+      ["em dash between Cyrillic words", "Война—мир", "Война мир"],
+      ["danda between Hindi words", "गोदान।प्रेमचंद", "गोदान प्रेमचंद"],
+      ["Arabic comma before an Arabic-Indic digit", "الجزء،٣", "الجزء ٣"],
+      ["symbol between Arabic words", "قصر™الشوق", "قصر الشوق"],
+      ["emoji between Chinese words", "猫\uD83D\uDE00狗", "猫 狗"],
+      ["emoji sequence between Chinese words", "猫\uD83D\uDC68\u200D\uD83D\uDC69狗", "猫 狗"],
+      ["two in a row make one space", "三体·—黑暗", "三体 黑暗"],
+      ["after a letter with a mark", "カ\u3099·キ\u3099", "ガ ギ"],
+      ["joiner before it is dropped", "ک\u200C·ب", "ک ب"],
+      // and are dropped as before anywhere else
+      ["brackets at the edges", "《三体》", "三体"],
+      ["comma before a space", "الثلاثية، الجزء الأول", "الثلاثية الجزء الأول"],
+      ["already spaced", "三体 · 黑暗", "三体 黑暗"],
+      ["next to an ASCII digit", "三体·2", "三体2"],
+      ["next to a Latin word", "東京·Tokyo", "東京Tokyo"],
+      ["next to a Latin letter that is not ASCII", "Bjørk·東京", "Bjørk東京"],
+      ["Latin apostrophe", "Harry Potter and the Philosopher\u2019s Stone", "Harry Potter and the Philosophers Stone"],
+      ["Latin dash", "A\u2013B", "AB"],
+      ["Latin quotes and middle dot", "«Les Misérables» · Tome 1", "Les Miserables Tome 1"],
+      ["apostrophe inside a Ukrainian word", "п\u2019ять", "пять"],
+      ["apostrophe in a Russian name", "Жанна д\u2019Арк", "Жанна дАрк"],
+      ["Hebrew geresh", "ג\u05F3ורג\u05F3", "גורג"],
+      ["zero-width space, which is not punctuation", "中国\u200B文化", "中国文化"],
+      ["fraction, which is not punctuation", "中国\u00BD文化", "中国文化"],
+      // ASCII punctuation is handled as before
+      ["ASCII hyphen", "三体-黑暗", "三体-黑暗"],
+      ["ASCII colon", "三体:黑暗", "三体黑暗"],
+      // Letters and digits that are another form of ASCII ones are written in ASCII
+      ["ligatures", "The Signi\uFB01cance of \uFB02ow", "The Significance of flow"],
+      ["fullwidth letters and digits", "\uFF28\uFF41\uFF52\uFF52\uFF59 \uFF11", "Harry 1"],
+      ["mathematical letters and digits", "\uD835\uDC01\uD835\uDC28\uD835\uDC25\uD835\uDC1D \uD835\uDFCF", "Bold 1"],
+      ["circled and squared letters", "\u24B6\u24D1\u24D2 \uD83C\uDD30", "Abc A"],
+      ["ordinal indicators", "N\u00BA 5 and 1\u00AA edición", "No 5 and 1a edicion"],
+      ["superscript letter", "XIX\u1D49 siècle", "XIXe siecle"],
+      ["Dutch ij and long s", "\u0132sselmeer Wei\u017Fs", "IJsselmeer Weiss"],
+      ["accent on a mathematical letter", "\uD835\uDC00\u0301", "A"],
+      ["inside non-Latin text", "中\uFB01文", "中fi文"],
+      // and the rest are left as they were
+      ["ligature that is not plain ASCII stays a letter", "\u01C4", "\u01C4"],
+      ["parenthesized letters, which are more than letters", "A\u249C\u249DB", "AB"],
+      ["superscript digits and fractions", "E=mc\u00B2 \u00BD", "E=mc"],
+      ["Roman numerals", "Henry \u2167", "Henry"],
+      ["circled digits", "Chapter \u2460", "Chapter"],
+      ["symbols that spell letters", "Pokémon\u2122 \u2116 5", "Pokemon 5"],
+      ["letters that are emoji", "Info \u2139\uFE0F Metro \u24C2\uFE0F", "Info Metro"],
+      // Modifier letters of no script are dropped next to Latin text and kept in non-Latin words
+      ["modifier apostrophe in a Latin word", "Winter\u02BCs Tale", "Winters Tale"],
+      ["okina", "Hawai\u02BBi", "Hawaii"],
+      ["stress mark", "\u02C8stress", "stress"],
+      ["before a Latin word", "\u30FCstart", "start"],
+      ["prolonged sound marks", "コ\u30FCヒ\u30FC", "コ\u30FCヒ\u30FC"],
+      ["prolonged sound mark before Latin letters", "ファイナルファンタジ\u30FCVII", "ファイナルファンタジ\u30FCVII"],
+      ["halfwidth katakana", "\uFF76\uFF9E\uFF70\uFF99", "\uFF76\uFF9E\uFF70\uFF99"],
+      ["Arabic tatweel", "ک\u0640تاب", "ک\u0640تاب"],
+      ["modifier apostrophe in a Ukrainian word", "м\u02BCята", "м\u02BCята"],
+      ["Greek numeral sign", "\u0391\u0374", "\u0391\u02B9"],
+    ];
+
+    it.each(SHARED_SANITIZE_CASES)('should agree with the server on %s', (_, input, expected) => {
+      expect(sanitize(input)).toBe(expected);
+    });
+
+    // Characters that occur in and around names in Latin script, and those of other scripts
+    const LATIN_NAME_CHARACTERS = [
+      'a', 'Z', 'e', '1', ' ', '-', '.', '\'', '_', ':', '?', '\t', 0xE9, 0x0301, 0x0308, 0xFE0F, 0x20E3, 0x200C,
+      0x200D, 0x200B, 0x200E, 0xFEFF, 0xAD, 0x85, 0x2019, 0x2018, 0x2013, 0x2014, 0x2026, 0xAB, 0xBB, 0xB7, 0x30FB,
+      0x3002, 0xFF0C, 0xFF1A, 0x300A, 0x2122, 0xA9, 0xBD, 0xB2, 0x2460, 0x216B, 0x2139, 0x24C2, 0x1F600, 0x1F3FD,
+      0x1F1EB, 0x2260, 0x2116, 0x02BC, 0x02C8, 0x02BB, 0x02B9, 0x0374, 0x30FC, 0x0640, 0xFF70, 0xFF9E, 0x3031, 0xE000,
+      0x0378, 0x249C, 0x05F3, 0x2032, 0xB4,
+    ].map(c => typeof c === 'string' ? c : String.fromCodePoint(c));
+    const OTHER_NAME_CHARACTERS = [
+      0x4E09, 0x4F53, 0x30AC, 0x30AB, 0x3099, 0xFF76, 0x06A9, 0x0628, 0x064E, 0x043F, 0x0414, 0x0915, 0x094D, 0x0D9A,
+      0x0DCA, 0x05E9, 0x05C1, 0x0E2A, 0x1100, 0x1161, 0xAC00, 0x0663, 0x00F8, 0x0142, 0x00A0, 0x3000, 0x2028, 0xFB01,
+      0xFF21, 0xFF11, 0x1D401, 0x1D7CF, 0xAA, 0x1D49, 0x017F, 0x0133, 0x01C5, 0x01C8, 0xB5, 0x24B6, 0x1F130, 0x0E46,
+      0x3005, 0xD800, 0xDC00, 0x1E9B,
+    ].map(c => String.fromCodePoint(c));
+
+    /** A small seeded generator (mulberry32), so a failure can be reproduced. */
+    function random(seed: number): () => number {
+      let state = seed;
+      return () => {
+        state = (state + 0x6D2B79F5) | 0;
+        let t = Math.imul(state ^ (state >>> 15), 1 | state);
+        t = (t + Math.imul(t ^ (t >>> 7), 61 | t)) ^ t;
+        return ((t ^ (t >>> 14)) >>> 0) / 4294967296;
+      };
+    }
+
+    function randomName(next: () => number, alphabet: string[]): string {
+      const length = 1 + Math.floor(next() * 16);
+      return Array.from({length}, () => alphabet[Math.floor(next() * alphabet.length)]).join('');
+    }
+
+    it('should sanitize random names stably and composed', () => {
+      const next = random(20261021);
+      const alphabet = [...LATIN_NAME_CHARACTERS, ...OTHER_NAME_CHARACTERS];
+      for (let i = 0; i < 20000; i++) {
+        const name = randomName(next, alphabet);
+        const once = sanitize(name);
+        if (sanitize(once) !== once || once.normalize('NFC') !== once) {
+          expect.fail(`sanitizing ${JSON.stringify(name)} gave ${JSON.stringify(once)}, then ${JSON.stringify(sanitize(once))}`);
+        }
+      }
+    });
+
+    it('should clean random Latin names as before', () => {
+      const next = random(20261021);
+      for (let i = 0; i < 20000; i++) {
+        // Letters around it, so the name is never empty
+        const name = `a${randomName(next, LATIN_NAME_CHARACTERS)}a`;
+        if (sanitize(name) !== asciiOnlySanitize(name)) {
+          expect.fail(`sanitizing ${JSON.stringify(name)} gave ${JSON.stringify(sanitize(name))}, not ${JSON.stringify(asciiOnlySanitize(name))}`);
+        }
+      }
     });
   });
 
