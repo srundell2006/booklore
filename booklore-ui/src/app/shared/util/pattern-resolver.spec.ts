@@ -1,5 +1,5 @@
 import {describe, expect, it} from 'vitest';
-import {resolveFilePath, sanitize, truncateAuthorsForFilesystem, truncatePathComponent} from './pattern-resolver';
+import {MAX_COMPONENT_BYTES, resolveFilePath, sanitize, truncateAuthorsForFilesystem, truncatePathComponent} from './pattern-resolver';
 
 // The move preview must show the names PathPatternResolver.sanitize writes on the server,
 // so these cases mirror the backend tests. Invisible characters are written as escapes.
@@ -50,11 +50,16 @@ describe('pattern-resolver', () => {
       ['Hawai\u02BBi and \u02C8stress', 'Hawaii and stress'],
       // Numbers that are not digits, symbols that spell letters and the letters that are emoji are dropped
       ['E=mc\u00B2 \u00BD', 'E=mc'],
-      ['Henry \u2167', 'Henry'],
       ['Chapter \u2460', 'Chapter'],
+      ['Roman \u2180', 'Roman'],
       ['Star Wars\u2122 \u2116 4', 'Star Wars 4'],
       ['Info \u2139\uFE0F and Metro \u24C2\uFE0F', 'Info and Metro'],
       ['Parenthesized \u249C\u249D', 'Parenthesized'],
+      // Superscript and ordinal letters are dropped like superscript digits, rather than written in ASCII
+      ['N\u00BA 5 and 1\u00AA edici\u00F3n', 'N 5 and 1 edicion'],
+      ['451\u00BA Fahrenheit', '451 Fahrenheit'],
+      ['XIX\u1D49 si\u00E8cle and M\u02E1\u02E1\u1D49 Dupont', 'XIX siecle and M Dupont'],
+      ['2\u207F and x\u2090', '2 and x'],
     ])('should clean Latin text as before: %j', (input, expected) => {
       expect(sanitize(input)).toBe(expected);
       expect(sanitize(input)).toBe(asciiOnlySanitize(input));
@@ -97,10 +102,10 @@ describe('pattern-resolver', () => {
     });
 
     it.each([
-      // These letters used to vanish ("Signicance", "XIX siecle"); they are now written as the ASCII they stand for
+      // These letters used to vanish ("Signicance", "Henry"); they are now written as the ASCII they stand for
       ['The Signi\uFB01cance of \uFB02ow', 'The Significance of flow'],
-      ['N\u00BA 5 and 1\u00AA edici\u00F3n', 'No 5 and 1a edicion'],
-      ['XIX\u1D49 si\u00E8cle', 'XIXe siecle'],
+      ['Henry \u2167 and Louis \u2169\u2163', 'Henry VIII and Louis XIV'],
+      ['ドラゴンクエスト\u2162', 'ドラゴンクエストIII'],
       ['\uFF28\uFF41\uFF52\uFF52\uFF59 \uFF11', 'Harry 1'],
       ['\u{1D401}\u{1D428}\u{1D425}\u{1D41D} \u{1D7CF}', 'Bold 1'],
       ['\u24B6\u24D1\u24D2 \u{1F130}BC', 'Abc ABC'],
@@ -112,8 +117,22 @@ describe('pattern-resolver', () => {
     });
 
     it('should leave alone compatibility characters that are more than ASCII letters', () => {
-      // Ǆ is D + Ž, not plain ASCII, and stays the letter it is; the rest are not letters and are dropped as before
-      expect(sanitize('\u01C4 \u00B2\u00BD\u2460\u2167\u2122\u2116\u249C \u2139\u24C2 x')).toBe('\u01C4 x');
+      // Ǆ is D + Ž, not plain ASCII, and stays the letter it is; the rest are not letters, or superscripts, or a
+      // Roman numeral that is more than ASCII letters (ↀ), and are dropped as before
+      expect(sanitize('\u01C4 \u00B2\u00BD\u2460\u2180\u2122\u2116\u249C \u00BA\u1D49\u2139\u24C2 x')).toBe('\u01C4 x');
+    });
+
+    it('should keep the volumes of a title apart with their Roman numerals', () => {
+      // They used to vanish, so that volumes II and III of a title went to the same path
+      expect(sanitize('ドラゴンクエスト\u2161')).not.toBe(sanitize('ドラゴンクエスト\u2162'));
+      expect(sanitize('三体\u2161·黑暗森林')).toBe('三体II黑暗森林');
+    });
+
+    it.each([
+      ['a Chinese year with 〇', '二〇〇八年'],
+      ['Hangzhou numerals', '\u3021\u3022\u3029'],
+    ])('should keep the letter numbers of %s', (_, text) => {
+      expect(sanitize(text)).toBe(text);
     });
 
     it.each([
@@ -132,8 +151,38 @@ describe('pattern-resolver', () => {
       ['ハリー・ポッター', 'ハリー ポッター'],
       ['Война—мир', 'Война мир'],
       ['《三体》《黑暗森林》', '三体 黑暗森林'],
+      // A decimal separator too: dropped, it would make another number of 20.5 (205)
+      ['٢٠\u066B٥ مليون', '٢٠ ٥ مليون'],
+      ['۳\u066B۵', '۳ ۵'],
     ])('should turn punctuation between non-Latin words into a space: %j', (input, expected) => {
       // It used to glue the words together ("三体黑暗森林")
+      expect(sanitize(input)).toBe(expected);
+    });
+
+    it.each([
+      ['第１・２巻', '第1 2巻'],
+      ['第１．５巻', '第1 5巻'],
+      ['\uD835\uDFCF·\uD835\uDFD0', '1 2'],
+      // ASCII digits leave it dropped, as for Latin names
+      ['第1・2巻', '第12巻'],
+      ['Vol. 1·2', 'Vol. 12'],
+      // A modifier letter after a fullwidth digit is dropped, as it is after the ASCII digit it becomes
+      ['１ー２', '12'],
+    ])('should turn punctuation between fullwidth digits into a space: %j', (input, expected) => {
+      // The digits are written in ASCII, but count as the non-Latin digits they are
+      expect(sanitize(input)).toBe(expected);
+    });
+
+    it.each([
+      ['なぜ?・どうして', 'なぜ どうして'],
+      ['三体\t·黑暗', '三体 黑暗'],
+      ['三体:·黑暗', '三体 黑暗'],
+      ['三体·*黑暗*', '三体 黑暗'],
+      // Without non-ASCII punctuation, ASCII is handled as before
+      ['なぜ?どうして', 'なぜどうして'],
+      ['Tab\t·and?·more', 'Tabandmore'],
+    ])('should look through the characters it removes when turning punctuation into a space: %j', (input, expected) => {
+      // The question mark, tab, colon and asterisks are removed from the name, so they are not the neighbours that decide
       expect(sanitize(input)).toBe(expected);
     });
 
@@ -149,6 +198,13 @@ describe('pattern-resolver', () => {
       ['Жанна д\u2019Арк', 'Жанна дАрк'],
       ['三体-黑暗', '三体-黑暗'],
       ['三体:黑暗', '三体黑暗'],
+      ['١\u066C٠٠٠ ليلة', '١٠٠٠ ليلة'],
+      ['۱\u066C۰۰۰', '۱۰۰۰'],
+      ['Ինչո\u055Eւ', 'Ինչու'],
+      ['Ինչո\u055Bւ', 'Ինչու'],
+      ['Ինչո\u055Cւ', 'Ինչու'],
+      ['ト\u309Bラコ\u309Bン', 'トラコン'],
+      ['ハ\u309Cン', 'ハン'],
     ])('should drop punctuation at the edge of a word, next to ASCII or Latin text, or inside a word: %j', (input, expected) => {
       // ASCII and Latin neighbours keep Latin names as they were; an apostrophe sits inside a word
       expect(sanitize(input)).toBe(expected);
@@ -195,7 +251,8 @@ describe('pattern-resolver', () => {
 
     it.each([
       '0085', '0092', '009F', '200E', '200F', '202A', '202B', '202C', '202D', '202E', '2066', '2067', '2068',
-      '2069', 'FEFF', '200B', '00AD', '2060', '00BD', '00B2', '2460', '2167', 'E000', 'F0000', '0378', 'D800', 'DC00',
+      '2069', 'FEFF', '200B', '00AD', '2060', '00BD', '00B2', '2460', '2180', '00AA', '00BA', '1D49', '207F', '2090',
+      'E000', 'F0000', '0378', 'D800', 'DC00',
     ])('should never put U+%s in a name', hex => {
       const char = String.fromCodePoint(parseInt(hex, 16));
       expect(sanitize(`Naguib${char}Mahfouz`)).toBe('NaguibMahfouz');
@@ -203,7 +260,7 @@ describe('pattern-resolver', () => {
       expect(sanitize(`中国${char} ${char}文化`)).toBe('中国 文化');
     });
 
-    it.each(['2122', '00A9', '2764', '1F600', '1F1EB', '1F3FD', '2116', '2139', '24C2', '00B7', '2014'])(
+    it.each(['2122', '00A9', '2764', '1F600', '1F1EB', '1F3FD', '2116', '2139', '24C2', '00B7', '2014', '066B'])(
       'should never put U+%s in a name, but keep non-Latin words apart with it', hex => {
         const char = String.fromCodePoint(parseInt(hex, 16));
         expect(sanitize(`Naguib${char}Mahfouz`)).toBe('NaguibMahfouz');
@@ -241,6 +298,19 @@ describe('pattern-resolver', () => {
       '\u24B6\u2139\u24C2',
       '\u4E2D\u3001\u3001\u200C\u6587',
       '\u30AB\u3099\u00B7\u3099\u30AD',
+      '第１・２巻',
+      '１ー２',
+      '\uFF11\u200C·\uFF12',
+      'なぜ?・どうして',
+      '٢٠\u066B٥',
+      '١\u066C٠٠٠',
+      'Ինչո\u055Eւ',
+      'ト\u309Bラ',
+      '二〇〇八',
+      'N\u00BA 5',
+      '\uD801\uDF80\u0301',
+      '\uD837\uDF00\u0301\u200C\u0628',
+      '三体\u2161·黑暗',
     ])('should give a stable NFC result for %j', input => {
       const once = sanitize(input);
       expect(sanitize(once)).toBe(once);
@@ -279,26 +349,53 @@ describe('pattern-resolver', () => {
       ["apostrophe inside a Ukrainian word", "п\u2019ять", "пять"],
       ["apostrophe in a Russian name", "Жанна д\u2019Арк", "Жанна дАрк"],
       ["Hebrew geresh", "ג\u05F3ורג\u05F3", "גורג"],
+      ["Arabic thousands separator", "١\u066C٠٠٠ ليلة", "١٠٠٠ ليلة"],
+      ["Persian thousands separator", "۱\u066C۰۰۰", "۱۰۰۰"],
+      ["Armenian question mark over a vowel", "Ինչո\u055Eւ", "Ինչու"],
+      ["Armenian emphasis mark", "Ինչո\u055Bւ", "Ինչու"],
+      ["Armenian exclamation mark", "Ինչո\u055Cւ", "Ինչու"],
+      ["spacing dakuten", "ト\u309Bラコ\u309Bン", "トラコン"],
+      ["spacing handakuten", "ハ\u309Cン", "ハン"],
       ["zero-width space, which is not punctuation", "中国\u200B文化", "中国文化"],
       ["fraction, which is not punctuation", "中国\u00BD文化", "中国文化"],
+      // A decimal separator becomes a space too: dropped, it would make another number of 20.5 (205)
+      ["Arabic decimal separator", "٢٠\u066B٥ مليون", "٢٠ ٥ مليون"],
+      ["Persian decimal separator", "۳\u066B۵", "۳ ۵"],
+      // Fullwidth and mathematical digits count as the non-Latin digits they are, though written in ASCII
+      ["between fullwidth digits", "第１・２巻", "第1 2巻"],
+      ["fullwidth full stop between fullwidth digits", "第１．５巻", "第1 5巻"],
+      ["between mathematical digits", "\uD835\uDFCF·\uD835\uDFD0", "1 2"],
+      ["between ASCII digits, as before", "第1・2巻", "第12巻"],
+      ["modifier letter after a fullwidth digit", "１ー２", "12"],
+      // Characters removed later are looked through
+      ["after a question mark that is removed", "なぜ?・どうして", "なぜ どうして"],
+      ["after a tab that is removed", "三体\t·黑暗", "三体 黑暗"],
+      ["after a colon that is removed", "三体:·黑暗", "三体 黑暗"],
+      ["Latin text around removed characters", "Tab\t·and?·more", "Tabandmore"],
       // ASCII punctuation is handled as before
       ["ASCII hyphen", "三体-黑暗", "三体-黑暗"],
       ["ASCII colon", "三体:黑暗", "三体黑暗"],
+      ["ASCII question mark", "なぜ?どうして", "なぜどうして"],
       // Letters and digits that are another form of ASCII ones are written in ASCII
       ["ligatures", "The Signi\uFB01cance of \uFB02ow", "The Significance of flow"],
       ["fullwidth letters and digits", "\uFF28\uFF41\uFF52\uFF52\uFF59 \uFF11", "Harry 1"],
       ["mathematical letters and digits", "\uD835\uDC01\uD835\uDC28\uD835\uDC25\uD835\uDC1D \uD835\uDFCF", "Bold 1"],
       ["circled and squared letters", "\u24B6\u24D1\u24D2 \uD83C\uDD30", "Abc A"],
-      ["ordinal indicators", "N\u00BA 5 and 1\u00AA edición", "No 5 and 1a edicion"],
-      ["superscript letter", "XIX\u1D49 siècle", "XIXe siecle"],
       ["Dutch ij and long s", "\u0132sselmeer Wei\u017Fs", "IJsselmeer Weiss"],
       ["accent on a mathematical letter", "\uD835\uDC00\u0301", "A"],
       ["inside non-Latin text", "中\uFB01文", "中fi文"],
+      ["Roman numerals", "Henry \u2167", "Henry VIII"],
+      ["Roman numeral in a Japanese title", "ドラゴンクエスト\u2162", "ドラゴンクエストIII"],
+      ["Roman numeral before Chinese punctuation, which is Latin", "三体\u2161·黑暗森林", "三体II黑暗森林"],
       // and the rest are left as they were
       ["ligature that is not plain ASCII stays a letter", "\u01C4", "\u01C4"],
       ["parenthesized letters, which are more than letters", "A\u249C\u249DB", "AB"],
       ["superscript digits and fractions", "E=mc\u00B2 \u00BD", "E=mc"],
-      ["Roman numerals", "Henry \u2167", "Henry"],
+      ["ordinal indicators", "N\u00BA 5 and 1\u00AA edición", "N 5 and 1 edicion"],
+      ["ordinal indicator typed for a degree sign", "451\u00BA Fahrenheit", "451 Fahrenheit"],
+      ["superscript letter", "XIX\u1D49 siècle", "XIX siecle"],
+      ["superscript and subscript letters", "M\u02E1\u02E1\u1D49 2\u207F x\u2090", "M 2 x"],
+      ["Roman numeral with no ASCII form", "\u2180 x", "x"],
       ["circled digits", "Chapter \u2460", "Chapter"],
       ["symbols that spell letters", "Pokémon\u2122 \u2116 5", "Pokemon 5"],
       ["letters that are emoji", "Info \u2139\uFE0F Metro \u24C2\uFE0F", "Info Metro"],
@@ -313,6 +410,12 @@ describe('pattern-resolver', () => {
       ["Arabic tatweel", "ک\u0640تاب", "ک\u0640تاب"],
       ["modifier apostrophe in a Ukrainian word", "м\u02BCята", "м\u02BCята"],
       ["Greek numeral sign", "\u0391\u0374", "\u0391\u02B9"],
+      // Letter numbers of other scripts are kept like their digits
+      ["ideographic zero", "二〇〇八年", "二〇〇八年"],
+      ["Hangzhou numerals", "\u3021\u3022\u3029", "\u3021\u3022\u3029"],
+      // Accents are stripped from Latin letters outside the BMP too
+      ["accent on a Latin letter outside the BMP", "\uD801\uDF80\u0301", "\uD801\uDF80"],
+      ["accent on a Latin letter outside the BMP before a joiner", "\uD837\uDF00\u0301\u200C\u0628", "\uD837\uDF00\u0628"],
     ];
 
     it.each(SHARED_SANITIZE_CASES)('should agree with the server on %s', (_, input, expected) => {
@@ -323,15 +426,16 @@ describe('pattern-resolver', () => {
     const LATIN_NAME_CHARACTERS = [
       'a', 'Z', 'e', '1', ' ', '-', '.', '\'', '_', ':', '?', '\t', 0xE9, 0x0301, 0x0308, 0xFE0F, 0x20E3, 0x200C,
       0x200D, 0x200B, 0x200E, 0xFEFF, 0xAD, 0x85, 0x2019, 0x2018, 0x2013, 0x2014, 0x2026, 0xAB, 0xBB, 0xB7, 0x30FB,
-      0x3002, 0xFF0C, 0xFF1A, 0x300A, 0x2122, 0xA9, 0xBD, 0xB2, 0x2460, 0x216B, 0x2139, 0x24C2, 0x1F600, 0x1F3FD,
+      0x3002, 0xFF0C, 0xFF1A, 0x300A, 0x2122, 0xA9, 0xBD, 0xB2, 0x2460, 0x2139, 0x24C2, 0x1F600, 0x1F3FD,
       0x1F1EB, 0x2260, 0x2116, 0x02BC, 0x02C8, 0x02BB, 0x02B9, 0x0374, 0x30FC, 0x0640, 0xFF70, 0xFF9E, 0x3031, 0xE000,
-      0x0378, 0x249C, 0x05F3, 0x2032, 0xB4,
+      0x0378, 0x249C, 0x05F3, 0x2032, 0xB4, 0xAA, 0xBA, 0x1D49, 0x207F, 0x2090, 0x02E1, 0x2180, 0x066B, 0x066C, 0x055E,
+      0x309B, 0xFF0E, 0x7F, '*', '"',
     ].map(c => typeof c === 'string' ? c : String.fromCodePoint(c));
     const OTHER_NAME_CHARACTERS = [
       0x4E09, 0x4F53, 0x30AC, 0x30AB, 0x3099, 0xFF76, 0x06A9, 0x0628, 0x064E, 0x043F, 0x0414, 0x0915, 0x094D, 0x0D9A,
       0x0DCA, 0x05E9, 0x05C1, 0x0E2A, 0x1100, 0x1161, 0xAC00, 0x0663, 0x00F8, 0x0142, 0x00A0, 0x3000, 0x2028, 0xFB01,
-      0xFF21, 0xFF11, 0x1D401, 0x1D7CF, 0xAA, 0x1D49, 0x017F, 0x0133, 0x01C5, 0x01C8, 0xB5, 0x24B6, 0x1F130, 0x0E46,
-      0x3005, 0xD800, 0xDC00, 0x1E9B,
+      0xFF21, 0xFF11, 0xFF12, 0x1D401, 0x1D7CF, 0x017F, 0x0133, 0x01C5, 0x01C8, 0xB5, 0x24B6, 0x1F130, 0x0E46,
+      0x3005, 0xD800, 0xDC00, 0x1E9B, 0x216B, 0x2161, 0x3007, 0x0531, 0x0565, 0x10780, 0x1DF00,
     ].map(c => String.fromCodePoint(c));
 
     /** A small seeded generator (mulberry32), so a failure can be reproduced. */
@@ -383,10 +487,33 @@ describe('pattern-resolver', () => {
       expect(truncatePathComponent('ب'.repeat(100), 200)).toBe('ب'.repeat(100));
     });
 
-    it('should cut at the last whole code point that fits', () => {
+    it('should cut at the last whole character that fits', () => {
       expect(truncatePathComponent('ب'.repeat(120), 200)).toBe('ب'.repeat(100));
       expect(truncatePathComponent('某'.repeat(70), 200)).toBe('某'.repeat(66));
       expect(truncatePathComponent('\u{10000}'.repeat(60), 202)).toBe('\u{10000}'.repeat(50));
+    });
+
+    // The cuts the move preview must agree on with the server: PathPatternResolverScriptTest in booklore-api asserts
+    // this same table (SHARED_TRUNCATION_CASES), so a row added or changed here belongs there too. Each row is a
+    // description, a path component, a limit in bytes and what truncatePathComponent() makes of it.
+    const SHARED_TRUNCATION_CASES: [string, string, number, string][] = [
+      ["within the limit", "The Hobbit", 200, "The Hobbit"],
+      ["Latin cut inside a word", "word ".repeat(39) + "words and more", 200, "word ".repeat(39) + "words"],
+      ["Latin cut after a space", "word ".repeat(40) + "end", 200, "word ".repeat(39) + "word"],
+      ["cut after a space a middle dot became", "中".repeat(66) + " 文文文", 200, "中".repeat(66)],
+      ["cut after an ideographic space", "某\u3000某某", 7, "某"],
+      ["cut after a joiner", "کتاب ".repeat(21) + "نومی\u200Cخواهم", 200, "کتاب ".repeat(21) + "نومی"],
+      ["cut inside a letter and its vowel signs", "क" + "कहानियाँ ".repeat(7) + "कहानियाँ", 200, "क" + "कहानियाँ ".repeat(7) + "कहानि"],
+      ["cut inside halfwidth katakana and its voiced mark", "ア".repeat(65) + "\uFF76\uFF9E", 200, "ア".repeat(65)],
+      ["cut inside an emoji sequence", "a\uD83D\uDC68\u200D\uD83D\uDC69", 6, "a"],
+      ["a conjunct longer than the limit", "\u0915\u094D\u0937", 7, "\u0915\u094D"],
+      ["a letter under a pile of marks", "a" + "\u0301".repeat(10), 5, "a\u0301\u0301"],
+      ["a first character over the limit", "某", 2, ""],
+      ["whole code points", "\uD800\uDC00".repeat(60), 202, "\uD800\uDC00".repeat(50)],
+    ];
+
+    it.each(SHARED_TRUNCATION_CASES)('should agree with the server on a %s', (_, component, maxBytes, expected) => {
+      expect(truncatePathComponent(component, maxBytes)).toBe(expected);
     });
   });
 
@@ -455,9 +582,15 @@ describe('pattern-resolver', () => {
         .toBe(`${'Ж'.repeat(100)} - ${'Ж'.repeat(21)}/Ж.epub`);
     });
 
-    it('should keep the space a title cut to its byte limit ends with, as the server does', () => {
-      const title = truncatePathComponent(sanitize(`${'ب'.repeat(99)} ب`), 200);
-      expect(resolveFilePath('{title}', {title}, 'book.epub', false)).toBe(`${'ب'.repeat(99)} .epub`);
+    it('should drop the space a title cut to its byte limit ends with, as the server does', () => {
+      const title = truncatePathComponent(sanitize(`${'ب'.repeat(99)} ب`), MAX_COMPONENT_BYTES);
+      expect(resolveFilePath('{title}', {title}, 'book.epub', false)).toBe(`${'ب'.repeat(99)}.epub`);
+    });
+
+    it('should drop the space punctuation became where a long Chinese title is cut, as the server does', () => {
+      // The middle dot becomes a space, which the first 200 bytes end in
+      const title = truncatePathComponent(sanitize(`${'中'.repeat(66)}·文文文`), MAX_COMPONENT_BYTES);
+      expect(resolveFilePath('{title}', {title}, 'x.epub', false)).toBe(`${'中'.repeat(66)}.epub`);
     });
   });
 });
