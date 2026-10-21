@@ -4,6 +4,12 @@ import ch.qos.logback.classic.Level;
 import ch.qos.logback.classic.Logger;
 import ch.qos.logback.classic.spi.ILoggingEvent;
 import ch.qos.logback.core.read.ListAppender;
+import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.graphics.image.JPEGFactory;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.booklore.model.FileProcessResult;
 import org.booklore.model.dto.Book;
 import org.booklore.model.dto.settings.LibraryFile;
@@ -19,15 +25,22 @@ import org.booklore.service.event.BookEventBroadcaster;
 import org.booklore.service.fileprocessor.BookFileProcessor;
 import org.booklore.service.fileprocessor.BookFileProcessorRegistry;
 import org.booklore.service.fileprocessor.PreparableBookFileProcessor;
+import org.booklore.service.fileprocessor.prepare.AttachmentRequest;
 import org.booklore.service.fileprocessor.prepare.FileFacts;
+import org.booklore.service.fileprocessor.prepare.HeapReservation;
+import org.booklore.service.fileprocessor.prepare.IoCallable;
 import org.booklore.service.fileprocessor.prepare.PersistedBook;
+import org.booklore.service.fileprocessor.prepare.PrepareContext;
 import org.booklore.service.fileprocessor.prepare.PrepareRequest;
+import org.booklore.service.fileprocessor.prepare.PreparedAttachment;
 import org.booklore.service.fileprocessor.prepare.PreparedBookFile;
 import org.booklore.service.kobo.KoboAutoShelfService;
 import org.booklore.service.metadata.extractor.AudiobookMetadataExtractor;
 import org.booklore.service.metadata.extractor.MetadataExtractorFactory;
+import org.booklore.service.metadata.extractor.PdfMetadataExtractor;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
 import org.booklore.util.FileService;
+import org.booklore.util.cover.CoverKind;
 import org.booklore.util.cover.CropPolicy;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,6 +53,7 @@ import org.springframework.transaction.CannotCreateTransactionException;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.SimpleTransactionStatus;
 
+import java.awt.image.BufferedImage;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
@@ -61,6 +75,7 @@ import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.concurrent.atomic.AtomicInteger;
 import java.util.concurrent.atomic.AtomicLong;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.concurrent.locks.LockSupport;
 import java.util.function.BooleanSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -223,6 +238,56 @@ class ParallelBookImporterTest {
                 .build();
     }
 
+    /** An A4 PDF whose page is one JPEG of the given size, or blank when it has none. */
+    private Path pdfOnDisk(String fileName, int imageWidth, int imageHeight) throws IOException {
+        Path file = libraryRoot.resolve(fileName);
+        try (PDDocument doc = new PDDocument()) {
+            PDPage page = new PDPage(PDRectangle.A4);
+            doc.addPage(page);
+            if (imageWidth > 0) {
+                PDImageXObject image = JPEGFactory.createFromImage(doc, new BufferedImage(imageWidth, imageHeight, BufferedImage.TYPE_INT_RGB));
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    cs.drawImage(image, 0, 0, PDRectangle.A4.getWidth(), PDRectangle.A4.getHeight());
+                }
+            }
+            doc.save(file.toFile());
+        }
+        return file;
+    }
+
+    /** The heap preparing the PDF as an audiobook's additional format reserves outside renders, which take none here. */
+    private static long heapReservedToAttach(ParallelBookImporter importer, Path pdf) throws Exception {
+        List<Long> reservations = new ArrayList<>();
+        PrepareContext ctx = new PrepareContext() {
+            @Override
+            public void checkpoint() {
+            }
+
+            @Override
+            public <T> T render(long estimatedBytes, IoCallable<T> work) throws Exception {
+                return work.call();
+            }
+
+            @Override
+            public HeapReservation reserveHeap(long bytes) {
+                reservations.add(bytes);
+                return () -> {
+                };
+            }
+
+            @Override
+            public void registerProcess(Process process) {
+            }
+        };
+
+        PreparedAttachment prepared = importer.prepareAttachment(new AttachmentRequest(pdf, pdf.getFileName().toString(),
+                BookFileType.PDF, false, CoverKind.BOOK, CropPolicy.NONE), ctx);
+
+        assertThat(prepared.crossTypeCover()).isNotNull();
+        assertThat(reservations).hasSize(1);
+        return reservations.getFirst();
+    }
+
     private LibraryFile fileOnDisk(String fileName, BookFileType type) throws IOException {
         Files.writeString(libraryRoot.resolve(fileName), "the contents of " + fileName);
         return file(fileName, type);
@@ -355,6 +420,18 @@ class ParallelBookImporterTest {
         assertThat(logged(Level.WARN)).singleElement().asString()
                 .startsWith("Skipped additional format book.pdf: Failed to compute partial MD5 hash for: ")
                 .endsWith("; it will be attached by the next rescan");
+    }
+
+    @Test
+    void aPdfMakingANewAudiobooksCoverHoldsHeapForDecodingThePagesImageAtFullSize() throws Exception {
+        when(metadataExtractorFactory.getExtractor(BookFileType.PDF)).thenReturn(new PdfMetadataExtractor());
+        ParallelBookImporter importer = importer(executor(1, 1));
+
+        long scan = heapReservedToAttach(importer, pdfOnDisk("scan.pdf", 1240, 1754));
+        long blank = heapReservedToAttach(importer, pdfOnDisk("blank.pdf", 0, 0));
+
+        // PDFBox decodes all of the scan to draw the 1000x1414 cover from it
+        assertThat(scan - blank).isEqualTo(12L * 1240 * 1754);
     }
 
     @Test
@@ -499,6 +576,32 @@ class ParallelBookImporterTest {
         assertThat(logged(Level.ERROR)).containsExactly("Storage for library 'Books' is not responding: 1 import threads are "
                 + "stuck; 2 new books were not started and will be picked up by the next scan. Check the share, or restart "
                 + "Booklore if it stays stuck.");
+    }
+
+    @Test
+    void aFileGivenUpOnWhileHoldingMostOfTheHeapDoesNotStopTheScan() throws Exception {
+        // As a scanned PDF whose page render reserves most of the heap budget and is still in a decode at its deadline,
+        // which no interrupt ends: its thread returns once the decode is done
+        Duration timeout = Duration.ofSeconds(1);
+        doAnswer(inv -> {
+            PrepareContext ctx = inv.getArgument(1);
+            try (HeapReservation ignored = ctx.reserveHeap(48 * MIB)) {
+                long decoded = System.nanoTime() + timeout.plusMillis(300).toNanos();
+                while (System.nanoTime() < decoded) {
+                    LockSupport.parkNanos(decoded - System.nanoTime());
+                }
+            }
+            return prepare(inv.getArgument(0));
+        }).when(processor).prepare(argThat(request -> request.fileName().equals("scan.pdf")), any());
+
+        ImportSummary summary = importer(executor(1, 4, timeout, 16)).importGroups(groups(
+                List.of(epub("one")), List.of(file("scan.pdf", BookFileType.PDF)), List.of(epub("two")), List.of(epub("three"))), library);
+
+        assertThat(summary.stoppedStorageStuck()).isFalse();
+        assertThat(summary.timedOut()).isEqualTo(1);
+        assertThat(summary.notStarted()).isZero();
+        assertThat(summary.added()).isEqualTo(3);
+        assertThat(logged(Level.ERROR)).isEmpty();
     }
 
     @Test

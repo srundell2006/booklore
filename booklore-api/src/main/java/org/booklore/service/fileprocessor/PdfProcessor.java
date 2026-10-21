@@ -5,6 +5,7 @@ import org.apache.commons.lang3.StringUtils;
 import org.apache.pdfbox.Loader;
 import org.apache.pdfbox.io.RandomAccessReadBufferedFile;
 import org.apache.pdfbox.pdmodel.PDDocument;
+import org.apache.pdfbox.pdmodel.PDPage;
 import org.booklore.mapper.BookMapper;
 import org.booklore.model.dto.BookMetadata;
 import org.booklore.model.entity.BookEntity;
@@ -35,7 +36,7 @@ public class PdfProcessor extends AbstractFileProcessor implements BookFileProce
 
     // Only pages too small to fill the stored cover render this sharp; larger pages render just big enough
     private static final float MAX_COVER_DPI = 150f;
-    // Heap PDFBox needs to render a page beyond the page's own raster
+    // Heap PDFBox needs to render a page beyond the page's own raster and the images it decodes
     private static final long RENDER_HEAP_BYTES = 64L * 1024 * 1024;
 
     private final PdfMetadataExtractor pdfMetadataExtractor;
@@ -67,8 +68,12 @@ public class PdfProcessor extends AbstractFileProcessor implements BookFileProce
                 log.warn("Failed to extract PDF metadata for '{}': {}", request.fileName(), e.getMessage());
             }
             ctx.checkpoint();
-            long coverPixels = PdfMetadataExtractor.coverPixels(pdf.getPage(0), MAX_COVER_DPI);
-            cover = covers.fromPixels(coverPixels, RENDER_HEAP_BYTES, () -> pdfMetadataExtractor.renderCover(pdf, MAX_COVER_DPI));
+            PDPage page = pdf.getPage(0);
+            long coverPixels = PdfMetadataExtractor.coverPixels(page, MAX_COVER_DPI);
+            // PDFBox decodes each image on the page at its full size, for a scanned page many times the raster, and
+            // nothing but this reservation limits how many pages render at once
+            long renderBytes = RENDER_HEAP_BYTES + PdfMetadataExtractor.imageDecodeBytes(page);
+            cover = covers.fromPixels(coverPixels, renderBytes, () -> pdfMetadataExtractor.renderCover(pdf, MAX_COVER_DPI));
         } catch (PrepareAbandonedException | PrepareDeadlineException e) {
             throw e;
         } catch (OutOfMemoryError e) {

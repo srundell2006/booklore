@@ -37,10 +37,11 @@ import java.util.function.BooleanSupplier;
  *       thread starts them in submission order as IO slots free up.</li>
  *   <li>A task's deadline ({@code app.scan.import-file-timeout-seconds}) starts when it gets its slot, so time spent
  *       queued never counts against it. A task still running at its deadline is abandoned: its slot and render permit
- *       go to the next task at once, its heap is given back and counted as orphaned, its child processes are killed
- *       and its thread is interrupted, from a thread of its own because that can block. That frees a thread in an
- *       interruptible wait, but not one stuck in a CIFS read; such a thread counts as stuck until it returns, and
- *       whatever it returns is dropped.</li>
+ *       go to the next task at once, its child processes are killed and its thread is interrupted, from a thread of
+ *       its own because that can block. That frees a thread in an interruptible wait, but not one stuck in a CIFS read;
+ *       such a thread counts as stuck until it returns, and whatever it returns is dropped. Its heap stays reserved
+ *       for another file timeout, and is given back and counted as orphaned only if the thread has not returned by
+ *       then.</li>
  *   <li>While {@code app.scan.import-max-stuck-threads} abandoned threads are still stuck, or orphaned heap reaches
  *       half the budget, the breaker is open and tasks are skipped instead of started, so stuck threads cannot pile
  *       up: there are never more than max-stuck-threads + io-parallelism - 1, each with at most one more thread
@@ -297,7 +298,7 @@ public class ImportExecutor {
                 return; // it ended first
             }
             stuck.incrementAndGet();
-            orphanedHeapBytes.addAndGet(task.context().revokeAll());
+            task.context().revoke();
         }
         log.debug("Gave up on import task {} after {} ms; {} import threads stuck",
                 task.label(), TimeUnit.NANOSECONDS.toMillis(task.elapsedNanos()), stuck.get());
@@ -309,6 +310,34 @@ public class ImportExecutor {
         ioPermits.release();
         task.context().destroyProcesses();
         interruptElsewhere(task);
+        if (shutdown) {
+            orphanHeap(task);
+        } else {
+            orphanHeapLater(task);
+        }
+    }
+
+    /**
+     * Gives an abandoned task's heap to other tasks once its thread has had another file timeout to return. Given up on
+     * while it decodes a large image or reads a slow share, a thread returns once the decode is done or the interrupt
+     * ends the read, and until then it may well be using all of that heap. Handed back at once, one such file could
+     * hold more than half the budget and open the breaker by itself, stopping every scan although storage is fine.
+     */
+    private void orphanHeapLater(FileTask<?> task) {
+        try {
+            task.setDeadline(watchdog.schedule(() -> orphanHeap(task), timeoutNanos, TimeUnit.NANOSECONDS));
+        } catch (RejectedExecutionException e) {
+            // The watchdog has shut down with the executor, so no task starts that could use the heap
+            orphanHeap(task);
+        }
+    }
+
+    /** Gives back the heap an abandoned task still holds, counted as orphaned until its thread returns, if ever. */
+    private void orphanHeap(FileTask<?> task) {
+        // Under the lock returnedAfterAbandon takes, so it takes back exactly what was counted
+        synchronized (task) {
+            orphanedHeapBytes.addAndGet(task.context().revokeHeap());
+        }
     }
 
     /**
