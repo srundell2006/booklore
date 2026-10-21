@@ -54,6 +54,8 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
     /** Delay for reading the attributes of each entry of the given directory. */
     final Map<Path, Duration> entryAttributeDelays = new ConcurrentHashMap<>();
     final Set<Path> unreadable = ConcurrentHashMap.newKeySet();
+    /** Entries left out of every listing of their directory but its first: a share unmounted meanwhile, say. */
+    final Set<Path> unlistedOnRelisting = ConcurrentHashMap.newKeySet();
     /** Lists entries in name order instead of the filesystem's. */
     volatile boolean listInNameOrder;
     /** Answers lookups as a filesystem that matches names regardless of case would. */
@@ -78,6 +80,7 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
 
     @Override
     DirectoryStream<Path> newDirectoryStream(Path dir) throws IOException {
+        boolean relisting = listed.contains(dir);
         listed.add(dir);
         if (stuckListings.contains(dir)) {
             stuckCount.incrementAndGet();
@@ -98,7 +101,7 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
             if (failure != null) {
                 throw failure;
             }
-            return recording(super.newDirectoryStream(dir), listingsFailingAfterFirstEntry.contains(dir),
+            return recording(super.newDirectoryStream(dir), relisting, listingsFailingAfterFirstEntry.contains(dir),
                     listingsStuckAfterFirstEntry.contains(dir));
         } finally {
             activeListings.decrementAndGet();
@@ -177,13 +180,23 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
         }
     }
 
-    /** Records each entry as the listing returns it, optionally sorted, optionally failing or stuck after the first. */
-    private DirectoryStream<Path> recording(DirectoryStream<Path> stream, boolean failAfterFirstEntry, boolean stuckAfterFirstEntry) {
+    /**
+     * Records each entry as the listing returns it, optionally sorted, optionally leaving out entries unlisted on
+     * relisting, optionally failing or stuck after the first.
+     */
+    private DirectoryStream<Path> recording(DirectoryStream<Path> stream, boolean relisting, boolean failAfterFirstEntry,
+                                            boolean stuckAfterFirstEntry) {
         Iterator<Path> source;
-        if (listInNameOrder) {
+        if (listInNameOrder || relisting) {
             List<Path> entries = new ArrayList<>();
-            stream.forEach(entries::add);
-            entries.sort((a, b) -> a.getFileName().toString().compareTo(b.getFileName().toString()));
+            stream.forEach(entry -> {
+                if (!relisting || !unlistedOnRelisting.contains(entry)) {
+                    entries.add(entry);
+                }
+            });
+            if (listInNameOrder) {
+                entries.sort((a, b) -> a.getFileName().toString().compareTo(b.getFileName().toString()));
+            }
             source = entries.iterator();
         } else {
             source = stream.iterator();

@@ -77,13 +77,21 @@ import java.util.function.Consumer;
  *       be read, and a fresh listing carries on with the rest, keeping what the stuck
  *       one found. The stuck thread holds the open directory stream, so the fresh
  *       listing reads the directory again, skipping the entries already looked at,
- *       which keeps every entry looked at as the listing returns it. Should the fresh
- *       listing get stuck again before it has looked at any other entry, or once
+ *       which keeps every entry looked at as the listing returns it. Should that read
+ *       miss an entry already looked at, it is not of the directory first read, or no
+ *       longer of all of it (a share unmounted meanwhile, say), and cannot vouch for the
+ *       entries it returns first, so the directory is given up as a whole. Should the
+ *       fresh listing get stuck again before it has looked at any other entry, or once
  *       {@value #MAX_STUCK_ENTRIES_PER_DIRECTORY} entries of the directory have been
  *       given up on, the directory seems stuck as a whole (a folder whose every file
- *       another client holds): the rest of it is given up, and it is reported incomplete
- *       with what was found in it kept. So a directory stuck as a whole costs two
- *       timeouts, and no one directory can use up the timeouts of its library path.</li>
+ *       another client holds) and is given up too. So a directory stuck as a whole costs
+ *       two timeouts, and no one directory can use up the timeouts of its library path.
+ *       A directory given up as a whole is reported incomplete, and nothing found in it
+ *       is kept, as for one stuck being read: the entries not looked at may be an ignore
+ *       marker, or tracks those found group with. Only a library path keeps what was
+ *       found in it, since it is scanned whatever marker it holds and each of its audio
+ *       files is a book of its own. Likewise a directory where how the audio files group
+ *       depends on an entry given up on keeps none of its audio files.</li>
  *   <li>An abandoned thread cannot be reclaimed while it is stuck (it ignores
  *       interrupts while in IO), but it stops at its next filesystem call once the
  *       stuck one returns. So that stuck threads cannot pile up, after
@@ -252,6 +260,8 @@ public class LibraryDirectoryWalker {
         private int audioFiles;
         /** Entries given up on while they were being inspected. */
         private int stuckEntries;
+        /** Some of those were book files. */
+        private boolean bookFileGivenUp;
         /** How many entries had been looked at when the last one was given up on. */
         private int inspectedWhenLastStuck;
 
@@ -301,6 +311,7 @@ public class LibraryDirectoryWalker {
         boolean stuckOn(Path entry) {
             boolean stuckAgainAtOnce = stuckEntries > 0 && inspected.size() == inspectedWhenLastStuck;
             record(entry, found -> found.couldNotInspect(entry));
+            bookFileGivenUp |= bookFileType(entry.getFileName().toString()).isPresent();
             stuckEntries++;
             inspectedWhenLastStuck = inspected.size();
             return !stuckAgainAtOnce && stuckEntries < MAX_STUCK_ENTRIES_PER_DIRECTORY;
@@ -313,6 +324,11 @@ public class LibraryDirectoryWalker {
                     // Whether the audio files here make one folder audiobook, a series or separate books depends on
                     // every book file of the directory, so one that could not be seen puts all of its books in doubt.
                     incompletePaths.add(path);
+                    if (bookFileGivenUp) {
+                        // Grouped as found, the audio files seen could make books that the next scan, seeing them all,
+                        // groups otherwise and so deletes. The directory in doubt keeps their books until then.
+                        bookFiles.removeIf(name -> bookFileType(name).orElseThrow() == BookFileType.AUDIOBOOK);
+                    }
                 } else {
                     // Each book file here is a book of its own, so only the unseen ones are in doubt.
                     incompletePaths.addAll(unseenBookFiles);
@@ -322,10 +338,16 @@ public class LibraryDirectoryWalker {
         }
 
         /**
-         * What the listings found before the rest of the directory at {@code path} was given up on. The
-         * entries not looked at may be anything, so the whole directory is in doubt.
+         * What is kept of the directory at {@code path} once the rest of it is given up on. The entries
+         * not looked at may be anything, so the whole directory is in doubt. They may be an ignore marker,
+         * or tracks the audio files found group with, so nothing found in it is kept either, as for a
+         * directory stuck being read; except in a library path, which is scanned whatever marker it holds
+         * and whose audio files are each a book of their own.
          */
         Contents givenUp(Path path) {
+            if (!libraryPath) {
+                return new Contents(List.of(), List.of(), List.of(path), false);
+            }
             return contents(List.of(path));
         }
 
@@ -603,7 +625,7 @@ public class LibraryDirectoryWalker {
                     queue.addFirst(new Pending(walk, pending.directory(), pending.lineage(), findings));
                 } else {
                     log.warn("Gave up inspecting [{}] after {} ms without filesystem progress; [{}] seems stuck as a whole, "
-                                    + "so the rest of it was not scanned and nothing under it is treated as deleted",
+                                    + "so it was given up on and nothing under it is treated as deleted",
                             stuckEntry, directoryTimeout.toMillis(), path);
                     attach(pending, findings.givenUp(path), queue);
                 }
@@ -665,8 +687,10 @@ public class LibraryDirectoryWalker {
             findings.directory = new Lineage(path, attrs.fileKey(), null);
         }
 
-        // A listing carrying on after one given up on knows the directory has entries.
-        boolean empty = findings.inspected.isEmpty();
+        // The entries listings given up on looked at, which a listing carrying on from them must return again.
+        int inspectedBefore = findings.inspected.size();
+        int inspectedAgain = 0;
+        boolean empty = true;
         try (DirectoryStream<Path> stream = fileAccess.newDirectoryStream(path)) {
             listing.progressed();
             for (Path entry : stream) {
@@ -675,6 +699,7 @@ public class LibraryDirectoryWalker {
                 String name = entry.getFileName().toString();
                 if (findings.inspected.contains(name)) {
                     // Looked at by the listing this one carries on from.
+                    inspectedAgain++;
                     continue;
                 }
                 // The library path itself is scanned even when it holds a marker.
@@ -703,9 +728,18 @@ public class LibraryDirectoryWalker {
             throw e.getCause();
         }
 
+        // Also when a listing carrying on finds it empty: the share may have been unmounted since the first.
         if (findings.libraryPath && empty) {
             log.warn("Library path [{}] is empty; reporting it as not scanned in case it is a share that is not mounted", path);
             return new Contents(List.of(), List.of(), List.of(path), true);
+        }
+        if (inspectedAgain < inspectedBefore) {
+            // Not the directory read before, or no longer all of it, so it cannot vouch for the entries it returned
+            // first. An entry removed meanwhile ends up here as well, which errs on the safe side.
+            log.warn("Read again after an entry given up on, [{}] no longer holds {} of the {} entries already looked at, "
+                            + "so it may have been unmounted meanwhile; it was given up on and nothing under it is treated as deleted",
+                    path, inspectedBefore - inspectedAgain, inspectedBefore);
+            return findings.givenUp(path);
         }
         return findings.contents(path);
     }

@@ -25,6 +25,7 @@ import java.util.List;
 import java.util.concurrent.CyclicBarrier;
 import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
@@ -383,9 +384,10 @@ class LibraryDirectoryWalkerTest {
         LibraryScanResult result = assertTimeoutPreemptively(Duration.ofSeconds(10),
                 () -> new LibraryFileHelper(walker).scanAllLibraryFiles(library(tempDir)));
 
-        // How the other tracks group depends on the one given up on, as for a track that could not be read.
+        // How the other tracks group depends on the one given up on, as for a track that could not be read, so
+        // none of them is taken until a scan sees them all.
         assertThat(result.incompletePaths()).containsExactlyInAnyOrder(folderBook, rootTrack);
-        assertThat(fileNames(result.files())).contains("novel.epub", "r1.mp3");
+        assertThat(fileNames(result.files())).containsExactly("novel.epub", "r1.mp3");
 
         fileAccess.release();
         awaitNoStrandedListings(walker);
@@ -494,9 +496,135 @@ class LibraryDirectoryWalkerTest {
         assertThat(fileAccess.stuckCount.get()).isEqualTo(stuck);
         assertThat(walker.strandedListings()).isEqualTo(stuck);
         assertThat(walked.incompletePaths()).containsExactly(shelf);
-        assertThat(child(walked.root(), "Shelf").getBookFiles()).hasSize(stuck)
-                .allSatisfy(name -> assertThat(Integer.parseInt(name.substring(1, 3)) % 2).isZero());
+        // Given up as a whole, so nothing found in it is kept.
+        assertThat(fileAccess.attributesRead).contains(shelf.resolve("b00.epub"));
+        assertThat(child(walked.root(), "Shelf").getBookFiles()).isEmpty();
         assertThat(child(walked.root(), "Other").getBookFiles()).containsExactly("a.epub");
+
+        fileAccess.release();
+        awaitNoStrandedListings(walker);
+    }
+
+    @Test
+    void libraryPathFoundEmptyWhenReadAgainAfterAStuckEntryIsReportedEmpty() throws Exception {
+        // The share is unmounted while an entry of it is stuck, so the listing carrying on reads the bare mount point.
+        book("A loose.epub");
+        book("Author A/a.epub");
+        Path stuck = book("Author B/b.epub").getParent();
+        Path notReached = book("Author C/c.epub");
+        fileAccess.listInNameOrder = true;
+        fileAccess.stuckAttributeReads.add(stuck);
+        try (Stream<Path> entries = Files.list(tempDir)) {
+            entries.forEach(fileAccess.unlistedOnRelisting::add);
+        }
+        LibraryDirectoryWalker walker = walker(4, Duration.ofMillis(300));
+
+        LibraryScanResult result = assertTimeoutPreemptively(Duration.ofSeconds(10),
+                () -> new LibraryFileHelper(walker).scanAllLibraryFiles(library(tempDir)));
+
+        // As when its first listing finds it empty: nothing in it is kept, and all of it is in doubt, so a rescan
+        // stops instead of taking the books it did not reach for deleted.
+        assertThat(fileAccess.listed).filteredOn(tempDir::equals).hasSize(2);
+        assertThat(result.files()).isEmpty();
+        assertThat(result.incompletePaths()).containsExactly(tempDir);
+        assertThat(result.emptyLibraryPaths()).containsExactly(tempDir);
+        assertThat(result.isUnderIncompletePath(notReached)).isTrue();
+
+        fileAccess.release();
+        awaitNoStrandedListings(walker);
+    }
+
+    @Test
+    void libraryPathMissingEntriesWhenReadAgainAfterAStuckEntryIsInDoubtAsAWhole() throws Exception {
+        book("Author A/a.epub");
+        Path stuck = book("Author B/b.epub").getParent();
+        book("Author C/c.epub");
+        fileAccess.listInNameOrder = true;
+        fileAccess.stuckAttributeReads.add(stuck);
+        fileAccess.unlistedOnRelisting.add(tempDir.resolve("Author A"));
+        LibraryDirectoryWalker walker = walker(4, Duration.ofMillis(300));
+
+        WalkedPath walked = assertTimeoutPreemptively(Duration.ofSeconds(10), () -> walker.walk(List.of(tempDir))).getFirst();
+
+        // A listing that no longer returns an entry already looked at is not of the directory first read, or not of
+        // all of it, so it cannot vouch for the entries it returns first. What was found is still scanned.
+        assertThat(walked.incompletePaths()).containsExactly(tempDir);
+        assertThat(walked.empty()).isFalse();
+        assertThat(subdirectoryNames(walked.root())).containsExactly("Author A", "Author C");
+
+        fileAccess.release();
+        awaitNoStrandedListings(walker);
+    }
+
+    @Test
+    void directoryMissingEntriesWhenReadAgainAfterAStuckEntryIsLeftOut() throws Exception {
+        Path author = book("Author/a.epub").getParent();
+        fileAccess.stuckAttributeReads.add(book("Author/b.epub"));
+        book("Author/c.epub");
+        book("Other/d.epub");
+        fileAccess.listInNameOrder = true;
+        fileAccess.unlistedOnRelisting.add(author.resolve("a.epub"));
+        LibraryDirectoryWalker walker = walker(4, Duration.ofMillis(300));
+
+        LibraryScanResult result = assertTimeoutPreemptively(Duration.ofSeconds(10),
+                () -> new LibraryFileHelper(walker).scanAllLibraryFiles(library(tempDir)));
+
+        assertThat(fileAccess.listed).filteredOn(author::equals).hasSize(2);
+        assertThat(fileNames(result.files())).containsExactly("d.epub");
+        assertThat(result.incompletePaths()).containsExactly(author);
+
+        fileAccess.release();
+        awaitNoStrandedListings(walker);
+    }
+
+    @Test
+    void directoryGivenUpAsAWholeAddsNothingFoundInIt() throws Exception {
+        // Listed in name order, the marker comes after the entries, so it is never reached.
+        Path incoming = book("_incoming/(0) Sub/a.epub").getParent().getParent();
+        book("_incoming/(1) b.epub");
+        fileAccess.stuckAttributeReads.add(book("_incoming/(2) c.epub"));
+        fileAccess.stuckAttributeReads.add(book("_incoming/(3) d.epub"));
+        book("_incoming/.ignore");
+        // Each track found would make a book of its own, which the next scan would group and so delete.
+        Path folderBook = book("Author/Book/ch01.mp3").getParent();
+        fileAccess.stuckAttributeReads.add(book("Author/Book/ch02.mp3"));
+        fileAccess.stuckAttributeReads.add(book("Author/Book/ch03.mp3"));
+        book("Author/Book/ch04.mp3");
+        book("Other/e.epub");
+        fileAccess.listInNameOrder = true;
+        LibraryDirectoryWalker walker = walker(4, Duration.ofMillis(300));
+
+        LibraryScanResult result = assertTimeoutPreemptively(Duration.ofSeconds(10),
+                () -> new LibraryFileHelper(walker).scanAllLibraryFiles(library(tempDir)));
+
+        // As for a directory stuck being read: whatever is in it may be ignored, or grouped otherwise.
+        assertThat(fileNames(result.files())).containsExactly("e.epub");
+        assertThat(result.incompletePaths()).containsExactlyInAnyOrder(incoming, folderBook);
+        assertThat(fileAccess.listed).doesNotContain(incoming.resolve("(0) Sub"));
+
+        fileAccess.release();
+        awaitNoStrandedListings(walker);
+    }
+
+    @Test
+    void audioFilesOfADirectoryWhoseGroupingDependsOnAnEntryGivenUpOnAreLeftOut() throws Exception {
+        Path folderBook = book("Author/Book/ch01.mp3").getParent();
+        fileAccess.stuckAttributeReads.add(book("Author/Book/ch02.mp3"));
+        Path mixed = book("Mixed/a.mp3").getParent();
+        book("Mixed/b.mp3");
+        fileAccess.stuckAttributeReads.add(book("Mixed/book.epub"));
+        book("Other/c.epub");
+        fileAccess.listInNameOrder = true;
+        LibraryDirectoryWalker walker = walker(4, Duration.ofMillis(300));
+
+        LibraryScanResult result = assertTimeoutPreemptively(Duration.ofSeconds(10),
+                () -> new LibraryFileHelper(walker).scanAllLibraryFiles(library(tempDir)));
+
+        // Grouped as found, ch01.mp3 would make a book of its own and a.mp3 and b.mp3 a folder audiobook, each
+        // deleted again by the next scan that sees the whole directory. Left out, they are kept by the incomplete
+        // directory until then.
+        assertThat(fileNames(result.files())).containsExactly("c.epub");
+        assertThat(result.incompletePaths()).containsExactlyInAnyOrder(folderBook, mixed);
 
         fileAccess.release();
         awaitNoStrandedListings(walker);
