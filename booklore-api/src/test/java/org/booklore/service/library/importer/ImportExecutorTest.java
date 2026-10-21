@@ -2,6 +2,7 @@ package org.booklore.service.library.importer;
 
 import org.booklore.service.fileprocessor.prepare.CoverMaker;
 import org.booklore.service.fileprocessor.prepare.HeapReservation;
+import org.booklore.service.fileprocessor.prepare.IoCallable;
 import org.booklore.service.fileprocessor.prepare.PrepareAbandonedException;
 import org.booklore.service.fileprocessor.prepare.PrepareContext;
 import org.booklore.service.fileprocessor.prepare.PrepareDeadlineException;
@@ -28,6 +29,7 @@ import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Random;
+import java.util.concurrent.CopyOnWriteArrayList;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.RejectedExecutionException;
 import java.util.concurrent.TimeUnit;
@@ -462,6 +464,42 @@ class ImportExecutorTest {
         assertThat(valueOf(task)).isEqualTo("rendered");
         assertThat(executor.availableHeapBytes()).isEqualTo(64 * MIB);
         assertThat(executor.availableRenderPermits()).isEqualTo(2);
+    }
+
+    @Test
+    void aTaskThatReadsOnAfterItWasGivenUpOnStopsAtItsCoverInsteadOfCarryingOnWithoutIt() throws Exception {
+        ImportExecutor executor = executor(1, Duration.ofMillis(200));
+        List<Exception> seen = new CopyOnWriteArrayList<>();
+        List<Boolean> interruptKept = new CopyOnWriteArrayList<>();
+        FileTask<String> task = submit(executor, "book.epub", ctx -> {
+            // As a read from the share that ends only after the file was given up on, with no checkpoint in it
+            while (!Thread.currentThread().isInterrupted()) {
+                LockSupport.parkNanos(TimeUnit.MILLISECONDS.toNanos(1));
+            }
+            return asAProcessorCatches(seen, interruptKept, () -> ctx.render(MIB, () -> "rendered"));
+        });
+
+        assertThat(outcome(task)).isInstanceOf(Outcome.TimedOut.class);
+        awaitUntil("the abandoned thread to return", () -> executor.stuckThreads() == 0);
+        assertThat(seen).singleElement().isInstanceOf(PrepareAbandonedException.class);
+        assertThat(interruptKept).containsExactly(true);
+        assertThat(executor.availableRenderPermits()).isEqualTo(2);
+        assertThat(executor.availableHeapBytes()).isEqualTo(64 * MIB);
+    }
+
+    /** Runs a cover or parse step as the processors do: they carry on without what it gives on any other exception. */
+    private static <T> T asAProcessorCatches(List<Exception> seen, List<Boolean> interruptKept, IoCallable<T> step) throws Exception {
+        try {
+            return step.call();
+        } catch (PrepareAbandonedException | PrepareDeadlineException e) {
+            seen.add(e);
+            interruptKept.add(Thread.currentThread().isInterrupted());
+            throw e;
+        } catch (Exception e) {
+            seen.add(e);
+            interruptKept.add(Thread.currentThread().isInterrupted());
+            return null;
+        }
     }
 
     @Test

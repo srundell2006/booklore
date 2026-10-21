@@ -65,7 +65,7 @@ public class CbxProcessor extends AbstractFileProcessor implements BookFileProce
         RenderedCover cover = null;
         BookMetadata extracted;
         try (CbxArchive archive = CbxArchive.open(file, archiveType)) {
-            cover = renderCover(archive, archiveType, covers);
+            cover = renderCover(archive, archiveType, covers, ctx);
             ctx.checkpoint();
             extracted = cbxMetadataExtractor.extractMetadata(archive, baseName);
         } catch (PrepareAbandonedException | PrepareDeadlineException e) {
@@ -131,8 +131,12 @@ public class CbxProcessor extends AbstractFileProcessor implements BookFileProce
     }
 
     /** The cover rendered from the image {@link #findCoverImage} picks, chosen by the same rules. */
-    private RenderedCover renderCover(CbxArchive archive, ArchiveUtils.ArchiveType archiveType, CoverMaker covers) {
+    private RenderedCover renderCover(CbxArchive archive, ArchiveUtils.ArchiveType archiveType, CoverMaker covers,
+                                      PrepareContext ctx) {
         for (String name : imageNames(archive)) {
+            // A RAR given up on would otherwise try every image in turn, each read failing at once: through unrar,
+            // every process it starts is killed, and the thread stays interrupted
+            ctx.checkpoint();
             try {
                 return covers.fromEncodedOrThrow(archive.readEntry(name), true);
             } catch (PrepareAbandonedException | PrepareDeadlineException e) {

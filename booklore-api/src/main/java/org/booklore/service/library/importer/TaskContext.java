@@ -58,7 +58,13 @@ final class TaskContext implements PrepareContext {
     public <T> T render(long estimatedBytes, IoCallable<T> work) throws Exception {
         requireNothingHeld();
         awaitingCapacity = true;
-        if (!renderPermits.tryAcquire(remainingNanos(), TimeUnit.NANOSECONDS)) {
+        boolean acquired;
+        try {
+            acquired = renderPermits.tryAcquire(remainingNanos(), TimeUnit.NANOSECONDS);
+        } catch (InterruptedException e) {
+            throw abandonedByInterrupt();
+        }
+        if (!acquired) {
             // Still awaiting capacity as far as the watchdog is concerned, so it leaves the task to fail by itself
             throw new PrepareDeadlineException("No cover-rendering capacity for " + task.label() + " before its deadline");
         }
@@ -77,7 +83,7 @@ final class TaskContext implements PrepareContext {
     }
 
     @Override
-    public HeapReservation reserveHeap(long bytes) throws InterruptedException {
+    public HeapReservation reserveHeap(long bytes) {
         requireNothingHeld();
         checkpoint();
         return reserve(bytes);
@@ -158,9 +164,14 @@ final class TaskContext implements PrepareContext {
         }
     }
 
-    private HeapReservation reserve(long bytes) throws InterruptedException {
+    private HeapReservation reserve(long bytes) {
         awaitingCapacity = true;
-        HeapBudget.Reservation reservation = heap.tryReserve(bytes, remainingNanos());
+        HeapBudget.Reservation reservation;
+        try {
+            reservation = heap.tryReserve(bytes, remainingNanos());
+        } catch (InterruptedException e) {
+            throw abandonedByInterrupt();
+        }
         if (reservation == null) {
             throw new PrepareDeadlineException("No heap for " + task.label() + " before its deadline");
         }
@@ -173,6 +184,16 @@ final class TaskContext implements PrepareContext {
             reservations.add(reservation);
         }
         return () -> release(reservation);
+    }
+
+    /**
+     * The task's thread is interrupted when the task is given up on, which can come while it waits for capacity. It
+     * ends the preparation as a checkpoint would: as a checked InterruptedException, the processors would take it for a
+     * cover that failed, log it as an error and carry on reading the file. The interrupt is kept for what comes after.
+     */
+    private PrepareAbandonedException abandonedByInterrupt() {
+        Thread.currentThread().interrupt();
+        return new PrepareAbandonedException("Gave up on " + task.label());
     }
 
     private synchronized void release(HeapBudget.Reservation reservation) {

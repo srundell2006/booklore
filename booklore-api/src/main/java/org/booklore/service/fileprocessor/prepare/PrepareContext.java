@@ -20,16 +20,18 @@ public interface PrepareContext {
      * Runs a decode, render or encode of a cover while holding a render permit and {@code estimatedBytes} of the heap
      * budget, both released when it returns.
      *
-     * @throws PrepareDeadlineException when the file's deadline passes while waiting for either
+     * @throws PrepareDeadlineException  when the file's deadline passes while waiting for either
+     * @throws PrepareAbandonedException when the preparation is given up on, or its thread interrupted, while waiting
      */
     <T> T render(long estimatedBytes, IoCallable<T> work) throws Exception;
 
     /**
      * Reserves heap for a step that is not a render, such as parsing a document. Close the reservation when done.
      *
-     * @throws PrepareDeadlineException when the file's deadline passes while waiting for it
+     * @throws PrepareDeadlineException  when the file's deadline passes while waiting for it
+     * @throws PrepareAbandonedException when the preparation is given up on, or its thread interrupted, while waiting
      */
-    HeapReservation reserveHeap(long bytes) throws InterruptedException;
+    HeapReservation reserveHeap(long bytes);
 
     /**
      * A child process the preparation started, to be killed when the preparation is given up on. The preparation's

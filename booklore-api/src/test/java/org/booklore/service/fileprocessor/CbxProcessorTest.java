@@ -14,6 +14,11 @@ import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.service.book.BookCreatorService;
 import org.booklore.service.fileprocessor.prepare.FileFacts;
+import org.booklore.service.fileprocessor.prepare.HeapReservation;
+import org.booklore.service.fileprocessor.prepare.IoCallable;
+import org.booklore.service.fileprocessor.prepare.PrepareAbandonedException;
+import org.booklore.service.fileprocessor.prepare.PrepareContext;
+import org.booklore.service.fileprocessor.prepare.PrepareRequest;
 import org.booklore.service.metadata.MetadataMatchService;
 import org.booklore.service.metadata.extractor.CbxMetadataExtractor;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
@@ -51,10 +56,12 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collection;
 import java.util.List;
+import java.util.concurrent.atomic.AtomicBoolean;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.booklore.util.CbxTestArchives.SOLID_CB7_COMIC_INFO_FIRST;
 import static org.booklore.util.CbxTestArchives.SOLID_CB7_COMIC_INFO_LAST;
 import static org.booklore.util.CbxTestArchives.comicInfo;
@@ -64,6 +71,7 @@ import static org.booklore.util.CbxTestArchives.image;
 import static org.booklore.util.CbxTestArchives.imageFile;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyLong;
+import static org.mockito.ArgumentMatchers.anyString;
 import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.CALLS_REAL_METHODS;
 import static org.mockito.Mockito.lenient;
@@ -537,6 +545,53 @@ class CbxProcessorTest {
                 assertThat(book.getMetadata().getTitle()).isEqualTo("Via CLI");
                 // One listing serves both the cover and ComicInfo.xml
                 unrar.verify(() -> UnrarHelper.listEntries(any(Path.class)), times(1));
+            }
+        }
+
+        @Test
+        void rarGivenUpOnWhileExtractingAnImageTriesNoFurtherImage() throws IOException {
+            Path file = tempDir.resolve("rar5.cbr");
+            Files.copy(Path.of("src/test/resources/cbx/test-rar5.cbr"), file);
+            AtomicBoolean givenUp = new AtomicBoolean();
+            PrepareContext ctx = new PrepareContext() {
+                @Override
+                public void checkpoint() {
+                    if (givenUp.get()) {
+                        throw new PrepareAbandonedException("Gave up on rar5.cbr");
+                    }
+                }
+
+                @Override
+                public <T> T render(long estimatedBytes, IoCallable<T> work) throws Exception {
+                    return work.call();
+                }
+
+                @Override
+                public HeapReservation reserveHeap(long bytes) {
+                    return () -> {
+                    };
+                }
+
+                @Override
+                public void registerProcess(Process process) {
+                }
+            };
+
+            try (MockedStatic<UnrarHelper> unrar = mockStatic(UnrarHelper.class)) {
+                unrar.when(UnrarHelper::isAvailable).thenReturn(true);
+                unrar.when(() -> UnrarHelper.listEntries(any(Path.class)))
+                        .thenReturn(List.of("pages/001.jpg", "pages/002.jpg", "pages/003.jpg"));
+                // The file's deadline passes while unrar extracts the first image: the import kills unrar, and every
+                // unrar started for the file after that, and interrupts the thread
+                unrar.when(() -> UnrarHelper.extractEntryBytes(any(Path.class), anyString())).thenAnswer(invocation -> {
+                    givenUp.set(true);
+                    throw new IOException("unrar extract interrupted");
+                });
+
+                assertThatThrownBy(() -> processor.prepare(PrepareRequest.of(libraryFileFor(file), CropPolicy.NONE), ctx))
+                        .isInstanceOf(PrepareAbandonedException.class);
+
+                unrar.verify(() -> UnrarHelper.extractEntryBytes(any(Path.class), anyString()), times(1));
             }
         }
 
