@@ -16,6 +16,10 @@ import org.booklore.service.file.FileFingerprint;
 import org.booklore.service.fileprocessor.BookFileProcessor;
 import org.booklore.service.fileprocessor.BookFileProcessorRegistry;
 import org.booklore.service.kobo.KoboAutoShelfService;
+import org.booklore.service.library.importer.ImportExecutor;
+import org.booklore.service.library.importer.ImportSettings;
+import org.booklore.service.library.importer.ImportSummary;
+import org.booklore.service.library.importer.ParallelBookImporter;
 import org.booklore.service.metadata.extractor.AudiobookMetadataExtractor;
 import org.booklore.service.metadata.extractor.MetadataExtractorFactory;
 import org.booklore.util.FileService;
@@ -26,11 +30,18 @@ import org.junit.jupiter.api.Test;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.MockitoAnnotations;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.support.SimpleTransactionStatus;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
 
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.ArrayList;
+import java.util.LinkedHashMap;
 import java.util.List;
+import java.util.Map;
 
+import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.Mockito.*;
 
@@ -66,6 +77,15 @@ class FileAsBookProcessorTest {
     @Mock
     private BookFileProcessor bookFileProcessor;
 
+    @Mock
+    private ParallelBookImporter parallelBookImporter;
+
+    @Mock
+    private PlatformTransactionManager transactionManager;
+
+    @Mock
+    private ImportExecutor importExecutor;
+
     private FileAsBookProcessor fileAsBookProcessor;
 
     private AutoCloseable mocks;
@@ -84,7 +104,10 @@ class FileAsBookProcessorTest {
                 libraryRepository,
                 fileService,
                 metadataExtractorFactory,
-                audiobookMetadataExtractor
+                audiobookMetadataExtractor,
+                parallelBookImporter,
+                transactionManager,
+                importExecutor
         );
         fileFingerprintMock = mockStatic(FileFingerprint.class);
         fileFingerprintMock.when(() -> FileFingerprint.generateHash(any(Path.class))).thenReturn("testhash");
@@ -237,5 +260,90 @@ class FileAsBookProcessorTest {
         // Both should be processed as separate books
         verify(bookFileProcessor, times(2)).processFile(any());
         verify(bookEventBroadcaster, times(2)).broadcastBookAddEvent(any());
+    }
+
+    // ---- which import a scan's groups go through ----
+
+    private void givenPipeline(boolean enabled) {
+        when(importExecutor.settings()).thenReturn(new ImportSettings(enabled, 4, 16, Duration.ofSeconds(180), 16, 2, 128L * 1024 * 1024));
+    }
+
+    private Map<String, List<LibraryFile>> oneEpubGroup(LibraryEntity libraryEntity) {
+        LibraryPathEntity libraryPathEntity = new LibraryPathEntity();
+        libraryPathEntity.setId(1L);
+        libraryPathEntity.setPath("/library/path");
+        LibraryFile file = LibraryFile.builder()
+                .libraryEntity(libraryEntity)
+                .libraryPathEntity(libraryPathEntity)
+                .fileName("book.epub")
+                .fileSubPath("books")
+                .bookFileType(BookFileType.EPUB)
+                .build();
+        Book book = Book.builder().id(1L).primaryFile(BookFile.builder().fileName("book.epub").bookType(BookFileType.EPUB).build()).build();
+        when(processorRegistry.getProcessorOrThrow(BookFileType.EPUB)).thenReturn(bookFileProcessor);
+        when(bookFileProcessor.processFile(file)).thenReturn(new FileProcessResult(book, FileProcessStatus.NEW));
+        Map<String, List<LibraryFile>> groups = new LinkedHashMap<>();
+        groups.put("book", List.of(file));
+        return groups;
+    }
+
+    @Test
+    void processLibraryFilesGrouped_withNoTransactionOpen_goesThroughTheParallelImporter() {
+        givenPipeline(true);
+        LibraryEntity libraryEntity = new LibraryEntity();
+        Map<String, List<LibraryFile>> groups = new LinkedHashMap<>();
+        ImportSummary summary = new ImportSummary(0, 0, 0, 0, 0, 0, false, false, false, 0, Duration.ZERO, false);
+        when(parallelBookImporter.importGroups(groups, libraryEntity)).thenReturn(summary);
+
+        assertThat(fileAsBookProcessor.processLibraryFilesGrouped(groups, libraryEntity)).isSameAs(summary);
+
+        verifyNoInteractions(transactionManager, processorRegistry);
+    }
+
+    @Test
+    void processLibraryFilesGrouped_withThePipelineOff_importsOneByOneInOneTransaction() {
+        givenPipeline(false);
+        when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus());
+        LibraryEntity libraryEntity = new LibraryEntity();
+
+        ImportSummary summary = fileAsBookProcessor.processLibraryFilesGrouped(oneEpubGroup(libraryEntity), libraryEntity);
+
+        assertThat(summary.legacy()).isTrue();
+        assertThat(summary.groups()).isEqualTo(1);
+        verify(transactionManager).getTransaction(any());
+        verify(bookFileProcessor).processFile(any());
+        verify(transactionManager).commit(any());
+        verifyNoInteractions(parallelBookImporter);
+    }
+
+    @Test
+    void processLibraryFilesGrouped_insideACallersTransaction_joinsItAndImportsOneByOne() {
+        givenPipeline(true);
+        when(transactionManager.getTransaction(any())).thenReturn(new SimpleTransactionStatus(false));
+        LibraryEntity libraryEntity = new LibraryEntity();
+        Map<String, List<LibraryFile>> groups = oneEpubGroup(libraryEntity);
+
+        ImportSummary summary;
+        TransactionSynchronizationManager.setActualTransactionActive(true);
+        try {
+            summary = fileAsBookProcessor.processLibraryFilesGrouped(groups, libraryEntity);
+        } finally {
+            TransactionSynchronizationManager.setActualTransactionActive(false);
+        }
+
+        assertThat(summary.legacy()).isTrue();
+        verify(bookFileProcessor).processFile(any());
+        verifyNoInteractions(parallelBookImporter);
+    }
+
+    @Test
+    void processLibraryFiles_neverGoesThroughTheParallelImporter() {
+        LibraryEntity libraryEntity = new LibraryEntity();
+        List<LibraryFile> files = oneEpubGroup(libraryEntity).get("book");
+
+        fileAsBookProcessor.processLibraryFiles(files, libraryEntity);
+
+        verify(bookFileProcessor).processFile(any());
+        verifyNoInteractions(parallelBookImporter, importExecutor, transactionManager);
     }
 }

@@ -7,11 +7,15 @@ import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.BookFileType;
+import org.booklore.model.websocket.LogNotification;
+import org.booklore.model.websocket.Severity;
+import org.booklore.model.websocket.Topic;
 import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
 import org.booklore.repository.projection.BookFileScanRow;
 import org.booklore.service.NotificationService;
+import org.booklore.service.library.importer.ImportSummary;
 import org.booklore.task.options.RescanLibraryContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -27,6 +31,7 @@ import org.springframework.transaction.annotation.Transactional;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -761,5 +766,88 @@ class LibraryProcessingServiceTest {
         assertThat(saved.getValue().getBook()).isSameAs(secondManaged);
         assertThat(secondManaged.getLibraryPath()).isSameAs(pathEntity);
         verify(fileAsBookProcessor).processLibraryFilesGrouped(anyMap(), eq(libraryEntity));
+    }
+
+    // ---- telling the user about new files left for the next scan ----
+
+    private static ImportSummary imported(int timedOut, int notStarted, boolean storageStuck, boolean databaseErrors) {
+        return new ImportSummary(10, 10 - timedOut - notStarted, 0, timedOut, notStarted, 0,
+                storageStuck, databaseErrors, false, 0, Duration.ofSeconds(1), false);
+    }
+
+    private void givenAnInitialScanImporting(ImportSummary summary) throws IOException {
+        givenLibrary();
+        givenRows();
+        when(libraryFileHelper.getLibraryFiles(libraryEntity)).thenReturn(List.of(libraryFile("", "book1.epub")));
+        givenInitialScanGroupsPerFile();
+        when(fileAsBookProcessor.processLibraryFilesGrouped(anyMap(), eq(libraryEntity))).thenReturn(summary);
+    }
+
+    /** The warnings and errors sent; the started and finished messages are left out. */
+    private List<String> problemsNotified() {
+        ArgumentCaptor<Object> captor = ArgumentCaptor.forClass(Object.class);
+        verify(notificationService, atLeastOnce()).sendMessage(eq(Topic.LOG), captor.capture());
+        return captor.getAllValues().stream()
+                .map(LogNotification.class::cast)
+                .filter(n -> n.getSeverity() != Severity.INFO)
+                .map(n -> n.getSeverity() + " " + n.getMessage())
+                .toList();
+    }
+
+    @Test
+    void processLibrary_whenFilesTimedOut_warnsThatTheyWillBeRetried() throws IOException {
+        givenAnInitialScanImporting(imported(2, 1, false, false));
+
+        libraryProcessingService.processLibrary(LIBRARY_ID);
+
+        assertThat(problemsNotified()).containsExactly("WARN 3 new files in library 'Test Library' were not added because "
+                + "storage did not respond in time; they will be retried on the next scan.");
+    }
+
+    @Test
+    void rescanLibrary_whenStorageStoppedResponding_reportsAnError() throws IOException {
+        givenLibrary();
+        givenScan(libraryFile("", "book1.epub"));
+        givenRows();
+        when(bookGroupingService.groupForRescan(anyList(), eq(libraryEntity)))
+                .thenReturn(new BookGroupingService.GroupingResult(Collections.emptyMap(), Map.of("book1", List.of(libraryFile("", "book1.epub")))));
+        when(fileAsBookProcessor.processLibraryFilesGrouped(anyMap(), eq(libraryEntity))).thenReturn(imported(1, 6, true, false));
+
+        rescan();
+
+        assertThat(problemsNotified()).containsExactly("ERROR Storage for library 'Test Library' stopped responding; 7 new files "
+                + "were not added. They will be retried on the next scan. Check the share, or restart Booklore if it stays stuck.");
+    }
+
+    @Test
+    void processLibrary_whenSavingKeptFailing_reportsAnErrorThatDoesNotBlameStorage() throws IOException {
+        givenAnInitialScanImporting(imported(0, 5, false, true));
+
+        libraryProcessingService.processLibrary(LIBRARY_ID);
+
+        assertThat(problemsNotified()).containsExactly("ERROR Saving new books in library 'Test Library' kept failing, so the "
+                + "import stopped; 5 new files were not added. They will be retried on the next scan.");
+    }
+
+    @Test
+    void processLibrary_whenEverythingWasAdded_reportsNothing() throws IOException {
+        givenAnInitialScanImporting(imported(0, 0, false, false));
+
+        libraryProcessingService.processLibrary(LIBRARY_ID);
+
+        assertThat(problemsNotified()).isEmpty();
+    }
+
+    @Test
+    void processLibrary_withoutASummaryOrWithTheSequentialImport_reportsNothing() throws IOException {
+        givenAnInitialScanImporting(null);
+        libraryProcessingService.processLibrary(LIBRARY_ID);
+        assertThat(problemsNotified()).isEmpty();
+
+        clearInvocations(notificationService);
+        when(fileAsBookProcessor.processLibraryFilesGrouped(anyMap(), eq(libraryEntity)))
+                .thenReturn(ImportSummary.legacy(3, Duration.ofSeconds(1)));
+        libraryProcessingService.processLibrary(LIBRARY_ID);
+        assertThat(problemsNotified()).isEmpty();
     }
 }

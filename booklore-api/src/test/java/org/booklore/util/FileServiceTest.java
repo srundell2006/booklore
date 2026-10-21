@@ -5,6 +5,9 @@ import org.booklore.model.dto.settings.AppSettings;
 import org.booklore.model.dto.settings.CoverCroppingSettings;
 import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.service.appsettings.AppSettingService;
+import org.booklore.util.cover.CoverKind;
+import org.booklore.util.cover.CropPolicy;
+import org.booklore.util.cover.RenderedCover;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
@@ -36,6 +39,7 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.Random;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -994,6 +998,73 @@ class FileServiceTest {
                         "Small image width should be preserved");
                 assertEquals(smallHeight, savedCover.getHeight(),
                         "Small image height should be preserved");
+            }
+        }
+
+        @Nested
+        @DisplayName("writeRenderedCover")
+        class WriteRenderedCoverTests {
+
+            private final byte[] cover = {1, 2, 3};
+            private final byte[] thumbnail = {4, 5};
+
+            @Test
+            void bookCoverIsWrittenAsCoverAndThumbnail() throws IOException {
+                assertTrue(fileService.writeRenderedCover(10L, new RenderedCover(CoverKind.BOOK, cover, thumbnail)));
+
+                assertArrayEquals(cover, Files.readAllBytes(Path.of(fileService.getCoverFile(10L))));
+                assertArrayEquals(thumbnail, Files.readAllBytes(Path.of(fileService.getThumbnailFile(10L))));
+                assertFalse(Files.exists(Path.of(fileService.getAudiobookCoverFile(10L))));
+            }
+
+            @Test
+            void audiobookCoverIsWrittenAsAudiobookCoverAndThumbnail() throws IOException {
+                assertTrue(fileService.writeRenderedCover(11L, new RenderedCover(CoverKind.AUDIOBOOK, cover, thumbnail)));
+
+                assertArrayEquals(cover, Files.readAllBytes(Path.of(fileService.getAudiobookCoverFile(11L))));
+                assertArrayEquals(thumbnail, Files.readAllBytes(Path.of(fileService.getAudiobookThumbnailFile(11L))));
+                assertFalse(Files.exists(Path.of(fileService.getCoverFile(11L))));
+            }
+
+            @Test
+            void replacesAnOldCoverAndLeavesNoTemporaryFiles() throws IOException {
+                fileService.writeRenderedCover(12L, new RenderedCover(CoverKind.BOOK, cover, thumbnail));
+                byte[] newCover = {9, 9, 9, 9};
+                byte[] newThumbnail = {8};
+
+                fileService.writeRenderedCover(12L, new RenderedCover(CoverKind.BOOK, newCover, newThumbnail));
+
+                assertArrayEquals(newCover, Files.readAllBytes(Path.of(fileService.getCoverFile(12L))));
+                assertArrayEquals(newThumbnail, Files.readAllBytes(Path.of(fileService.getThumbnailFile(12L))));
+                try (Stream<Path> files = Files.list(Path.of(fileService.getImagesFolder(12L)))) {
+                    assertEquals(Set.of("cover.jpg", "thumbnail.jpg"),
+                            files.map(file -> file.getFileName().toString()).collect(Collectors.toSet()));
+                }
+            }
+
+            @Test
+            void nullCoverWritesNothing() throws IOException {
+                assertFalse(fileService.writeRenderedCover(13L, null));
+
+                assertFalse(Files.exists(Path.of(fileService.getImagesFolder(13L))));
+            }
+
+            @Test
+            void folderThatCannotBeCreatedIsAnIoException() throws IOException {
+                // A file where the images directory should be stops mkdirs
+                Files.writeString(tempDir.resolve("images"), "not a directory");
+
+                IOException e = assertThrows(IOException.class,
+                        () -> fileService.writeRenderedCover(14L, new RenderedCover(CoverKind.BOOK, cover, thumbnail)));
+                assertTrue(e.getMessage().startsWith("Failed to create directory: "), e.getMessage());
+            }
+
+            @Test
+            void cropPolicyComesFromTheAppSettings() {
+                assertEquals(new CropPolicy(true, true, 2.5, true), fileService.currentCropPolicy());
+
+                when(appSettingService.getAppSettings()).thenReturn(AppSettings.builder().build());
+                assertEquals(CropPolicy.NONE, fileService.currentCropPolicy());
             }
         }
 

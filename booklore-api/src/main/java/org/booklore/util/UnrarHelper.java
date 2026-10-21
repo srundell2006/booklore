@@ -8,6 +8,7 @@ import java.io.IOException;
 import java.io.InputStream;
 import java.io.OutputStream;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.util.Arrays;
 import java.util.List;
 import java.util.concurrent.TimeUnit;
@@ -19,7 +20,12 @@ public class UnrarHelper {
     private static final String UNRAR_BIN_ENV = "BOOKLORE_UNRAR_BIN";
     private static final String DEFAULT_UNRAR_BIN = "unrar";
     private static final int PROCESS_TIMEOUT_SECONDS = 120;
-    private static volatile Boolean cachedAvailability;
+    private static final Duration AVAILABILITY_TIMEOUT = Duration.ofSeconds(5);
+
+    // Test seams: the binary in place of BOOKLORE_UNRAR_BIN, a shorter process timeout, and the cached availability
+    static volatile String unrarBinOverride;
+    static volatile Duration processTimeout = Duration.ofSeconds(PROCESS_TIMEOUT_SECONDS);
+    static volatile Boolean cachedAvailability;
 
     public static boolean isAvailable() {
         if (cachedAvailability != null) {
@@ -29,18 +35,37 @@ public class UnrarHelper {
             if (cachedAvailability != null) {
                 return cachedAvailability;
             }
+            // The answer is kept for good, so it must not depend on who asks first: an import thread that was given up
+            // on is interrupted, before the check or during it, and the processes of the file it was reading are
+            // killed. Its interrupt is given back once the check is done
+            boolean interrupted = Thread.interrupted();
             try {
                 Process process = new ProcessBuilder(getUnrarBin())
                         .redirectErrorStream(true)
                         .start();
-                try (InputStream is = process.getInputStream()) {
-                    is.readAllBytes();
+                try (ProcessWatchdog.WatchedProcess watched = ProcessWatchdog.watchIndependently(process, AVAILABILITY_TIMEOUT)) {
+                    try (InputStream is = process.getInputStream()) {
+                        is.readAllBytes();
+                    }
+                    long deadline = System.nanoTime() + AVAILABILITY_TIMEOUT.toNanos();
+                    boolean finished;
+                    while (true) {
+                        try {
+                            finished = process.waitFor(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
+                            break;
+                        } catch (InterruptedException e) {
+                            interrupted = true;
+                        }
+                    }
+                    cachedAvailability = finished && !watched.killed();
                 }
-                boolean finished = process.waitFor(5, TimeUnit.SECONDS);
-                cachedAvailability = finished;
             } catch (Exception e) {
                 log.debug("unrar binary not available: {}", e.getMessage());
                 cachedAvailability = false;
+            } finally {
+                if (interrupted) {
+                    Thread.currentThread().interrupt();
+                }
             }
             if (cachedAvailability) {
                 log.info("unrar CLI detected, RAR5 fallback enabled");
@@ -54,17 +79,11 @@ public class UnrarHelper {
         pb.redirectErrorStream(true);
         Process process = pb.start();
         String output;
-        try (InputStream is = process.getInputStream()) {
-            output = new String(is.readAllBytes());
-        }
-        try {
-            if (!process.waitFor(PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-                throw new IOException("unrar list timed out for: " + rarPath);
+        try (ProcessWatchdog.WatchedProcess watched = ProcessWatchdog.watch(process, processTimeout)) {
+            try (InputStream is = process.getInputStream()) {
+                output = new String(is.readAllBytes());
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("unrar list interrupted", e);
+            awaitExit(watched, "unrar list timed out for: " + rarPath, "unrar list interrupted");
         }
         if (process.exitValue() != 0) {
             throw new IOException("unrar list failed (exit " + process.exitValue() + ") for: " + rarPath);
@@ -81,17 +100,11 @@ public class UnrarHelper {
         );
         pb.redirectErrorStream(false);
         Process process = pb.start();
-        try (InputStream is = process.getInputStream()) {
-            is.transferTo(out);
-        }
-        try {
-            if (!process.waitFor(PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-                throw new IOException("unrar extract timed out for entry: " + entryName);
+        try (ProcessWatchdog.WatchedProcess watched = ProcessWatchdog.watch(process, processTimeout)) {
+            try (InputStream is = process.getInputStream()) {
+                is.transferTo(out);
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("unrar extract interrupted", e);
+            awaitExit(watched, "unrar extract timed out for entry: " + entryName, "unrar extract interrupted");
         }
         if (process.exitValue() != 0) {
             throw new IOException("unrar extract failed (exit " + process.exitValue() + ") for entry: " + entryName);
@@ -110,24 +123,38 @@ public class UnrarHelper {
         );
         pb.redirectErrorStream(true);
         Process process = pb.start();
-        try (InputStream is = process.getInputStream()) {
-            is.readAllBytes();
-        }
-        try {
-            if (!process.waitFor(PROCESS_TIMEOUT_SECONDS, TimeUnit.SECONDS)) {
-                process.destroyForcibly();
-                throw new IOException("unrar extractAll timed out for: " + rarPath);
+        try (ProcessWatchdog.WatchedProcess watched = ProcessWatchdog.watch(process, processTimeout)) {
+            try (InputStream is = process.getInputStream()) {
+                is.readAllBytes();
             }
-        } catch (InterruptedException e) {
-            Thread.currentThread().interrupt();
-            throw new IOException("unrar extractAll interrupted", e);
+            awaitExit(watched, "unrar extractAll timed out for: " + rarPath, "unrar extractAll interrupted");
         }
         if (process.exitValue() != 0) {
             throw new IOException("unrar extractAll failed (exit " + process.exitValue() + ") for: " + rarPath);
         }
     }
 
+    /**
+     * Waits for the process to exit once its output is read. The watchdog has killed it if it was still running at
+     * the timeout, which is what ended the read then, and that counts as a timeout too.
+     */
+    private static void awaitExit(ProcessWatchdog.WatchedProcess watched, String timedOutMessage, String interruptedMessage) throws IOException {
+        try {
+            boolean exited = watched.process().waitFor(processTimeout.toNanos(), TimeUnit.NANOSECONDS);
+            if (!exited || watched.killed()) {
+                throw new IOException(timedOutMessage);
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            throw new IOException(interruptedMessage, e);
+        }
+    }
+
     private static String getUnrarBin() {
+        String override = unrarBinOverride;
+        if (override != null) {
+            return override;
+        }
         String env = System.getenv(UNRAR_BIN_ENV);
         return (env != null && !env.isBlank()) ? env : DEFAULT_UNRAR_BIN;
     }

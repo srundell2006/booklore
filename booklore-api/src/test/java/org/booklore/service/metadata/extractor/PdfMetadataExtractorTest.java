@@ -966,6 +966,32 @@ class PdfMetadataExtractorTest {
                 BufferedImage image = extractor.renderCover(doc, 150);
                 assertThat(image.getWidth()).isEqualTo(1000);
                 assertThat(image.getHeight()).isEqualTo(1294);
+                assertThat(PdfMetadataExtractor.coverPixels(page, 150)).isEqualTo(1000L * 1294);
+            }
+        }
+
+        @Test
+        void coverPixelsFollowPdfRendererRoundingOnOddSizes() throws Exception {
+            // Sizes whose scaled sides land just above, just below and on whole pixels
+            float[][] boxes = {{100.3f, 333.7f}, {611.9f, 791.1f}, {1f, 1f}, {0.2f, 5000f}, {2000f, 33.3f}};
+            for (float[] box : boxes) {
+                for (float maxDpi : new float[]{72f, 150f, 300f}) {
+                    assertCoverPixelsMatchTheRender(new PDRectangle(box[0], box[1]), 0, maxDpi);
+                    assertCoverPixelsMatchTheRender(new PDRectangle(box[0], box[1]), 90, maxDpi);
+                }
+            }
+        }
+
+        private void assertCoverPixelsMatchTheRender(PDRectangle box, int rotation, float maxDpi) throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDPage page = new PDPage(box);
+                page.setRotation(rotation);
+                doc.addPage(page);
+                BufferedImage image = extractor.renderCover(doc, maxDpi);
+                assertThat(PdfMetadataExtractor.coverPixels(page, maxDpi))
+                        .as("%sx%s turned %d at %s DPI", box.getWidth(), box.getHeight(), rotation, maxDpi)
+                        .isEqualTo((long) image.getWidth() * image.getHeight());
+                image.flush();
             }
         }
 
@@ -979,6 +1005,7 @@ class PdfMetadataExtractorTest {
                 BufferedImage image = extractor.renderCover(doc, maxDpi);
                 assertThat(image.getWidth()).isEqualTo(expectedWidth);
                 assertThat(image.getHeight()).isEqualTo(expectedHeight);
+                assertThat(PdfMetadataExtractor.coverPixels(page, maxDpi)).isEqualTo((long) expectedWidth * expectedHeight);
             }
         }
     }

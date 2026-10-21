@@ -4,7 +4,6 @@ import org.booklore.exception.ApiError;
 import org.booklore.mapper.BookMapper;
 import org.booklore.model.dto.AudiobookMetadata;
 import org.booklore.model.dto.BookMetadata;
-import org.booklore.model.dto.settings.LibraryFile;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.BookMetadataEntity;
@@ -12,19 +11,21 @@ import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.service.book.BookCreatorService;
+import org.booklore.service.fileprocessor.prepare.*;
 import org.booklore.service.metadata.MetadataMatchService;
 import org.booklore.service.metadata.extractor.AudiobookMetadataExtractor;
+import org.booklore.service.metadata.extractor.FileMetadataExtractor;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
-import org.booklore.util.BookCoverUtils;
 import org.booklore.util.FileService;
 import org.booklore.util.FileUtils;
+import org.booklore.util.cover.CoverKind;
+import org.booklore.util.cover.RenderedCover;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.File;
-import java.time.Instant;
 import java.util.List;
 import java.util.Set;
 import java.util.stream.Collectors;
@@ -50,21 +51,49 @@ public class AudiobookProcessor extends AbstractFileProcessor implements BookFil
     }
 
     @Override
-    public BookEntity processNewFile(LibraryFile libraryFile) {
-        BookEntity bookEntity = bookCreatorService.createShellBook(libraryFile, BookFileType.AUDIOBOOK);
-        setBookMetadata(bookEntity, libraryFile.isFolderBased());
-        boolean coverGenerated = generateCover(bookEntity, libraryFile.isFolderBased());
-        if (!coverGenerated) {
-            var folder = getBookFolderForCoverFallback(libraryFile);
-            if (folder != null) {
-                coverGenerated = generateAudiobookCoverFromFolderImage(bookEntity, folder);
+    protected CoverKind coverKind() {
+        return CoverKind.AUDIOBOOK;
+    }
+
+    @Override
+    protected ExtractedContent readContent(PrepareRequest request, FileFacts facts, FolderSnapshot folder,
+                                           CoverMaker covers, PrepareContext ctx) {
+        // Reading the facts already showed that the file is there, and the folder walk found its audio files
+        File audioFile = folder == null ? request.path().toFile()
+                : folder.audioFiles().isEmpty() ? null : folder.audioFiles().getFirst().toFile();
+        if (audioFile == null) {
+            log.warn("Audio file not found for metadata extraction: {}", request.fileName());
+            return new ExtractedContent(null, null, null);
+        }
+
+        // Metadata and cover from one read of the file
+        FileMetadataExtractor.MetadataAndCover extracted = audiobookMetadataExtractor.extractMetadataAndCover(audioFile);
+        return new ExtractedContent(extracted.metadata(), renderCover(request.fileName(), audioFile, extracted.cover(), covers), null);
+    }
+
+    @Override
+    protected void applyMetadata(BookEntity bookEntity, PreparedBookFile prepared) {
+        setBookMetadata(bookEntity, prepared.metadata());
+    }
+
+    private RenderedCover renderCover(String fileName, File audioFile, byte[] coverData, CoverMaker covers) {
+        if (coverData == null) {
+            log.warn("No embedded cover image found in audiobook file '{}'", audioFile.getAbsolutePath());
+            return null;
+        }
+        log.debug("Found cover data ({} bytes) in audiobook file '{}'", coverData.length, audioFile.getName());
+        try {
+            RenderedCover cover = covers.fromEncoded(coverData, true);
+            if (cover == null) {
+                log.warn("Failed to decode cover image for audiobook '{}'", audioFile.getName());
             }
+            return cover;
+        } catch (PrepareAbandonedException | PrepareDeadlineException e) {
+            throw e;
+        } catch (Exception e) {
+            log.error("Error generating cover for audiobook '{}': {}", fileName, e.getMessage(), e);
+            return null;
         }
-        if (coverGenerated) {
-            bookEntity.getMetadata().setAudiobookCoverUpdatedOn(Instant.now());
-            bookEntity.setAudiobookCoverHash(BookCoverUtils.generateCoverHash());
-        }
-        return bookEntity;
     }
 
     @Override
@@ -202,14 +231,7 @@ public class AudiobookProcessor extends AbstractFileProcessor implements BookFil
         return List.of(BookFileType.AUDIOBOOK);
     }
 
-    private void setBookMetadata(BookEntity bookEntity, boolean isFolderBased) {
-        File bookFile = getAudioFileForMetadata(bookEntity, isFolderBased);
-        if (bookFile == null || !bookFile.exists()) {
-            log.warn("Audio file not found for metadata extraction: {}", bookEntity.getPrimaryBookFile().getFileName());
-            return;
-        }
-
-        BookMetadata audioMetadata = audiobookMetadataExtractor.extractMetadata(bookFile);
+    private void setBookMetadata(BookEntity bookEntity, BookMetadata audioMetadata) {
         if (audioMetadata == null) return;
 
         BookMetadataEntity metadata = bookEntity.getMetadata();

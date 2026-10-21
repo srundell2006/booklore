@@ -94,12 +94,6 @@ public class EpubMetadataExtractor implements FileMetadataExtractor {
             }));
 
     /**
-     * What {@link #extractMetadata(File)} and {@link #extractCover(File)} return for one EPUB; either may be null.
-     */
-    public record MetadataAndCover(BookMetadata metadata, byte[] cover) {
-    }
-
-    /**
      * The OPF named by container.xml: its path in the zip and its parsed document.
      */
     private record OpfPackage(String path, Document document) {
@@ -119,6 +113,7 @@ public class EpubMetadataExtractor implements FileMetadataExtractor {
      * Metadata and cover from a single open of the file and a single parse of container.xml and the OPF,
      * each identical to what {@link #extractMetadata(File)} and {@link #extractCover(File)} return.
      */
+    @Override
     public MetadataAndCover extractMetadataAndCover(File epubFile) {
         return extract(epubFile, true, true);
     }

@@ -6,7 +6,6 @@ import org.booklore.model.dto.settings.MetadataPersistenceSettings;
 import org.booklore.model.dto.settings.SidecarSettings;
 import org.booklore.model.dto.sidecar.SidecarMetadata;
 import org.booklore.model.entity.BookEntity;
-import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.service.appsettings.AppSettingService;
 import org.booklore.util.FileService;
 import org.springframework.stereotype.Service;
@@ -18,6 +17,7 @@ import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.util.Optional;
 
 @Slf4j
 @Service
@@ -57,44 +57,78 @@ public class SidecarMetadataWriter {
     }
 
     public void writeSidecarMetadata(BookEntity book) {
+        prepare(book).ifPresent(this::execute);
+    }
+
+    /**
+     * A book's sidecar file and cover copy, worked out while the book's session is open so that only file work is
+     * left for {@link #execute}.
+     *
+     * @param coverSource the stored cover to copy next to the book, or null when the settings leave the cover out
+     * @param coverTarget where to copy it, or null as above
+     */
+    public record SidecarJob(Long bookId, Path bookPath, Path sidecarPath, String json, Path coverSource, Path coverTarget) {
+    }
+
+    /**
+     * The database part of {@link #writeSidecarMetadata}: checks the storage and settings and builds the sidecar from
+     * the book's metadata, which needs the book's session. Reads and writes no files.
+     *
+     * @return empty when no sidecar is to be written
+     */
+    public Optional<SidecarJob> prepare(BookEntity book) {
         if (!appProperties.isLocalStorage()) {
-            return;
+            return Optional.empty();
         }
         if (book == null || book.getMetadata() == null) {
             log.warn("Cannot write sidecar metadata: book or metadata is null");
-            return;
+            return Optional.empty();
         }
 
         SidecarSettings settings = getSidecarSettings();
         if (settings == null || !settings.isEnabled()) {
             log.debug("Sidecar metadata is disabled");
-            return;
+            return Optional.empty();
         }
 
+        Path bookPath = book.getFullFilePath();
+        if (bookPath == null) {
+            log.warn("Cannot write sidecar metadata: book file does not exist");
+            return Optional.empty();
+        }
+
+        String coverFileName = null;
+        Path coverSource = null;
+        Path coverTarget = null;
+        if (settings.isIncludeCoverFile()) {
+            coverFileName = mapper.getCoverFileName(bookPath);
+            coverSource = Path.of(fileService.getCoverFile(book.getId()));
+            coverTarget = bookPath.getParent().resolve(coverFileName);
+        }
+
+        SidecarMetadata sidecarMetadata = mapper.toSidecarMetadata(book.getMetadata(), coverFileName);
+        String json = objectMapper.writeValueAsString(sidecarMetadata);
+        json = json.replace(" : ", ": ").replace("[ ]", "[]");
+        return Optional.of(new SidecarJob(book.getId(), bookPath, getSidecarPath(bookPath), json, coverSource, coverTarget));
+    }
+
+    /** The file part of {@link #writeSidecarMetadata}: copies the cover and writes the sidecar next to the book. */
+    public void execute(SidecarJob job) {
         try {
-            Path bookPath = book.getFullFilePath();
-            if (bookPath == null || !Files.exists(bookPath)) {
+            if (!Files.exists(job.bookPath())) {
                 log.warn("Cannot write sidecar metadata: book file does not exist");
                 return;
             }
 
-            Path sidecarPath = getSidecarPath(bookPath);
-            BookMetadataEntity metadata = book.getMetadata();
-
-            String coverFileName = null;
-            if (settings.isIncludeCoverFile()) {
-                coverFileName = mapper.getCoverFileName(bookPath);
-                writeCoverFile(book, bookPath.getParent().resolve(coverFileName));
+            if (job.coverTarget() != null) {
+                writeCoverFile(job);
             }
 
-            SidecarMetadata sidecarMetadata = mapper.toSidecarMetadata(metadata, coverFileName);
-            String json = objectMapper.writeValueAsString(sidecarMetadata);
-            json = json.replace(" : ", ": ").replace("[ ]", "[]");
-            Files.writeString(sidecarPath, json);
+            Files.writeString(job.sidecarPath(), job.json());
 
-            log.info("Wrote sidecar metadata to: {}", sidecarPath);
+            log.info("Wrote sidecar metadata to: {}", job.sidecarPath());
         } catch (IOException e) {
-            log.error("Failed to write sidecar metadata for book ID {}: {}", book.getId(), e.getMessage());
+            log.error("Failed to write sidecar metadata for book ID {}: {}", job.bookId(), e.getMessage());
         }
     }
 
@@ -153,16 +187,14 @@ public class SidecarMetadataWriter {
         return bookPath.getParent().resolve(SidecarFileNames.baseName(bookPath) + ".cover.jpg");
     }
 
-    private void writeCoverFile(BookEntity book, Path coverPath) {
+    private void writeCoverFile(SidecarJob job) {
         try {
-            String coverFile = fileService.getCoverFile(book.getId());
-            Path sourceCoverPath = Path.of(coverFile);
-            if (Files.exists(sourceCoverPath)) {
-                Files.copy(sourceCoverPath, coverPath, StandardCopyOption.REPLACE_EXISTING);
-                log.info("Wrote cover file to: {}", coverPath);
+            if (Files.exists(job.coverSource())) {
+                Files.copy(job.coverSource(), job.coverTarget(), StandardCopyOption.REPLACE_EXISTING);
+                log.info("Wrote cover file to: {}", job.coverTarget());
             }
         } catch (IOException e) {
-            log.warn("Failed to write cover file for book ID {}: {}", book.getId(), e.getMessage());
+            log.warn("Failed to write cover file for book ID {}: {}", job.bookId(), e.getMessage());
         }
     }
 

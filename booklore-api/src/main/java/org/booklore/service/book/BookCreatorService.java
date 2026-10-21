@@ -6,14 +6,12 @@ import org.booklore.model.entity.*;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.model.enums.ComicCreatorRole;
 import org.booklore.repository.*;
-import org.booklore.service.file.FileFingerprint;
-import org.booklore.util.FileUtils;
+import org.booklore.service.fileprocessor.prepare.FileFacts;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.time.Instant;
 import java.util.*;
-import java.util.concurrent.ConcurrentHashMap;
 
 @Slf4j
 @Service
@@ -30,9 +28,6 @@ public class BookCreatorService {
     private final ComicTeamRepository comicTeamRepository;
     private final ComicLocationRepository comicLocationRepository;
     private final ComicCreatorRepository comicCreatorRepository;
-
-    // Temporary storage for comic metadata DTOs during processing
-    private final Map<Long, ComicMetadata> pendingComicMetadata = new ConcurrentHashMap<>();
 
     public BookCreatorService(AuthorRepository authorRepository,
                               CategoryRepository categoryRepository,
@@ -58,33 +53,38 @@ public class BookCreatorService {
         this.comicCreatorRepository = comicCreatorRepository;
     }
 
-    public BookEntity createShellBook(LibraryFile libraryFile, BookFileType bookFileType) {
+    /**
+     * A book's entity, and whether it was created for the file or was already there.
+     *
+     * @param created false when a book for the file already existed and was updated instead
+     */
+    public record ShellBook(BookEntity entity, boolean created) {
+    }
+
+    /**
+     * The book for a new file: the book already stored for the file's path, given the file's new hash and size and
+     * undeleted, or else a new book saved with one file and empty metadata. Reads nothing from the file: its hash and
+     * size come from {@code facts}, computed once by whoever read the file.
+     */
+    public ShellBook createShellBook(LibraryFile libraryFile, BookFileType bookFileType, FileFacts facts) {
         Optional<BookEntity> existingBookOpt = bookRepository.findByLibraryIdAndLibraryPathIdAndFileSubPathAndFileName(
                 libraryFile.getLibraryEntity().getId(),
                 libraryFile.getLibraryPathEntity().getId(),
                 libraryFile.getFileSubPath(),
                 libraryFile.getFileName());
 
+        long fileSizeKb = facts.sizeKb() != null ? facts.sizeKb() : 0L;
         if (existingBookOpt.isPresent()) {
             log.warn("Book already exists for file: {}", libraryFile.getFileName());
-            long fileSizeKb = calculateFileSize(libraryFile);
-            String newHash = libraryFile.isFolderBased()
-                    ? FileFingerprint.generateFolderHash(libraryFile.getFullPath())
-                    : FileFingerprint.generateHash(libraryFile.getFullPath());
             BookEntity existingBook = existingBookOpt.get();
             BookFileEntity primaryFile = existingBook.getPrimaryBookFile();
-            primaryFile.setCurrentHash(newHash);
-            primaryFile.setInitialHash(newHash);
+            primaryFile.setCurrentHash(facts.hash());
+            primaryFile.setInitialHash(facts.hash());
             primaryFile.setFileSizeKb(fileSizeKb);
             primaryFile.setFolderBased(libraryFile.isFolderBased());
             existingBook.setDeleted(false);
-            return existingBook;
+            return new ShellBook(existingBook, false);
         }
-
-        long fileSizeKb = calculateFileSize(libraryFile);
-        String hash = libraryFile.isFolderBased()
-                ? FileFingerprint.generateFolderHash(libraryFile.getFullPath())
-                : FileFingerprint.generateHash(libraryFile.getFullPath());
 
         BookEntity bookEntity = BookEntity.builder()
                 .library(libraryFile.getLibraryEntity())
@@ -101,8 +101,8 @@ public class BookCreatorService {
                 .folderBased(libraryFile.isFolderBased())
                 .bookType(bookFileType)
                 .fileSizeKb(fileSizeKb)
-                .initialHash(hash)
-                .currentHash(hash)
+                .initialHash(facts.hash())
+                .currentHash(facts.hash())
                 .addedOn(Instant.now())
                 .build();
         bookEntity.getBookFiles().add(bookFileEntity);
@@ -112,17 +112,7 @@ public class BookCreatorService {
                 .build();
         bookEntity.setMetadata(metadata);
 
-        return bookRepository.saveAndFlush(bookEntity);
-    }
-
-    private long calculateFileSize(LibraryFile libraryFile) {
-        if (libraryFile.isFolderBased()) {
-            Long size = FileUtils.getFolderSizeInKb(libraryFile.getFullPath());
-            return size != null ? size : 0L;
-        } else {
-            Long size = FileUtils.getFileSizeInKb(libraryFile.getFullPath());
-            return size != null ? size : 0L;
-        }
+        return new ShellBook(bookRepository.saveAndFlush(bookEntity), true);
     }
 
     public void addCategoriesToBook(Set<String> categories, BookEntity bookEntity) {
@@ -180,7 +170,13 @@ public class BookCreatorService {
         return input.length() <= maxLength ? input : input.substring(0, maxLength);
     }
 
-    public void saveConnections(BookEntity bookEntity) {
+    /**
+     * Saves the book, its metadata and its authors, and its comic metadata when the book has some, filling the comic
+     * metadata's characters, teams, locations and creators from {@code comicDto}.
+     *
+     * @param comicDto the comic metadata read from the file, or null for none
+     */
+    public void saveConnections(BookEntity bookEntity, ComicMetadata comicDto) {
         if (bookEntity.getMetadata().getAuthors() != null && !bookEntity.getMetadata().getAuthors().isEmpty()) {
             authorRepository.saveAll(bookEntity.getMetadata().getAuthors());
         }
@@ -192,17 +188,9 @@ public class BookCreatorService {
         if (comicMetadata != null && comicMetadata.getBookId() != null) {
             comicMetadataRepository.save(comicMetadata);
 
-            // Populate relationships from pending DTO
-            ComicMetadata comicDto = pendingComicMetadata.remove(bookEntity.getId());
             if (comicDto != null) {
                 populateComicMetadataRelationships(comicMetadata, comicDto);
             }
-        }
-    }
-
-    public void setComicMetadataDto(BookEntity bookEntity, ComicMetadata comicDto) {
-        if (bookEntity.getId() != null && comicDto != null) {
-            pendingComicMetadata.put(bookEntity.getId(), comicDto);
         }
     }
 

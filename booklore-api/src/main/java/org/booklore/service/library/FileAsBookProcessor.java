@@ -17,6 +17,10 @@ import org.booklore.service.file.FileFingerprint;
 import org.booklore.service.fileprocessor.BookFileProcessor;
 import org.booklore.service.fileprocessor.BookFileProcessorRegistry;
 import org.booklore.service.kobo.KoboAutoShelfService;
+import org.booklore.service.library.importer.ImportExecutor;
+import org.booklore.service.library.importer.ImportGroups;
+import org.booklore.service.library.importer.ImportSummary;
+import org.booklore.service.library.importer.ParallelBookImporter;
 import org.booklore.service.metadata.extractor.AudiobookMetadataExtractor;
 import org.booklore.service.metadata.extractor.MetadataExtractorFactory;
 import org.booklore.util.BookCoverUtils;
@@ -24,14 +28,17 @@ import org.booklore.util.BookFileGroupingUtils;
 import org.booklore.util.FileService;
 import org.booklore.util.FileUtils;
 import org.springframework.stereotype.Component;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
+import org.springframework.transaction.support.TransactionSynchronizationManager;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.nio.file.Path;
+import java.time.Duration;
 import java.time.Instant;
-import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
@@ -50,15 +57,32 @@ public class FileAsBookProcessor {
     private final FileService fileService;
     private final MetadataExtractorFactory metadataExtractorFactory;
     private final AudiobookMetadataExtractor audiobookMetadataExtractor;
+    private final ParallelBookImporter parallelBookImporter;
+    private final PlatformTransactionManager transactionManager;
+    private final ImportExecutor importExecutor;
 
+    /** The watcher's entry point: the files one at a time in the caller's transaction, as always. */
     @Transactional
     public void processLibraryFiles(List<LibraryFile> libraryFiles, LibraryEntity libraryEntity) {
-        Map<String, List<LibraryFile>> groups = BookFileGroupingUtils.groupByBaseName(libraryFiles);
-        processLibraryFilesGrouped(groups, libraryEntity);
+        processGroupsSequentially(BookFileGroupingUtils.groupByBaseName(libraryFiles), libraryEntity);
     }
 
-    @Transactional
-    public void processLibraryFilesGrouped(Map<String, List<LibraryFile>> groups, LibraryEntity libraryEntity) {
+    /**
+     * A scan's new book groups. With no transaction open they go through the {@link ParallelBookImporter}, which
+     * reads many files at once and saves each book in a transaction of its own. With the import pipeline turned off,
+     * or inside a caller's transaction, they are imported one at a time in one transaction, joining the caller's, as
+     * before.
+     */
+    public ImportSummary processLibraryFilesGrouped(Map<String, List<LibraryFile>> groups, LibraryEntity libraryEntity) {
+        if (!importExecutor.settings().pipelineEnabled() || TransactionSynchronizationManager.isActualTransactionActive()) {
+            long start = System.nanoTime();
+            new TransactionTemplate(transactionManager).executeWithoutResult(status -> processGroupsSequentially(groups, libraryEntity));
+            return ImportSummary.legacy(groups.size(), Duration.ofNanos(System.nanoTime() - start));
+        }
+        return parallelBookImporter.importGroups(groups, libraryEntity);
+    }
+
+    private void processGroupsSequentially(Map<String, List<LibraryFile>> groups, LibraryEntity libraryEntity) {
         LibraryEntity managedLibrary = ensureManaged(libraryEntity);
         for (Map.Entry<String, List<LibraryFile>> entry : groups.entrySet()) {
             entry.getValue().forEach(lf -> lf.setLibraryEntity(managedLibrary));
@@ -83,7 +107,7 @@ public class FileAsBookProcessor {
     }
 
     private void processGroup(List<LibraryFile> group, LibraryEntity libraryEntity) {
-        Optional<LibraryFile> primaryFile = findBestPrimaryFile(group, libraryEntity);
+        Optional<LibraryFile> primaryFile = ImportGroups.findBestPrimaryFile(group, libraryEntity);
         if (primaryFile.isEmpty()) {
             log.warn("No suitable book file found in group");
             return;
@@ -119,20 +143,6 @@ public class FileAsBookProcessor {
                 createAdditionalBookFile(bookEntity, additionalFile);
             }
         }
-    }
-
-    private Optional<LibraryFile> findBestPrimaryFile(List<LibraryFile> group, LibraryEntity libraryEntity) {
-        List<BookFileType> formatPriority = libraryEntity.getFormatPriority();
-        return group.stream()
-                .filter(f -> f.getBookFileType() != null)
-                .min(Comparator.<LibraryFile, Integer>comparing(f -> {
-                    BookFileType bookFileType = f.getBookFileType();
-                    if (formatPriority != null && !formatPriority.isEmpty()) {
-                        int index = formatPriority.indexOf(bookFileType);
-                        return index >= 0 ? index : Integer.MAX_VALUE;
-                    }
-                    return bookFileType.ordinal();
-                }).thenComparing(LibraryFile::getFileName));
     }
 
     private void createAdditionalBookFile(BookEntity bookEntity, LibraryFile file) {

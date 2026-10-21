@@ -3,7 +3,6 @@ package org.booklore.service.fileprocessor;
 import org.booklore.mapper.BookMapper;
 import org.booklore.model.dto.BookMetadata;
 import org.booklore.model.dto.ComicMetadata;
-import org.booklore.model.dto.settings.LibraryFile;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.BookMetadataEntity;
@@ -12,14 +11,15 @@ import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.service.book.BookCreatorService;
+import org.booklore.service.fileprocessor.prepare.*;
 import org.booklore.service.metadata.MetadataMatchService;
 import org.booklore.service.metadata.extractor.CbxMetadataExtractor;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
 import org.booklore.util.ArchiveUtils;
-import org.booklore.util.BookCoverUtils;
 import org.booklore.util.CbxArchive;
 import org.booklore.util.FileService;
 import org.booklore.util.FileUtils;
+import org.booklore.util.cover.RenderedCover;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.io.FilenameUtils;
 import org.springframework.stereotype.Service;
@@ -54,40 +54,38 @@ public class CbxProcessor extends AbstractFileProcessor implements BookFileProce
     }
 
     @Override
-    public BookEntity processNewFile(LibraryFile libraryFile) {
-        BookEntity bookEntity = bookCreatorService.createShellBook(libraryFile, BookFileType.CBX);
-        BookFileEntity bookFile = bookEntity.getPrimaryBookFile();
-        File file = new File(FileUtils.getBookFullPath(bookEntity));
+    protected ExtractedContent readContent(PrepareRequest request, FileFacts facts, FolderSnapshot folder,
+                                           CoverMaker covers, PrepareContext ctx) {
+        File file = request.path().toFile();
         String baseName = FilenameUtils.getBaseName(file.getName());
 
         // Detect the type and open the archive once for both the cover and ComicInfo.xml: on a
         // network share every open costs round trips, and junrar walks every RAR header per open
         ArchiveUtils.ArchiveType archiveType = ArchiveUtils.detectArchiveType(file);
-        bookFile.setArchiveType(archiveType);
-        Optional<BufferedImage> cover = Optional.empty();
+        RenderedCover cover = null;
         BookMetadata extracted;
         try (CbxArchive archive = CbxArchive.open(file, archiveType)) {
-            cover = findCoverImage(archive, archiveType);
+            cover = renderCover(archive, archiveType, covers, ctx);
+            ctx.checkpoint();
             extracted = cbxMetadataExtractor.extractMetadata(archive, baseName);
+        } catch (PrepareAbandonedException | PrepareDeadlineException e) {
+            throw e;
         } catch (Exception e) {
-            log.warn("Could not open comic archive '{}': {}", bookFile.getFileName(), e.getMessage());
+            log.warn("Could not open comic archive '{}': {}", request.fileName(), e.getMessage());
             // What CbxMetadataExtractor returns for an archive it cannot open
             extracted = BookMetadata.builder().title(baseName).build();
         }
 
-        boolean coverGenerated = saveCover(bookEntity, bookFile, cover);
-        if (!coverGenerated) {
-            var folder = getBookFolderForCoverFallback(libraryFile);
-            if (folder != null) {
-                coverGenerated = generateCoverFromFolderImage(bookEntity, folder);
-            }
+        if (cover == null) {
+            log.warn("Could not find cover image in CBZ file '{}'", request.fileName());
         }
-        if (coverGenerated) {
-            FileService.setBookCoverPath(bookEntity.getMetadata());
-            bookEntity.setBookCoverHash(BookCoverUtils.generateCoverHash());
-        }
-        setExtractedMetadata(bookEntity, extracted);
-        return bookEntity;
+        return new ExtractedContent(extracted, cover, archiveType);
+    }
+
+    @Override
+    protected void applyMetadata(BookEntity bookEntity, PreparedBookFile prepared) {
+        bookEntity.getPrimaryBookFile().setArchiveType(prepared.archiveType());
+        setExtractedMetadata(bookEntity, prepared.metadata());
     }
 
     @Override
@@ -119,11 +117,7 @@ public class CbxProcessor extends AbstractFileProcessor implements BookFileProce
      * image when one cannot be extracted or decoded; a ZIP or 7z only ever tries the first.
      */
     private Optional<BufferedImage> findCoverImage(CbxArchive archive, ArchiveUtils.ArchiveType archiveType) {
-        List<String> imageNames = archive.fileNames().stream()
-                .filter(name -> IMAGE_EXTENSION_CASE_INSENSITIVE_PATTERN.matcher(name).matches())
-                .sorted()
-                .toList();
-        for (String name : imageNames) {
+        for (String name : imageNames(archive)) {
             try {
                 return Optional.ofNullable(FileService.readImage(archive.readEntry(name)));
             } catch (Exception e) {
@@ -134,6 +128,34 @@ public class CbxProcessor extends AbstractFileProcessor implements BookFileProce
             }
         }
         return Optional.empty();
+    }
+
+    /** The cover rendered from the image {@link #findCoverImage} picks, chosen by the same rules. */
+    private RenderedCover renderCover(CbxArchive archive, ArchiveUtils.ArchiveType archiveType, CoverMaker covers,
+                                      PrepareContext ctx) {
+        for (String name : imageNames(archive)) {
+            // A RAR given up on would otherwise try every image in turn, each read failing at once: through unrar,
+            // every process it starts is killed, and the thread stays interrupted
+            ctx.checkpoint();
+            try {
+                return covers.fromEncodedOrThrow(archive.readEntry(name), true);
+            } catch (PrepareAbandonedException | PrepareDeadlineException e) {
+                throw e;
+            } catch (Exception e) {
+                log.warn("Failed to read image from archive entry {}: {}", name, e.getMessage());
+                if (archiveType != ArchiveUtils.ArchiveType.RAR) {
+                    break;
+                }
+            }
+        }
+        return null;
+    }
+
+    private List<String> imageNames(CbxArchive archive) {
+        return archive.fileNames().stream()
+                .filter(name -> IMAGE_EXTENSION_CASE_INSENSITIVE_PATTERN.matcher(name).matches())
+                .sorted()
+                .toList();
     }
 
     private boolean saveCover(BookEntity bookEntity, BookFileEntity bookFile, Optional<BufferedImage> cover) {
@@ -276,11 +298,8 @@ public class CbxProcessor extends AbstractFileProcessor implements BookFileProce
         comic.setWebLink(comicDto.getWebLink());
         comic.setNotes(comicDto.getNotes());
 
-        // Set on parent - relationships will be populated in saveConnections()
+        // Set on parent - relationships are populated in saveConnections(), which is handed the DTO
         bookEntity.getMetadata().setComicMetadata(comic);
-
-        // Store the DTO for later processing in saveConnections
-        bookCreatorService.setComicMetadataDto(bookEntity, comicDto);
     }
 }
 

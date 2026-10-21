@@ -24,6 +24,7 @@ import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.service.appsettings.AppSettingService;
 import org.booklore.service.book.BookCreatorService;
+import org.booklore.service.fileprocessor.prepare.FileFacts;
 import org.booklore.service.metadata.MetadataMatchService;
 import org.booklore.service.metadata.extractor.PdfMetadataExtractor;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
@@ -122,7 +123,12 @@ class PdfProcessorTest {
     }
 
     @Nested
-    class ProcessNewFileTests {
+    class ProcessFileTests {
+
+        private void givenShellBook(LibraryFile libraryFile, BookEntity book) {
+            when(bookCreatorService.createShellBook(eq(libraryFile), eq(BookFileType.PDF), any(FileFacts.class)))
+                    .thenReturn(new BookCreatorService.ShellBook(book, true));
+        }
 
         @Test
         void loadsThePdfOnceForMetadataAndCover() throws Exception {
@@ -134,10 +140,10 @@ class PdfProcessorTest {
             });
             BookEntity book = bookFor(pdf, BOOK_ID);
             LibraryFile libraryFile = libraryFileFor(pdf);
-            when(bookCreatorService.createShellBook(libraryFile, BookFileType.PDF)).thenReturn(book);
+            givenShellBook(libraryFile, book);
 
             try (MockedStatic<Loader> loader = mockStatic(Loader.class, CALLS_REAL_METHODS)) {
-                pdfProcessor.processNewFile(libraryFile);
+                pdfProcessor.processFile(libraryFile);
                 loader.verify(() -> Loader.loadPDF(any(RandomAccessRead.class)), times(1));
             }
 
@@ -156,9 +162,9 @@ class PdfProcessorTest {
             Path pdf = writePdf("Untitled Book.pdf", PDRectangle.LETTER, 0, _ -> {});
             BookEntity book = bookFor(pdf, BOOK_ID);
             LibraryFile libraryFile = libraryFileFor(pdf);
-            when(bookCreatorService.createShellBook(libraryFile, BookFileType.PDF)).thenReturn(book);
+            givenShellBook(libraryFile, book);
 
-            pdfProcessor.processNewFile(libraryFile);
+            pdfProcessor.processFile(libraryFile);
 
             assertThat(book.getMetadata().getTitle()).isEqualTo("Untitled Book");
         }
@@ -172,14 +178,14 @@ class PdfProcessorTest {
             });
             BookEntity book = bookFor(pdf, BOOK_ID);
             LibraryFile libraryFile = libraryFileFor(pdf);
-            when(bookCreatorService.createShellBook(libraryFile, BookFileType.PDF)).thenReturn(book);
+            givenShellBook(libraryFile, book);
             doThrow(new OutOfMemoryError("test")).when(pdfMetadataExtractor).renderCover(any(PDDocument.class), anyFloat());
 
-            pdfProcessor.processNewFile(libraryFile);
+            pdfProcessor.processFile(libraryFile);
 
             assertThat(book.getMetadata().getTitle()).isEqualTo("Survives OOM");
             assertThat(book.getBookCoverHash()).isNull();
-            verify(fileService, never()).saveCoverImages(any(BufferedImage.class), anyLong());
+            verify(fileService, never()).writeRenderedCover(anyLong(), any());
         }
 
         @Test
@@ -189,11 +195,11 @@ class PdfProcessorTest {
             BookEntity book = bookFor(pdf, BOOK_ID);
             book.getMetadata().setTitle("Shell Title");
             LibraryFile libraryFile = libraryFileFor(pdf);
-            when(bookCreatorService.createShellBook(libraryFile, BookFileType.PDF)).thenReturn(book);
+            givenShellBook(libraryFile, book);
 
-            BookEntity result = pdfProcessor.processNewFile(libraryFile);
+            pdfProcessor.processFile(libraryFile);
 
-            assertThat(result).isSameAs(book);
+            verify(bookCreatorService).saveConnections(book, null);
             assertThat(book.getMetadata().getTitle()).isEqualTo("Shell Title");
             assertThat(book.getBookCoverHash()).isNull();
             verify(pdfMetadataExtractor, never()).extractMetadata(any(PDDocument.class), any(File.class));
