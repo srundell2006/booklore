@@ -39,6 +39,12 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
     final Set<Path> listingsFailingAfterFirstEntry = ConcurrentHashMap.newKeySet();
     /** Listings that block, ignoring interrupts, until {@link #release()}: a CIFS call on a dead share. */
     final Set<Path> stuckListings = ConcurrentHashMap.newKeySet();
+    /** Listings that return their first entry, then block reading the next one until {@link #release()}. */
+    final Set<Path> listingsStuckAfterFirstEntry = ConcurrentHashMap.newKeySet();
+    /** Attribute reads that block until {@link #release()}: a file whose oplock break never completes. */
+    final Set<Path> stuckAttributeReads = ConcurrentHashMap.newKeySet();
+    /** Readability checks that block until {@link #release()}. */
+    final Set<Path> stuckReadabilityChecks = ConcurrentHashMap.newKeySet();
     final Map<Path, Duration> listingDelays = new ConcurrentHashMap<>();
     final Map<Path, CyclicBarrier> listingBarriers = new ConcurrentHashMap<>();
     /** Thrown for every attribute read of the path, with or without following links. */
@@ -58,6 +64,7 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
     final Queue<Path> readabilityChecked = new ConcurrentLinkedQueue<>();
     final Queue<Path> existenceChecked = new ConcurrentLinkedQueue<>();
     final Queue<Call> calls = new ConcurrentLinkedQueue<>();
+    /** Calls that got stuck, of any kind. */
     final AtomicInteger stuckCount = new AtomicInteger();
     /** Listings in progress, not counting stuck ones. */
     final AtomicInteger activeListings = new AtomicInteger();
@@ -91,7 +98,8 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
             if (failure != null) {
                 throw failure;
             }
-            return recording(super.newDirectoryStream(dir), listingsFailingAfterFirstEntry.contains(dir));
+            return recording(super.newDirectoryStream(dir), listingsFailingAfterFirstEntry.contains(dir),
+                    listingsStuckAfterFirstEntry.contains(dir));
         } finally {
             activeListings.decrementAndGet();
         }
@@ -101,6 +109,10 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
     BasicFileAttributes readAttributes(Path path, LinkOption... options) throws IOException {
         attributesRead.add(path);
         calls.add(new Call("stat", path));
+        if (stuckAttributeReads.contains(path)) {
+            stuckCount.incrementAndGet();
+            blockUninterruptibly();
+        }
         if (path.getParent() != null) {
             sleep(entryAttributeDelays.get(path.getParent()));
         }
@@ -117,6 +129,10 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
     @Override
     boolean isReadable(Path file) {
         readabilityChecked.add(file);
+        if (stuckReadabilityChecks.contains(file)) {
+            stuckCount.incrementAndGet();
+            blockUninterruptibly();
+        }
         return !unreadable.contains(file) && super.isReadable(file);
     }
 
@@ -161,8 +177,8 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
         }
     }
 
-    /** Records each entry as the listing returns it, optionally sorted, optionally failing after the first. */
-    private DirectoryStream<Path> recording(DirectoryStream<Path> stream, boolean failAfterFirstEntry) {
+    /** Records each entry as the listing returns it, optionally sorted, optionally failing or stuck after the first. */
+    private DirectoryStream<Path> recording(DirectoryStream<Path> stream, boolean failAfterFirstEntry, boolean stuckAfterFirstEntry) {
         Iterator<Path> source;
         if (listInNameOrder) {
             List<Path> entries = new ArrayList<>();
@@ -187,6 +203,10 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
                     public Path next() {
                         if (failAfterFirstEntry && !(first && source.hasNext())) {
                             throw new DirectoryIteratorException(new IOException("Connection reset by peer"));
+                        }
+                        if (stuckAfterFirstEntry && !first) {
+                            stuckCount.incrementAndGet();
+                            blockUninterruptibly();
                         }
                         first = false;
                         Path entry = source.next();

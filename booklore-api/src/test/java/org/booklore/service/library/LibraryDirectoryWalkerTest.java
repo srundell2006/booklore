@@ -9,6 +9,8 @@ import org.booklore.service.library.LibraryDirectoryWalker.WalkedPath;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 
 import java.io.IOException;
 import java.io.InterruptedIOException;
@@ -68,6 +70,29 @@ class LibraryDirectoryWalkerTest {
         return directory.getSubdirectories().stream()
                 .filter(sub -> sub.getPath().getFileName().toString().equals(name))
                 .findFirst().orElseThrow();
+    }
+
+    private static List<String> subdirectoryNames(Directory directory) {
+        return directory.getSubdirectories().stream().map(sub -> sub.getPath().getFileName().toString()).toList();
+    }
+
+    /** Where a share that stops answering makes a walk stall. */
+    enum Stall {
+        /** Listing the directory. */
+        LISTING,
+        /** Reading the attributes of a book file in it. */
+        ENTRY;
+
+        /** Makes the walk stall in {@code dir}, and returns the path it then reports incomplete. */
+        Path stallIn(ScriptedFileAccess fileAccess, Path dir) throws IOException {
+            if (this == LISTING) {
+                fileAccess.stuckListings.add(dir);
+                return dir;
+            }
+            Path file = Files.write(dir.resolve("stuck.epub"), new byte[]{1});
+            fileAccess.stuckAttributeReads.add(file);
+            return file;
+        }
     }
 
     @Test
@@ -272,6 +297,140 @@ class LibraryDirectoryWalkerTest {
         assertThat(child(result.root(), "stuck").getSubdirectories()).isEmpty();
     }
 
+    @Test
+    void entryStuckUnderTheLibraryPathIsLeftOutAloneAndTheRestOfThePathIsScanned() throws Exception {
+        // What a wedged author folder directly under the library path looks like.
+        book("Author 1/a.epub");
+        Path stuck = book("Author 2/b.epub").getParent();
+        book("Author 3/c.epub");
+        book("loose.epub");
+        fileAccess.listInNameOrder = true;
+        fileAccess.stuckAttributeReads.add(stuck);
+        LibraryDirectoryWalker walker = walker(4, Duration.ofMillis(300));
+
+        WalkedPath walked = assertTimeoutPreemptively(Duration.ofSeconds(10), () -> walker.walk(List.of(tempDir))).getFirst();
+
+        // What was inspected before the stall is kept, and the entries after it are still inspected.
+        assertThat(walked.incompletePaths()).containsExactly(stuck);
+        assertThat(walked.timedOut()).isTrue();
+        assertThat(subdirectoryNames(walked.root())).containsExactly("Author 1", "Author 3");
+        assertThat(child(walked.root(), "Author 1").getBookFiles()).containsExactly("a.epub");
+        assertThat(child(walked.root(), "Author 3").getBookFiles()).containsExactly("c.epub");
+        assertThat(walked.root().getBookFiles()).containsExactly("loose.epub");
+        // Carrying on lists the library path again, but looks at nothing a second time.
+        assertThat(fileAccess.listed).filteredOn(tempDir::equals).hasSize(2);
+        assertThat(fileAccess.attributesRead).doesNotHaveDuplicates();
+        assertThat(walker.strandedListings()).isEqualTo(1);
+
+        // The stuck call finally returns: the listing given up on stops there, and nothing it does is taken.
+        List<Path> attributesRead = List.copyOf(fileAccess.attributesRead);
+        fileAccess.release();
+        awaitNoStrandedListings(walker);
+        assertThat(fileAccess.attributesRead).containsExactlyElementsOf(attributesRead);
+        assertThat(subdirectoryNames(walked.root())).containsExactly("Author 1", "Author 3");
+        assertThat(walked.incompletePaths()).containsExactly(stuck);
+    }
+
+    @Test
+    void bookFilesStuckInAnAuthorFolderAreLeftOutAloneAndTheRestOfItIsScanned() throws Exception {
+        book("Author/a.epub");
+        Path stuckStat = book("Author/b.epub");
+        book("Author/c.epub");
+        Path stuckCheck = book("Author/d.epub");
+        book("Author/e.epub");
+        book("Other/f.epub");
+        fileAccess.listInNameOrder = true;
+        fileAccess.stuckAttributeReads.add(stuckStat);
+        fileAccess.stuckReadabilityChecks.add(stuckCheck);
+        LibraryDirectoryWalker walker = walker(4, Duration.ofMillis(300));
+
+        LibraryScanResult result = assertTimeoutPreemptively(Duration.ofSeconds(10),
+                () -> new LibraryFileHelper(walker).scanAllLibraryFiles(library(tempDir)));
+
+        assertThat(fileNames(result.files())).containsExactly("a.epub", "c.epub", "e.epub", "f.epub");
+        assertThat(result.incompletePaths()).containsExactlyInAnyOrder(stuckStat, stuckCheck);
+        assertThat(result.timedOut()).isTrue();
+        assertThat(result.isUnderIncompletePath(tempDir.resolve("Author/a.epub"))).isFalse();
+        // One listing given up on per stall, each carried on by a fresh one.
+        assertThat(fileAccess.listed).filteredOn(tempDir.resolve("Author")::equals).hasSize(3);
+        assertThat(fileAccess.attributesRead).doesNotHaveDuplicates();
+        assertThat(walker.strandedListings()).isEqualTo(2);
+
+        fileAccess.release();
+        awaitNoStrandedListings(walker);
+    }
+
+    @Test
+    void trackStuckInAnAudiobookFolderPutsTheFolderInDoubt() throws Exception {
+        Path folderBook = tempDir.resolve("Author/Book");
+        book("Author/Book/ch01.mp3");
+        fileAccess.stuckAttributeReads.add(book("Author/Book/ch02.mp3"));
+        book("Author/Book/ch03.mp3");
+        book("Author/novel.epub");
+        // At the library path every audio file is a book of its own, so only the stuck one is in doubt.
+        book("r1.mp3");
+        Path rootTrack = book("r2.mp3");
+        fileAccess.stuckAttributeReads.add(rootTrack);
+        LibraryDirectoryWalker walker = walker(4, Duration.ofMillis(300));
+
+        LibraryScanResult result = assertTimeoutPreemptively(Duration.ofSeconds(10),
+                () -> new LibraryFileHelper(walker).scanAllLibraryFiles(library(tempDir)));
+
+        // How the other tracks group depends on the one given up on, as for a track that could not be read.
+        assertThat(result.incompletePaths()).containsExactlyInAnyOrder(folderBook, rootTrack);
+        assertThat(fileNames(result.files())).contains("novel.epub", "r1.mp3");
+
+        fileAccess.release();
+        awaitNoStrandedListings(walker);
+    }
+
+    @Test
+    void listingStuckReadingTheDirectoryAfterInspectingSomeOfItGivesUpTheWholeDirectory() throws Exception {
+        Path shelf = book("Shelf/a.epub").getParent();
+        book("Shelf/b.epub");
+        book("Other/c.epub");
+        fileAccess.listInNameOrder = true;
+        fileAccess.listingsStuckAfterFirstEntry.add(shelf);
+        LibraryDirectoryWalker walker = walker(4, Duration.ofMillis(300));
+
+        LibraryScanResult result = assertTimeoutPreemptively(Duration.ofSeconds(10),
+                () -> new LibraryFileHelper(walker).scanAllLibraryFiles(library(tempDir)));
+
+        // a.epub was inspected, but nothing of a half-read directory is reported.
+        assertThat(fileAccess.attributesRead).contains(shelf.resolve("a.epub"));
+        assertThat(fileNames(result.files())).containsExactly("c.epub");
+        assertThat(result.incompletePaths()).containsExactly(shelf);
+        assertThat(fileAccess.listed).filteredOn(shelf::equals).hasSize(1);
+
+        fileAccess.release();
+        awaitNoStrandedListings(walker);
+    }
+
+    @Test
+    void entriesStuckOneAfterAnotherInOneDirectoryStopTheLibraryPathAtTheTimeoutBound() throws Exception {
+        Path dead = tempDir.resolve("dead");
+        Path shelf = Files.createDirectories(dead.resolve("Shelf"));
+        for (int i = 0; i < 2 * LibraryDirectoryWalker.MAX_TIMEOUTS_PER_PATH; i++) {
+            fileAccess.stuckAttributeReads.add(Files.write(shelf.resolve("book" + i + ".epub"), new byte[]{1}));
+        }
+        Path healthy = book("healthy/a.epub").getParent();
+        LibraryDirectoryWalker walker = walker(4, Duration.ofMillis(100));
+
+        List<WalkedPath> walked = assertTimeoutPreemptively(Duration.ofSeconds(10), () -> walker.walk(List.of(dead, healthy)));
+
+        // Each listing carrying on gets stuck on the next file: one stranded thread per timeout, up to the bound.
+        assertThat(fileAccess.stuckCount.get()).isEqualTo(LibraryDirectoryWalker.MAX_TIMEOUTS_PER_PATH);
+        assertThat(walker.strandedListings()).isEqualTo(LibraryDirectoryWalker.MAX_TIMEOUTS_PER_PATH);
+        assertThat(fileAccess.listed).filteredOn(shelf::equals).hasSize(LibraryDirectoryWalker.MAX_TIMEOUTS_PER_PATH);
+        assertThat(walked.get(0).incompletePaths()).contains(dead);
+        assertThat(walked.get(0).timedOut()).isTrue();
+        assertThat(walked.get(1).incompletePaths()).isEmpty();
+        assertThat(walked.get(1).root().getBookFiles()).containsExactly("a.epub");
+
+        fileAccess.release();
+        awaitNoStrandedListings(walker);
+    }
+
     private static void awaitNoStrandedListings(LibraryDirectoryWalker walker) throws InterruptedException {
         long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
         while (walker.strandedListings() > 0 && System.nanoTime() < deadline) {
@@ -280,11 +439,12 @@ class LibraryDirectoryWalkerTest {
         assertThat(walker.strandedListings()).isZero();
     }
 
-    @Test
-    void stopsListingWhileTooManyAbandonedListingsAreStillStuck() throws Exception {
+    @ParameterizedTest
+    @EnumSource(Stall.class)
+    void stopsListingWhileTooManyAbandonedListingsAreStillStuck(Stall stall) throws Exception {
         Path dead = tempDir.resolve("dead");
         for (int i = 0; i < 40; i++) {
-            fileAccess.stuckListings.add(Files.createDirectories(dead.resolve("dir" + i)));
+            stall.stallIn(fileAccess, Files.createDirectories(dead.resolve("dir" + i)));
         }
         Path healthy = book("healthy/a.epub").getParent();
         int parallelism = 8;
@@ -316,13 +476,13 @@ class LibraryDirectoryWalkerTest {
         assertThat(walked.root().getBookFiles()).containsExactly("a.epub");
     }
 
-    @Test
-    void stuckListingDoesNotKeepTheWalkedTreeAlive() throws Exception {
+    @ParameterizedTest
+    @EnumSource(Stall.class)
+    void stuckListingDoesNotKeepTheWalkedTreeAlive(Stall stall) throws Exception {
         for (int i = 0; i < 10; i++) {
             book("Author" + i + "/Book/book.epub");
         }
-        Path stuck = Files.createDirectories(tempDir.resolve("Author3/Book/Stuck"));
-        fileAccess.stuckListings.add(stuck);
+        stall.stallIn(fileAccess, Files.createDirectories(tempDir.resolve("Author3/Book/Stuck")));
         LibraryDirectoryWalker walker = walker(4, Duration.ofMillis(200));
 
         WeakReference<Directory> root = new WeakReference<>(assertTimeoutPreemptively(Duration.ofSeconds(10),
@@ -338,12 +498,12 @@ class LibraryDirectoryWalkerTest {
         assertThat(fileAccess.stuckCount.get()).isEqualTo(1);
     }
 
-    @Test
-    void abandonedListingFreesItsSlotExactlyOnce() throws Exception {
+    @ParameterizedTest
+    @EnumSource(Stall.class)
+    void abandonedListingFreesItsSlotExactlyOnce(Stall stall) throws Exception {
         // Sorts first, so it holds one of the two slots while the other directories queue behind it.
-        Path stuck = tempDir.resolve("a-stuck");
-        Files.createDirectories(stuck);
-        fileAccess.stuckListings.add(stuck);
+        Path stuckDir = Files.createDirectories(tempDir.resolve("a-stuck"));
+        Path stuck = stall.stallIn(fileAccess, stuckDir);
         for (int i = 0; i < 24; i++) {
             book("dir" + i + "/book" + i + ".epub");
             fileAccess.listingDelays.put(tempDir.resolve("dir" + i), Duration.ofMillis(50));
@@ -354,9 +514,11 @@ class LibraryDirectoryWalkerTest {
 
         assertThat(walked.getFirst().incompletePaths()).containsExactly(stuck);
         assertThat(walked.getFirst().root().getSubdirectories()).hasSize(25)
-                .filteredOn(dir -> !dir.getPath().equals(stuck))
+                .filteredOn(dir -> !dir.getPath().equals(stuckDir))
                 .allSatisfy(dir -> assertThat(dir.getBookFiles()).hasSize(1));
-        // Two slots: the stuck listing's slot is reused once it is abandoned, never twice over.
+        assertThat(child(walked.getFirst().root(), "a-stuck").getBookFiles()).isEmpty();
+        // Two slots: the stuck listing's slot is reused once it is abandoned (by the listing that carries on
+        // after an entry given up on, or another directory), never twice over.
         assertThat(fileAccess.maxActiveListings.get()).isEqualTo(2);
     }
 
@@ -374,12 +536,12 @@ class LibraryDirectoryWalkerTest {
         assertThat(child(walked.getFirst().root(), "slow").getBookFiles()).hasSize(10);
     }
 
-    @Test
-    void stopsWalkingALibraryPathAfterTooManyTimeouts() throws Exception {
+    @ParameterizedTest
+    @EnumSource(Stall.class)
+    void stopsWalkingALibraryPathAfterTooManyTimeouts(Stall stall) throws Exception {
         Path dead = tempDir.resolve("dead");
         for (int i = 0; i < 40; i++) {
-            Path dir = Files.createDirectories(dead.resolve("dir" + i));
-            fileAccess.stuckListings.add(dir);
+            stall.stallIn(fileAccess, Files.createDirectories(dead.resolve("dir" + i)));
         }
         Path healthy = tempDir.resolve("healthy");
         for (int i = 0; i < 5; i++) {
@@ -391,9 +553,11 @@ class LibraryDirectoryWalkerTest {
                 () -> walker(parallelism, Duration.ofMillis(250)).walk(List.of(dead, healthy)));
 
         assertThat(walked.get(0).incompletePaths()).contains(dead);
+        assertThat(walked.get(0).timedOut()).isTrue();
         assertThat(fileAccess.stuckCount.get())
                 .isBetween(LibraryDirectoryWalker.MAX_TIMEOUTS_PER_PATH, LibraryDirectoryWalker.MAX_TIMEOUTS_PER_PATH + parallelism - 1);
         assertThat(walked.get(1).incompletePaths()).isEmpty();
+        assertThat(walked.get(1).timedOut()).isFalse();
         assertThat(walked.get(1).root().getSubdirectories())
                 .allSatisfy(dir -> assertThat(dir.getBookFiles()).hasSize(1))
                 .hasSize(5);
