@@ -13,6 +13,7 @@ import org.springframework.stereotype.Component;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.AccessDeniedException;
 import java.nio.file.DirectoryNotEmptyException;
 import java.nio.file.FileAlreadyExistsException;
@@ -26,8 +27,10 @@ import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.text.Normalizer;
 import java.util.HashSet;
+import java.util.HexFormat;
 import java.util.Objects;
 import java.util.Set;
+import java.util.zip.CRC32;
 
 @Slf4j
 @Component
@@ -54,6 +57,10 @@ public class FileMoveHelper {
             DirectoryNotEmptyException.class
     );
     private static final Set<String> IGNORED_FILENAMES = Set.of(".DS_Store", "Thumbs.db");
+    private static final String TEMP_SUFFIX = ".tmp_move";
+    private static final int MAX_NAME_BYTES = 255;
+    // "~" and 8 hex digits
+    private static final int HASH_SUFFIX_BYTES = 9;
 
     public boolean waitForFileAccessible(Path path) {
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
@@ -94,11 +101,29 @@ public class FileMoveHelper {
             throw new NoSuchFileException(source.toString(), null, "Source file not accessible after retries");
         }
 
-        Path tempPath = source.resolveSibling(source.getFileName().toString() + ".tmp_move");
+        Path tempPath = temporaryPath(source);
         log.info("Moving file from {} to temporary location {}", source, tempPath);
         // A file already there is one a failed rollback left behind, and may be the only copy of a book
-        executeWithRetry(() -> Files.move(source, tempPath));
+        executeWithRetry(() -> rename(source, tempPath), () -> hasMoved(source, tempPath));
         return tempPath;
+    }
+
+    /**
+     * The temporary name a file or folder is moved aside to, next to it: its own name and
+     * ".tmp_move". A name too long to take that within 255 bytes is cut short at a character
+     * boundary and ends in "~" and a hash of the whole name, so that it can still be moved and
+     * two long names never share a temporary name.
+     */
+    public static Path temporaryPath(Path source) {
+        String name = source.getFileName().toString();
+        byte[] bytes = name.getBytes(StandardCharsets.UTF_8);
+        if (bytes.length + TEMP_SUFFIX.length() <= MAX_NAME_BYTES) {
+            return source.resolveSibling(name + TEMP_SUFFIX);
+        }
+        CRC32 hash = new CRC32();
+        hash.update(bytes);
+        return source.resolveSibling(PathPatternResolver.truncatePathComponent(name, MAX_NAME_BYTES - TEMP_SUFFIX.length() - HASH_SUFFIX_BYTES)
+                + "~" + HexFormat.of().toHexDigits((int) hash.getValue()) + TEMP_SUFFIX);
     }
 
     /**
@@ -168,8 +193,24 @@ public class FileMoveHelper {
             if (!isAbsent(target)) {
                 throw new FileAlreadyExistsException(target.toString(), null, "Not replacing an existing file");
             }
-            Files.move(tempPath, target);
-        });
+            rename(tempPath, target);
+        }, () -> hasMoved(tempPath, target));
+    }
+
+    /** Renames {@code source} to {@code target}, never replacing anything there. Tests override it to stand in for a share. */
+    protected void rename(Path source, Path target) throws IOException {
+        Files.move(source, target);
+    }
+
+    /**
+     * Whether a move that failed has taken effect all the same: its source is gone and its
+     * target is there. A share that reconnects can lose the reply to a rename the server has
+     * done, and retrying it then fails on the missing source. The target was free when the move
+     * began, and one of the two names is the temporary one only this move uses, so what is at
+     * the target is the moved file.
+     */
+    private static boolean hasMoved(Path source, Path target) throws IOException {
+        return isAbsent(source) && !isAbsent(target);
     }
 
     /**
@@ -178,6 +219,7 @@ public class FileMoveHelper {
      */
     public void rollbackMove(Path tempPath, Path originalSource) {
         if (!Files.exists(tempPath)) {
+            log.error("Failed to rollback file move from {} to {}: nothing is left at {} to move back", tempPath, originalSource, tempPath);
             return;
         }
         
@@ -371,9 +413,23 @@ public class FileMoveHelper {
         void execute() throws IOException;
     }
 
+    @FunctionalInterface
+    private interface FileCheck {
+        boolean test() throws IOException;
+    }
+
     private void executeWithRetry(FileOperation operation) throws IOException {
+        executeWithRetry(operation, () -> false);
+    }
+
+    /** Retries {@code operation}, unless {@code tookEffect} finds that an attempt which failed has done it all the same. */
+    private void executeWithRetry(FileOperation operation, FileCheck tookEffect) throws IOException {
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {
             try {
+                if (attempt > 1 && tookEffect.test()) {
+                    log.info("File operation took effect although attempt {}/{} reported a failure", attempt - 1, MAX_ATTEMPTS);
+                    return;
+                }
                 operation.execute();
                 return;
             } catch (IOException e) {

@@ -13,6 +13,7 @@ import org.mockito.junit.jupiter.MockitoExtension;
 
 import java.io.IOException;
 import java.nio.charset.Charset;
+import java.nio.charset.StandardCharsets;
 import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.FileSystem;
 import java.nio.file.FileSystemException;
@@ -353,6 +354,106 @@ class FileMoveHelperTest {
 
             assertEquals("the book", Files.readString(source));
             assertEquals("another book", Files.readString(leftover));
+        }
+
+        @Test
+        @DisplayName("A name too long to take .tmp_move within 255 bytes still moves, by way of a shorter temporary name")
+        void moveFileWithBackup_nameTooLongForTheSuffix_movesByAShorterName() throws Exception {
+            assumeUnicodeFileNames();
+            // 249 bytes, Arabic letters taking two each: 258 with ".tmp_move"
+            String name = "ك".repeat(122) + ".epub";
+            assertEquals(249, name.getBytes(StandardCharsets.UTF_8).length);
+            Path source = Files.writeString(tempDir.resolve(name), "the book");
+            Path target = tempDir.resolve("Title.epub");
+
+            Path tempPath = fileMoveHelper.moveFileWithBackup(source);
+            fileMoveHelper.commitMove(tempPath, target);
+
+            assertTrue(tempPath.getFileName().toString().endsWith(".tmp_move"));
+            assertTrue(tempPath.getFileName().toString().getBytes(StandardCharsets.UTF_8).length <= 255);
+            assertEquals("the book", Files.readString(target));
+            assertFalse(Files.exists(source));
+        }
+
+        @Test
+        @DisplayName("Long names that differ only at the end get different temporary names")
+        void temporaryPath_longNamesDifferingAtTheEnd_differ() {
+            String name = "a".repeat(244);
+
+            Path first = FileMoveHelper.temporaryPath(tempDir.resolve(name + ".epub"));
+            Path second = FileMoveHelper.temporaryPath(tempDir.resolve(name + " (1).epub"));
+
+            assertNotEquals(first, second);
+            assertEquals(255, first.getFileName().toString().length());
+            assertEquals(tempDir.resolve("Title.epub.tmp_move"), FileMoveHelper.temporaryPath(tempDir.resolve("Title.epub")));
+        }
+    }
+
+    @Nested
+    @DisplayName("Lost Reply Tests")
+    class LostReplyTests {
+
+        /** A share that renames on the server but loses the reply the first time, as a reconnecting SMB client can. */
+        private FileMoveHelper helperLosingTheFirstReply() {
+            return new FileMoveHelper(monitoringRegistrationService, appSettingService) {
+                private boolean replyLost;
+
+                @Override
+                protected void rename(Path source, Path target) throws IOException {
+                    super.rename(source, target);
+                    if (!replyLost) {
+                        replyLost = true;
+                        throw new FileSystemException(source.toString(), target.toString(), "Connection reset");
+                    }
+                }
+            };
+        }
+
+        @Test
+        @DisplayName("A staging rename that took effect although it failed counts as done, so it can be rolled back")
+        void moveFileWithBackup_renameDoneButReplyLost_returnsTheTemporaryPath() throws Exception {
+            Path source = Files.writeString(tempDir.resolve("book.epub"), "the book");
+
+            Path tempPath = helperLosingTheFirstReply().moveFileWithBackup(source);
+
+            assertEquals("the book", Files.readString(tempPath));
+            fileMoveHelper.rollbackMove(tempPath, source);
+            assertEquals("the book", Files.readString(source));
+        }
+
+        @Test
+        @DisplayName("A commit that took effect although it failed counts as done, instead of failing on the moved file")
+        void commitMove_renameDoneButReplyLost_succeeds() throws Exception {
+            Path tempPath = Files.writeString(tempDir.resolve("book.epub.tmp_move"), "the book");
+            Path target = tempDir.resolve("Title.epub");
+
+            assertDoesNotThrow(() -> helperLosingTheFirstReply().commitMove(tempPath, target));
+
+            assertEquals("the book", Files.readString(target));
+            assertFalse(Files.exists(tempPath));
+        }
+
+        @Test
+        @DisplayName("A rename that failed without taking effect is still retried")
+        void commitMove_renameFailedOnce_isRetried() throws Exception {
+            Path tempPath = Files.writeString(tempDir.resolve("book.epub.tmp_move"), "the book");
+            Path target = tempDir.resolve("Title.epub");
+            FileMoveHelper failingOnce = new FileMoveHelper(monitoringRegistrationService, appSettingService) {
+                private boolean failed;
+
+                @Override
+                protected void rename(Path source, Path target) throws IOException {
+                    if (!failed) {
+                        failed = true;
+                        throw new FileSystemException(source.toString(), target.toString(), "Connection reset");
+                    }
+                    super.rename(source, target);
+                }
+            };
+
+            failingOnce.commitMove(tempPath, target);
+
+            assertEquals("the book", Files.readString(target));
         }
     }
 
