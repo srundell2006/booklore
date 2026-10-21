@@ -8,6 +8,7 @@ import org.booklore.model.entity.BookMetadataEntity;
 import lombok.experimental.UtilityClass;
 import lombok.extern.slf4j.Slf4j;
 
+import java.text.BreakIterator;
 import java.text.Normalizer;
 import java.nio.ByteBuffer;
 import java.nio.CharBuffer;
@@ -471,6 +472,12 @@ public class PathPatternResolver {
         return result.toString();
     }
 
+    /**
+     * Cuts {@code component} to at most {@code maxBytes} of UTF-8. The cut falls between two
+     * characters as a reader sees them (a letter and its vowel signs, accents or virama stay
+     * together), and whitespace or a zero-width (non-)joiner left at the end of the cut is
+     * dropped, so a cut name never ends in a space or in a joiner with nothing to join.
+     */
     public String truncatePathComponent(String component, int maxBytes) {
         if (component == null || component.isEmpty()) {
             return component;
@@ -487,7 +494,23 @@ public class PathPatternResolver {
 
         encoder.encode(charBuffer, buffer, true);
 
-        String truncated = component.substring(0, charBuffer.position());
+        int end = charBuffer.position();
+        BreakIterator characters = BreakIterator.getCharacterInstance(Locale.ROOT);
+        characters.setText(component);
+        int characterEnd = characters.isBoundary(end) ? end : characters.preceding(end);
+        // A single character longer than the limit (a letter under a pile of marks) is cut where the bytes run out
+        if (characterEnd > 0) {
+            end = characterEnd;
+        }
+        while (end > 0) {
+            int last = Character.codePointBefore(component, end);
+            if (!Character.isWhitespace(last) && !Character.isSpaceChar(last) && !isJoiner(last)) {
+                break;
+            }
+            end -= Character.charCount(last);
+        }
+
+        String truncated = component.substring(0, end);
         if (!truncated.equals(component)) {
             log.debug("Truncated path component from {} to {} bytes for filesystem safety",
                 bytes.length, truncated.getBytes(StandardCharsets.UTF_8).length);

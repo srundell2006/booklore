@@ -9,6 +9,7 @@ import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 
 import java.text.Normalizer;
+import java.time.LocalDate;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -245,5 +246,56 @@ class PathPatternResolverScriptTest {
 
         assertThat(sanitized(once)).isEqualTo(once);
         assertThat(Normalizer.isNormalized(once, Normalizer.Form.NFC)).isTrue();
+    }
+
+    // Names in other scripts now reach the 200-byte cap of a title at 70 to 100 characters
+
+    @Test
+    void longTitleCutAfterASpace_endsWithoutIt() {
+        // The first 200 bytes end in a space
+        String title = "مكتبة " + "كتاب ".repeat(21) + "الأخير";
+        BookMetadata metadata = BookMetadata.builder().title(title).publishedDate(LocalDate.of(2000, 1, 1)).build();
+
+        String result = PathPatternResolver.resolvePattern(metadata, "{title} ({year})", "a.epub");
+
+        assertThat(result).isEqualTo("مكتبة " + "كتاب ".repeat(20) + "كتاب (2000).epub");
+    }
+
+    @Test
+    void longTitleCutInsideACharacter_endsBeforeIt() {
+        // 200 bytes end between य and its candrabindu: याँ is one character to a reader, and stays whole
+        String title = "क" + "कहानियाँ ".repeat(7) + "कहानियाँ";
+
+        String result = resolve(title, "Author", "{title}", "a.epub");
+
+        assertThat(result).isEqualTo("क" + "कहानियाँ ".repeat(7) + "कहानि.epub");
+    }
+
+    @Test
+    void longTitleCutAfterAJoiner_endsWithoutIt() {
+        // 200 bytes end right after the zero-width non-joiner of می‌خواهم, which then joins nothing
+        String title = "کتاب ".repeat(21) + "نومی\u200Cخواهم";
+
+        String result = resolve(title, "Author", "{title}", "a.epub");
+
+        assertThat(result).isEqualTo("کتاب ".repeat(21) + "نومی.epub");
+    }
+
+    @Test
+    void longLatinTitleCutAfterASpace_endsWithoutIt() {
+        String title = "word ".repeat(40) + "end";
+
+        String result = resolve(title, "Author", "{title}", "a.epub");
+
+        assertThat(result).isEqualTo("word ".repeat(39) + "word.epub");
+    }
+
+    @Test
+    void longLatinTitleCutInsideAWord_isCutAtTheByteLimitAsBefore() {
+        String title = "word ".repeat(39) + "words and more";
+
+        String result = resolve(title, "Author", "{title}", "a.epub");
+
+        assertThat(result).isEqualTo("word ".repeat(39) + "words.epub");
     }
 }
