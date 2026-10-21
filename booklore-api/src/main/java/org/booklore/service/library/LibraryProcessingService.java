@@ -1,5 +1,6 @@
 package org.booklore.service.library;
 
+import org.booklore.exception.APIException;
 import org.booklore.exception.ApiError;
 import org.booklore.model.dto.settings.LibraryFile;
 import org.booklore.model.entity.BookEntity;
@@ -24,7 +25,6 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -72,25 +72,25 @@ public class LibraryProcessingService {
      */
     record RemovalCandidates(List<Long> ids, int underUnreadPaths, int changedDuringWalk) {}
 
-    public void processLibrary(long libraryId) {
+    /** An initial scan. A failure is left to the caller to report, as for {@link #rescanLibrary}. */
+    public void processLibrary(long libraryId) throws IOException {
         LibraryEntity libraryEntity = loadLibrary(libraryId);
         notificationService.sendMessage(Topic.LOG, LogNotification.info("Started processing library: " + libraryEntity.getName()));
-        try {
-            List<LibraryFile> libraryFiles = libraryFileHelper.getLibraryFiles(libraryEntity);
-            List<LibraryFile> newFiles = detectNewBookPaths(libraryFiles, loadBookFiles(libraryEntity));
+        List<LibraryFile> libraryFiles = libraryFileHelper.getLibraryFiles(libraryEntity);
+        List<LibraryFile> newFiles = detectNewBookPaths(libraryFiles, loadBookFiles(libraryEntity));
 
-            // Use BookGroupingService for consistent grouping based on organization mode
-            Map<String, List<LibraryFile>> groups = bookGroupingService.groupForInitialScan(newFiles, libraryEntity);
-            notifySkipped(libraryEntity, fileAsBookProcessor.processLibraryFilesGrouped(groups, libraryEntity));
+        // Use BookGroupingService for consistent grouping based on organization mode
+        Map<String, List<LibraryFile>> groups = bookGroupingService.groupForInitialScan(newFiles, libraryEntity);
+        notifySkipped(libraryEntity, fileAsBookProcessor.processLibraryFilesGrouped(groups, libraryEntity));
 
-            notificationService.sendMessage(Topic.LOG, LogNotification.info("Finished processing library: " + libraryEntity.getName()));
-        } catch (IOException e) {
-            log.error("Failed to process library {}: {}", libraryEntity.getName(), e.getMessage(), e);
-            notificationService.sendMessage(Topic.LOG, LogNotification.error("Failed to process library: " + libraryEntity.getName() + " - " + e.getMessage()));
-            throw new UncheckedIOException("Library processing failed", e);
-        }
+        notificationService.sendMessage(Topic.LOG, LogNotification.info("Finished processing library: " + libraryEntity.getName()));
     }
 
+    /**
+     * A rescan. One that cannot vouch for the library's files (a library path it cannot read, or
+     * a walk that finds none of the library's books) stops before changing anything, with an
+     * {@link APIException} whose message says why, for the caller to report.
+     */
     public void rescanLibrary(RescanLibraryContext context) throws IOException {
         // Detached: only its own columns and the eagerly loaded library paths are used.
         LibraryEntity libraryEntity = loadLibrary(context.getLibraryId());
@@ -113,12 +113,14 @@ public class LibraryProcessingService {
         if (allLibraryFiles.isEmpty()) {
             long existingBookCount = bookRepository.countIncludingDeletedByLibraryId(libraryEntity.getId());
             if (existingBookCount > 0) {
+                // More likely a share that is down, or that the walk could not read, than every book deleted.
+                if (!scanResult.isComplete()) {
+                    throw rescanStopped(libraryEntity, unreadPaths(scanResult));
+                }
                 String paths = libraryEntity.getLibraryPaths().stream()
                         .map(LibraryPathEntity::getPath)
                         .collect(Collectors.joining(", "));
-                log.error("Library '{}' has {} existing books but scan found 0 files. Paths may be offline: {}",
-                        libraryEntity.getName(), existingBookCount, paths);
-                throw ApiError.LIBRARY_PATH_NOT_ACCESSIBLE.createException(paths);
+                throw rescanStopped(libraryEntity, "no book files were found in " + paths + ", which may not be mounted");
             }
         }
 
@@ -173,7 +175,28 @@ public class LibraryProcessingService {
         // Process new book groups
         notifySkipped(libraryEntity, fileAsBookProcessor.processLibraryFilesGrouped(groupingResult.newBookGroups(), libraryEntity));
 
+        if (!scanResult.isComplete()) {
+            notificationService.sendMessage(Topic.LOG, LogNotification.warn("Refreshed library '" + libraryEntity.getName()
+                    + "', but " + unreadPaths(scanResult) + "; no books there were removed."));
+        }
         notificationService.sendMessage(Topic.LOG, LogNotification.info("Finished refreshing library: " + libraryEntity.getName()));
+    }
+
+    private static APIException rescanStopped(LibraryEntity libraryEntity, String reason) {
+        return new APIException("Library '" + libraryEntity.getName() + "' was not rescanned: " + reason
+                + "; no books were removed.", ApiError.LIBRARY_PATH_NOT_ACCESSIBLE.getStatus());
+    }
+
+    /** E.g. "/books/A and 2 other paths could not be read in time". */
+    private static String unreadPaths(LibraryScanResult scanResult) {
+        List<String> paths = scanResult.incompletePaths().stream()
+                .map(Path::toString)
+                .sorted()
+                .toList();
+        int others = paths.size() - 1;
+        return paths.getFirst()
+                + (others == 0 ? "" : " and " + others + (others == 1 ? " other path" : " other paths"))
+                + " could not be read" + (scanResult.timedOut() ? " in time" : "");
     }
 
     private LibraryEntity loadLibrary(Long libraryId) {
@@ -217,8 +240,7 @@ public class LibraryProcessingService {
         for (var pathEntity : libraryEntity.getLibraryPaths()) {
             Path path = Path.of(pathEntity.getPath());
             if (!Files.exists(path) || !Files.isDirectory(path) || !Files.isReadable(path)) {
-                log.error("Library path not accessible: {}", path);
-                throw ApiError.LIBRARY_PATH_NOT_ACCESSIBLE.createException(path.toString());
+                throw rescanStopped(libraryEntity, path + " is not accessible");
             }
         }
     }

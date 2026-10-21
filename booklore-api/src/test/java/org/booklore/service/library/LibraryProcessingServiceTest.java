@@ -288,11 +288,60 @@ class LibraryProcessingServiceTest {
 
         assertThatThrownBy(() -> libraryProcessingService.rescanLibrary(context))
                 .isInstanceOf(APIException.class)
-                .hasMessageContaining("not accessible");
+                .hasMessage("Library 'Test Library' was not rescanned: no book files were found in " + pathEntity.getPath()
+                        + ", which may not be mounted; no books were removed.");
 
         verifyNoInteractions(bookDeletionService, bookRestorationService, bookGroupingService);
         // Only the read from before the walk; nothing is judged on an empty walk.
         verify(bookAdditionalFileRepository, times(1)).findScanRowsByLibraryId(LIBRARY_ID);
+    }
+
+    @Test
+    void rescanLibrary_whenTheWalkTimedOutAndFoundNothing_saysWhatCouldNotBeReadAndRemovesNothing() throws IOException {
+        // What a library path whose listing stalled looks like: nothing found, the path itself incomplete.
+        Path root = Path.of(pathEntity.getPath());
+        givenLibrary();
+        givenScan(new LibraryScanResult(List.of(), Set.of(root), true));
+        when(bookRepository.countIncludingDeletedByLibraryId(LIBRARY_ID)).thenReturn(5L);
+
+        assertThatThrownBy(this::rescan)
+                .isInstanceOf(APIException.class)
+                .hasMessage("Library 'Test Library' was not rescanned: " + root
+                        + " could not be read in time; no books were removed.");
+
+        verifyNoInteractions(bookDeletionService, bookRestorationService, bookGroupingService);
+        verify(bookAdditionalFileRepository, times(1)).findScanRowsByLibraryId(LIBRARY_ID);
+    }
+
+    @Test
+    void rescanLibrary_whenSeveralPathsCouldNotBeReadAndNothingWasFound_namesTheFirstAndCountsTheRest() throws IOException {
+        Path root = Path.of(pathEntity.getPath());
+        givenLibrary();
+        givenScan(new LibraryScanResult(List.of(), Set.of(root.resolve("b"), root.resolve("a"), root.resolve("c"))));
+        when(bookRepository.countIncludingDeletedByLibraryId(LIBRARY_ID)).thenReturn(5L);
+
+        // Failing outright rather than timing out, it is not said to have been slow.
+        assertThatThrownBy(this::rescan)
+                .isInstanceOf(APIException.class)
+                .hasMessage("Library 'Test Library' was not rescanned: " + root.resolve("a")
+                        + " and 2 other paths could not be read; no books were removed.");
+
+        verifyNoInteractions(bookDeletionService, bookRestorationService, bookGroupingService);
+    }
+
+    @Test
+    void rescanLibrary_whenSomePathsCouldNotBeRead_refreshesTheRestAndWarnsTheUser() throws IOException {
+        Path stuck = Path.of(pathEntity.getPath(), "Author 2");
+        givenLibrary();
+        givenScan(new LibraryScanResult(List.of(libraryFile("Author 1", "a.epub")), Set.of(stuck), true));
+        givenRows(row(1, 11, "Author 1", "a.epub"), row(2, 12, "Author 2", "b.epub"));
+        givenNothingToGroup();
+
+        rescan();
+
+        verify(bookDeletionService, never()).processDeletedLibraryFiles(any());
+        assertThat(problemsNotified()).containsExactly("WARN Refreshed library 'Test Library', but " + stuck
+                + " could not be read in time; no books there were removed.");
     }
 
     @Test
