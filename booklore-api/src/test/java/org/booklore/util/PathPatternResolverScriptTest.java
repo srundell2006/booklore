@@ -24,7 +24,7 @@ import static org.junit.jupiter.params.provider.Arguments.arguments;
  * to drop every non-ASCII code point, which emptied titles and authors written in other scripts and produced names
  * like "01.  - Naguib Mahfouz (2000)". Punctuation, symbols and invisible characters are still dropped, so names in
  * Latin script come out as they did before, and books whose names were fine are not renamed. Between two non-Latin
- * words punctuation becomes a space, and letters and digits that are only another form of ASCII ones (ﬁ, Ａ, 𝐁, Ⅷ, １)
+ * words punctuation becomes a space, and letters and numbers that are only another form of ASCII ones (ﬁ, Ａ, 𝐁, Ⅷ, １)
  * are written in ASCII; superscript and ordinal letters (ª º ᵉ) are dropped as they always were.
  */
 class PathPatternResolverScriptTest {
@@ -190,7 +190,37 @@ class PathPatternResolverScriptTest {
     void romanNumerals_keepVolumesApart() {
         // They used to vanish, so that volumes II and III of a title went to the same path
         assertThat(sanitized("ドラゴンクエスト\u2161")).isNotEqualTo(sanitized("ドラゴンクエスト\u2162"));
-        assertThat(sanitized("三体\u2161·黑暗森林")).isEqualTo("三体II黑暗森林");
+        // Dropped, the middle dot would run I and II into III, the name of the third volume
+        assertThat(sanitized("ドラゴンクエスト\u2160・\u2161 公式ガイドブック")).isEqualTo("ドラゴンクエストI II 公式ガイドブック")
+                .isNotEqualTo(sanitized("ドラゴンクエスト\u2162 公式ガイドブック"));
+        assertThat(sanitized("Star Wars Episode \u2160\u2013\u2162")).isEqualTo("Star Wars Episode I III")
+                .isNotEqualTo(sanitized("Star Wars Episode \u2163"));
+    }
+
+    @ParameterizedTest(name = "{0} -> {1}")
+    @CsvSource(delimiter = '|', value = {
+            "ドラゴンクエスト\u2160・\u2161        | ドラゴンクエストI II",
+            "化学\u2160・\u2161の新研究            | 化学I IIの新研究",
+            "\u2160・\u2161・\u2162               | I II III",
+            "三体\u2161·黑暗森林                  | 三体II 黑暗森林",
+            "第\u2161・１巻                        | 第II 1巻",
+            "Star Wars Episode \u2160\u2013\u2162 | Star Wars Episode I III",
+            "Episodes \u2163\u2013\u2165          | Episodes IV VI",
+            "\u2170·\u2171                       | i ii",
+            // Numerals in a row are one number (ⅩⅢ is 13), and a Latin letter or an ASCII digit beside one leaves the
+            // punctuation dropped, as beside a fullwidth digit
+            "\u2169\u2162                        | XIII",
+            "Part\u2013\u2161                     | PartII",
+            "\u2161\u2013B                        | IIB",
+            "\u2161·2                             | II2",
+            "Henry \u2167\u2019s Wives              | Henry VIIIs Wives",
+            // A modifier letter after a numeral is dropped, as it is after the ASCII letters the numeral becomes
+            "ドラゴンクエスト\u2161\u30FC           | ドラゴンクエストII",
+    })
+    void punctuationBetweenRomanNumerals_becomesASpace(String title, String expected) {
+        // They are Latin, but written in ASCII two of them would run into another numeral, as the digits of 第１・２巻
+        // would run into another number
+        assertThat(sanitized(title)).isEqualTo(expected);
     }
 
     @ParameterizedTest(name = "{0}")
@@ -372,7 +402,8 @@ class PathPatternResolverScriptTest {
             "\u06A9\u200D\u0640", "\uFF76\uFF9E\uFF70", "Winter\u02BCs", "\uD835\uDC00\u0301", "\u24B6\u2139\u24C2",
             "\u4E2D\u3001\u3001\u200C\u6587", "\u30AB\u3099\u00B7\u3099\u30AD", "第１・２巻", "１ー２", "\uFF11\u200C·\uFF12",
             "なぜ?・どうして", "٢٠\u066B٥", "١\u066C٠٠٠", "Ինչո\u055Eւ", "ト\u309Bラ", "二〇〇八", "N\u00BA 5", "\uD801\uDF80\u0301",
-            "\uD837\uDF00\u0301\u200C\u0628", "三体\u2161·黑暗",
+            "\uD837\uDF00\u0301\u200C\u0628", "三体\u2161·黑暗", "ドラゴンクエスト\u2160・\u2161", "\u2160・\u2161・\u2162",
+            "Episode \u2160\u2013\u2162", "Part\u2013\u2161", "\u2161\u30FC\u00B7\u30B3", "\u2161\u200D\u4E2D",
     })
     void sanitizing_isStableAndComposed(String title) {
         String once = sanitized(title);
@@ -452,7 +483,16 @@ class PathPatternResolverScriptTest {
             {"inside non-Latin text", "中\uFB01文", "中fi文"},
             {"Roman numerals", "Henry \u2167", "Henry VIII"},
             {"Roman numeral in a Japanese title", "ドラゴンクエスト\u2162", "ドラゴンクエストIII"},
-            {"Roman numeral before Chinese punctuation, which is Latin", "三体\u2161·黑暗森林", "三体II黑暗森林"},
+            // Roman numerals count as numbers, though Latin, so that two of them do not run into another one
+            {"Roman numeral before Chinese punctuation", "三体\u2161·黑暗森林", "三体II 黑暗森林"},
+            {"between Roman numerals in a Japanese title", "ドラゴンクエスト\u2160・\u2161", "ドラゴンクエストI II"},
+            {"between Roman numerals in a Latin title", "Episode \u2160\u2013\u2162", "Episode I III"},
+            {"between small Roman numerals", "\u2170\u00B7\u2171", "i ii"},
+            {"between a Roman numeral and a fullwidth digit", "第\u2161・\uFF11巻", "第II 1巻"},
+            {"Roman numerals in a row, which are one number", "\u2169\u2162", "XIII"},
+            {"Roman numeral next to a Latin word", "Part\u2013\u2161", "PartII"},
+            {"Roman numeral next to an ASCII digit", "\u2161\u00B72", "II2"},
+            {"modifier letter after a Roman numeral", "ドラゴンクエスト\u2161\u30FC", "ドラゴンクエストII"},
             // and the rest are left as they were
             {"ligature that is not plain ASCII stays a letter", "\u01C4", "\u01C4"},
             {"parenthesized letters, which are more than letters", "A\u249C\u249DB", "AB"},
@@ -529,6 +569,20 @@ class PathPatternResolverScriptTest {
             assertThat(sanitized(once)).as("sanitizing %s twice", name.codePoints().mapToObj(Integer::toHexString).toList())
                     .isEqualTo(once);
             assertThat(Normalizer.isNormalized(once, Normalizer.Form.NFC)).isTrue();
+        }
+    }
+
+    @Test
+    void randomAsciiNames_comeOutAsTheyDidWhenEveryNonAsciiCodePointWasDropped() {
+        // The move preview takes a shorter way with them (pattern-resolver.spec.ts), so both must come out as before
+        int[] ascii = IntStream.range(0, 0x80).toArray();
+        Random random = new Random(20261021);
+        for (int i = 0; i < 20_000; i++) {
+            // Letters around it, so the name is never empty
+            String name = "a" + randomName(random, ascii) + "a";
+
+            assertThat(sanitized(name)).as("sanitizing %s", name.codePoints().mapToObj(Integer::toHexString).toList())
+                    .isEqualTo(asciiOnlySanitize(name));
         }
     }
 

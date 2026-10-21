@@ -125,7 +125,35 @@ describe('pattern-resolver', () => {
     it('should keep the volumes of a title apart with their Roman numerals', () => {
       // They used to vanish, so that volumes II and III of a title went to the same path
       expect(sanitize('ドラゴンクエスト\u2161')).not.toBe(sanitize('ドラゴンクエスト\u2162'));
-      expect(sanitize('三体\u2161·黑暗森林')).toBe('三体II黑暗森林');
+      // Dropped, the middle dot would run I and II into III, the name of the third volume
+      expect(sanitize('ドラゴンクエスト\u2160・\u2161 公式ガイドブック')).toBe('ドラゴンクエストI II 公式ガイドブック');
+      expect(sanitize('ドラゴンクエスト\u2160・\u2161 公式ガイドブック')).not.toBe(sanitize('ドラゴンクエスト\u2162 公式ガイドブック'));
+      expect(sanitize('Star Wars Episode \u2160\u2013\u2162')).toBe('Star Wars Episode I III');
+      expect(sanitize('Star Wars Episode \u2160\u2013\u2162')).not.toBe(sanitize('Star Wars Episode \u2163'));
+    });
+
+    it.each([
+      ['ドラゴンクエスト\u2160・\u2161', 'ドラゴンクエストI II'],
+      ['化学\u2160・\u2161の新研究', '化学I IIの新研究'],
+      ['\u2160・\u2161・\u2162', 'I II III'],
+      ['三体\u2161·黑暗森林', '三体II 黑暗森林'],
+      ['第\u2161・１巻', '第II 1巻'],
+      ['Star Wars Episode \u2160\u2013\u2162', 'Star Wars Episode I III'],
+      ['Episodes \u2163\u2013\u2165', 'Episodes IV VI'],
+      ['\u2170·\u2171', 'i ii'],
+      // Numerals in a row are one number (ⅩⅢ is 13), and a Latin letter or an ASCII digit beside one leaves the
+      // punctuation dropped, as beside a fullwidth digit
+      ['\u2169\u2162', 'XIII'],
+      ['Part\u2013\u2161', 'PartII'],
+      ['\u2161\u2013B', 'IIB'],
+      ['\u2161·2', 'II2'],
+      ['Henry \u2167\u2019s Wives', 'Henry VIIIs Wives'],
+      // A modifier letter after a numeral is dropped, as it is after the ASCII letters the numeral becomes
+      ['ドラゴンクエスト\u2161\u30FC', 'ドラゴンクエストII'],
+    ])('should turn punctuation between Roman numerals into a space: %j', (input, expected) => {
+      // They are Latin, but written in ASCII two of them would run into another numeral, as the digits of 第１・２巻
+      // would run into another number
+      expect(sanitize(input)).toBe(expected);
     });
 
     it.each([
@@ -311,6 +339,12 @@ describe('pattern-resolver', () => {
       '\uD801\uDF80\u0301',
       '\uD837\uDF00\u0301\u200C\u0628',
       '三体\u2161·黑暗',
+      'ドラゴンクエスト\u2160・\u2161',
+      '\u2160・\u2161・\u2162',
+      'Episode \u2160\u2013\u2162',
+      'Part\u2013\u2161',
+      '\u2161\u30FC\u00B7\u30B3',
+      '\u2161\u200D\u4E2D',
     ])('should give a stable NFC result for %j', input => {
       const once = sanitize(input);
       expect(sanitize(once)).toBe(once);
@@ -386,7 +420,16 @@ describe('pattern-resolver', () => {
       ["inside non-Latin text", "中\uFB01文", "中fi文"],
       ["Roman numerals", "Henry \u2167", "Henry VIII"],
       ["Roman numeral in a Japanese title", "ドラゴンクエスト\u2162", "ドラゴンクエストIII"],
-      ["Roman numeral before Chinese punctuation, which is Latin", "三体\u2161·黑暗森林", "三体II黑暗森林"],
+      // Roman numerals count as numbers, though Latin, so that two of them do not run into another one
+      ["Roman numeral before Chinese punctuation", "三体\u2161·黑暗森林", "三体II 黑暗森林"],
+      ["between Roman numerals in a Japanese title", "ドラゴンクエスト\u2160・\u2161", "ドラゴンクエストI II"],
+      ["between Roman numerals in a Latin title", "Episode \u2160\u2013\u2162", "Episode I III"],
+      ["between small Roman numerals", "\u2170\u00B7\u2171", "i ii"],
+      ["between a Roman numeral and a fullwidth digit", "第\u2161・\uFF11巻", "第II 1巻"],
+      ["Roman numerals in a row, which are one number", "\u2169\u2162", "XIII"],
+      ["Roman numeral next to a Latin word", "Part\u2013\u2161", "PartII"],
+      ["Roman numeral next to an ASCII digit", "\u2161\u00B72", "II2"],
+      ["modifier letter after a Roman numeral", "ドラゴンクエスト\u2161\u30FC", "ドラゴンクエストII"],
       // and the rest are left as they were
       ["ligature that is not plain ASCII stays a letter", "\u01C4", "\u01C4"],
       ["parenthesized letters, which are more than letters", "A\u249C\u249DB", "AB"],
@@ -464,6 +507,27 @@ describe('pattern-resolver', () => {
           expect.fail(`sanitizing ${JSON.stringify(name)} gave ${JSON.stringify(once)}, then ${JSON.stringify(sanitize(once))}`);
         }
       }
+    });
+
+    it('should clean random ASCII names as before', () => {
+      // They take a shorter way than other names, which must come to the same, as on the server
+      // (PathPatternResolverScriptTest.randomAsciiNames_comeOutAsTheyDidWhenEveryNonAsciiCodePointWasDropped)
+      const next = random(20261021);
+      const ascii = Array.from({length: 0x80}, (_, c) => String.fromCharCode(c));
+      for (let i = 0; i < 20000; i++) {
+        // Letters around it, so the name is never empty
+        const name = `a${randomName(next, ascii)}a`;
+        if (sanitize(name) !== asciiOnlySanitize(name)) {
+          expect.fail(`sanitizing ${JSON.stringify(name)} gave ${JSON.stringify(sanitize(name))}, not ${JSON.stringify(asciiOnlySanitize(name))}`);
+        }
+      }
+    });
+
+    it('should give the same names once the character classes it keeps have been forgotten', () => {
+      const before = SHARED_SANITIZE_CASES.map(([, input]) => sanitize(input));
+      // More different characters than it keeps the classes of (CJK ideographs from U+4E00)
+      sanitize(Array.from({length: 12000}, (_, i) => String.fromCodePoint(0x4E00 + i)).join(''));
+      expect(SHARED_SANITIZE_CASES.map(([, input]) => sanitize(input))).toEqual(before);
     });
 
     it('should clean random Latin names as before', () => {

@@ -335,13 +335,13 @@ public class PathPatternResolver {
      * 1. NFD-decompose accented characters so combining marks become separate code points
      *    (e.g. é → e + ́, ñ → n + ̃).
      * 2. Write each letter that is only another form of ASCII letters as those (its NFKC form):
-     *    ligatures (ﬁ → fi), fullwidth and mathematical letters (Ａ → A, 𝐁𝐨𝐥𝐝 → Bold), circled and
-     *    squared letters (Ⓐ 🄰 → A) and Roman numerals (Ⅷ → VIII, so that ドラゴンクエストⅡ and Ⅲ
-     *    keep apart). Superscript and subscript letters, the ordinal indicators among them (ª º ᵉ ⁿ),
-     *    are left for step 5 to drop like the superscript digits (² ³), as they were when every
-     *    non-ASCII code point was dropped: "Nº 5" and "451º Fahrenheit" keep their names. Other
-     *    numbers (½ ①), symbols that spell letters (™ №) and the letters that are emoji (ℹ Ⓜ) are
-     *    dropped by step 5 too, as they always were.
+     *    ligatures (ﬁ → fi), fullwidth and mathematical letters (Ａ → A, 𝐁𝐨𝐥𝐝 → Bold) and circled and
+     *    squared letters (Ⓐ 🄰 → A). The numbers that are another form of ASCII ones (１ 𝟏 Ⅷ) are
+     *    written in ASCII by step 5. Superscript and subscript letters, the ordinal indicators among
+     *    them (ª º ᵉ ⁿ), are left for step 5 to drop like the superscript digits (² ³), as they were
+     *    when every non-ASCII code point was dropped: "Nº 5" and "451º Fahrenheit" keep their names.
+     *    Other numbers (½ ①), symbols that spell letters (™ №) and the letters that are emoji (ℹ Ⓜ)
+     *    are dropped by step 5 too, as they always were.
      * 3. Strip the marks that sit on Latin letters, leaving the base letter.
      * 4. Turn every Unicode space separator (no-break, ideographic, thin spaces) into a space.
      * 5. Keep every ASCII character, and of the rest only what names are spelt with: letters,
@@ -349,7 +349,8 @@ public class PathPatternResolver {
      *    on those letters (Japanese が, Devanagari vowel signs and Cyrillic й are a letter plus a mark,
      *    not an accent), and the zero-width (non-)joiners between non-Latin letters that Persian and
      *    Indic text need. A digit that is only another form of an ASCII digit (fullwidth １,
-     *    mathematical 𝟏) is written as that digit. A modifier letter that belongs to no script
+     *    mathematical 𝟏) is written as that digit, and a Roman numeral as its ASCII letters (Ⅷ → VIII,
+     *    so that ドラゴンクエストⅡ and Ⅲ keep apart). A modifier letter that belongs to no script
      *    (ー ـ ʼ ˈ) is kept only where it follows a non-Latin letter or digit, as in コーヒー, and is
      *    dropped next to Latin text (Winterʼs → Winters). Punctuation (’ – « »), symbols and emoji,
      *    control and format characters (bidi marks, zero-width space, soft hyphen), lone surrogates
@@ -357,12 +358,14 @@ public class PathPatternResolver {
      *    Punctuation or a symbol whose nearest kept neighbours on both sides are non-Latin letters or
      *    digits becomes a space instead, so that it keeps the words apart (三体·黑暗森林 → 三体 黑暗森林).
      *    ASCII neighbours do not count, but a fullwidth digit does, though it is written in ASCII
-     *    (第１・２巻 → 第1 2巻), and what steps 6 and 7 remove is looked through (なぜ?・どうして →
-     *    なぜ どうして). Punctuation that sits inside a word or a number is dropped all the same:
-     *    apostrophes (п’ять → пять), the Armenian question mark over a vowel (Ինչո՞ւ → Ինչու), the Arabic
-     *    thousands separator (١٬٠٠٠ → ١٠٠٠) and the spacing dakuten (ト゛ → ト).
+     *    (第１・２巻 → 第1 2巻), and so does a Roman numeral, though it is Latin: dropped, the
+     *    punctuation would run two numerals into another one (ドラゴンクエストⅠ・Ⅱ → ドラゴンクエストI II,
+     *    not the III of ドラゴンクエストⅢ; Episode Ⅰ–Ⅲ → Episode I III). What steps 6 and 7 remove is
+     *    looked through (なぜ?・どうして → なぜ どうして). Punctuation that sits inside a word or a number
+     *    is dropped all the same: apostrophes (п’ять → пять), the Armenian question mark over a vowel
+     *    (Ինչո՞ւ → Ինչու), the Arabic thousands separator (١٬٠٠٠ → ١٠٠٠) and the spacing dakuten (ト゛ → ト).
      *    Apart from the spaces of step 4, from letters with no accent to strip (ø, ł, æ, ß), which are
-     *    now kept, and from the letters and digits written in ASCII, Latin text so comes out as it did
+     *    now kept, and from the letters and numbers written in ASCII, Latin text so comes out as it did
      *    when every non-ASCII code point was dropped.
      * 6. Remove filesystem-illegal characters (\ / : * ? " < > |).
      * 7. Remove control characters.
@@ -385,8 +388,8 @@ public class PathPatternResolver {
 
     /**
      * Step 2 of {@link #sanitize}. It runs before accents are stripped, so that a mark on a
-     * mathematical letter (𝐀 + ́) is stripped from the A it becomes. Digits are written in ASCII
-     * later, by {@link #keepNameCharacters} (see {@link #asciiDigitOf}).
+     * mathematical letter (𝐀 + ́) is stripped from the A it becomes. Digits and Roman numerals are
+     * written in ASCII later, by {@link #keepNameCharacters} (see {@link #asciiNumberOf}).
      */
     private String writeCompatibilityFormsInAscii(String decomposed) {
         StringBuilder written = new StringBuilder(decomposed.length());
@@ -402,34 +405,37 @@ public class PathPatternResolver {
     }
 
     /**
-     * The ASCII letters a non-ASCII letter, Roman numeral or circled letter stands for, or null when it is
-     * more than a form of them, or a superscript or subscript letter.
+     * The ASCII letters a non-ASCII letter or circled letter stands for, or null when it is more than a
+     * form of them, or a superscript or subscript letter.
      */
     private String asciiFormOf(int codePoint) {
         if (codePoint < 0x80 || Character.isExtendedPictographic(codePoint) || isSuperscriptOrSubscriptLetter(codePoint)) {
             return null;
         }
-        int type = Character.getType(codePoint);
         boolean letter = Character.isLetter(codePoint)
-                // Roman numerals (Ⅷ) are letter numbers
-                || type == Character.LETTER_NUMBER
                 // Circled and squared Latin letters (Ⓐ 🄰) are symbols, but alphabetic ones
-                || (type == Character.OTHER_SYMBOL && Character.isAlphabetic(codePoint));
+                || (Character.getType(codePoint) == Character.OTHER_SYMBOL && Character.isAlphabetic(codePoint));
         return letter ? asciiCompatibilityForm(codePoint) : null;
     }
 
     /**
-     * The ASCII digit a non-ASCII decimal digit is only another form of (fullwidth １, mathematical 𝟏), or -1.
-     * Unlike letters, digits are written in ASCII only once {@link #punctuationBetweenNonLatinWords} has seen
-     * them as the non-Latin digits they are, so that 第１・２巻 keeps its numbers apart (第1 2巻) the way
-     * 三体·黑暗 keeps its words.
+     * The ASCII a non-ASCII number is only another form of, or null: the digit of a fullwidth or mathematical
+     * digit (１ 𝟏 → 1) and the letters of a Roman numeral (Ⅷ → VIII, ⅻ → xii). Unlike letters, these are
+     * written in ASCII only once {@link #punctuationBetweenNonLatinWords} has seen them as the numbers they
+     * are, so that 第１・２巻 keeps its numbers apart (第1 2巻) the way 三体·黑暗 keeps its words, and
+     * ドラゴンクエストⅠ・Ⅱ does not become the III of ドラゴンクエストⅢ (ドラゴンクエストI II).
      */
-    private int asciiDigitOf(int codePoint) {
-        if (codePoint < 0x80 || Character.getType(codePoint) != Character.DECIMAL_DIGIT_NUMBER) {
-            return -1;
+    private String asciiNumberOf(int codePoint) {
+        if (codePoint < 0x80) {
+            return null;
         }
-        String compatible = asciiCompatibilityForm(codePoint);
-        return compatible != null && compatible.length() == 1 ? compatible.charAt(0) : -1;
+        int type = Character.getType(codePoint);
+        if (type == Character.DECIMAL_DIGIT_NUMBER) {
+            String compatible = asciiCompatibilityForm(codePoint);
+            return compatible != null && compatible.length() == 1 ? compatible : null;
+        }
+        // Only the Roman numerals are letter numbers whose NFKC form is ASCII
+        return type == Character.LETTER_NUMBER ? asciiCompatibilityForm(codePoint) : null;
     }
 
     /** The NFKC form of {@code codePoint} when it is ASCII letters and digits only, or null. */
@@ -456,7 +462,7 @@ public class PathPatternResolver {
      * Steps 4 and 5 of {@link #sanitize}, on decomposed text. A combining mark belongs to the
      * code point before it, so it is kept only along with a letter (or the mark or joiner that
      * follows one), never moved onto whatever came before a dropped emoji or symbol. The digits
-     * that are another form of ASCII ones are written in ASCII here.
+     * and Roman numerals that are another form of ASCII ones are written in ASCII here.
      */
     private String keepNameCharacters(String decomposed) {
         int[] codePoints = decomposed.codePoints().toArray();
@@ -473,8 +479,14 @@ public class PathPatternResolver {
             } else if (isCommonModifierLetter(codePoint)) {
                 keep = keptModifiers[i];
             } else if (isKeptOnItsOwn(codePoint)) {
-                int asciiDigit = asciiDigitOf(codePoint);
-                codePoint = Character.isSpaceChar(codePoint) ? ' ' : asciiDigit >= 0 ? asciiDigit : codePoint;
+                String asciiNumber = asciiNumberOf(codePoint);
+                if (asciiNumber != null) {
+                    // All but the last of its ASCII characters (Ⅻ → XII), which is appended below
+                    kept.append(asciiNumber, 0, asciiNumber.length() - 1);
+                    codePoint = asciiNumber.charAt(asciiNumber.length() - 1);
+                } else if (Character.isSpaceChar(codePoint)) {
+                    codePoint = ' ';
+                }
                 keep = true;
             } else if (isMark(codePoint)) {
                 keep = previousTakesMarks;
@@ -505,8 +517,9 @@ public class PathPatternResolver {
             if (isCommonModifierLetter(codePoint)) {
                 kept[i] = inNonLatinWord;
             } else if (!isMark(codePoint) && !isJoiner(codePoint)) {
-                // A fullwidth digit is written in ASCII, after which a modifier letter would not be kept the next time
-                inNonLatinWord = isNonLatinLetterOrDigit(codePoint) && asciiDigitOf(codePoint) < 0;
+                // A fullwidth digit or Roman numeral is written in ASCII, after which a modifier letter would not be kept
+                // the next time
+                inNonLatinWord = isNonLatinLetterOrNumber(codePoint) && asciiNumberOf(codePoint) == null;
             }
         }
         return kept;
@@ -520,8 +533,11 @@ public class PathPatternResolver {
      * {@link #sanitize} remove (なぜ?・どうして) are looked through. An ASCII character that stays (a
      * space, a digit, a Latin letter) or a non-ASCII Latin letter on either side leaves it dropped as
      * it always was, so Latin names do not change. A fullwidth or mathematical digit counts as the
-     * non-Latin digit it is, though it is then written in ASCII (第１・２巻 → 第1 2巻). Punctuation
-     * that sits inside a word or a number ({@link #IN_WORD_PUNCTUATION}) is always dropped.
+     * non-Latin digit it is, though it is then written in ASCII (第１・２巻 → 第1 2巻), and so does a
+     * Roman numeral, though it is Latin (ドラゴンクエストⅠ・Ⅱ → ドラゴンクエストI II, Episode Ⅰ–Ⅲ →
+     * Episode I III): written in ASCII, two numerals the punctuation no longer kept apart would run into
+     * another one (III, the name of ドラゴンクエストⅢ). Punctuation that sits inside a word or a number
+     * ({@link #IN_WORD_PUNCTUATION}) is always dropped.
      */
     private boolean[] punctuationBetweenNonLatinWords(int[] codePoints, boolean[] keptModifiers) {
         int length = codePoints.length;
@@ -530,7 +546,7 @@ public class PathPatternResolver {
         for (int i = 0; i < length; i++) {
             afterNonLatin[i] = nonLatin;
             if (staysInTheName(codePoints[i], keptModifiers[i])) {
-                nonLatin = keptModifiers[i] || isNonLatinLetterOrDigit(codePoints[i]);
+                nonLatin = keptModifiers[i] || isNonLatinLetterOrNumber(codePoints[i]);
             }
         }
         boolean[] spaced = new boolean[length];
@@ -538,7 +554,7 @@ public class PathPatternResolver {
         for (int i = length - 1; i >= 0; i--) {
             spaced[i] = afterNonLatin[i] && nonLatin && separatesWords(codePoints[i]);
             if (staysInTheName(codePoints[i], keptModifiers[i])) {
-                nonLatin = keptModifiers[i] || isNonLatinLetterOrDigit(codePoints[i]);
+                nonLatin = keptModifiers[i] || isNonLatinLetterOrNumber(codePoints[i]);
             }
         }
         return spaced;
@@ -609,10 +625,11 @@ public class PathPatternResolver {
     }
 
     /**
-     * ASCII, letters, decimal digits, the letter numbers of scripts other than Latin (〇) and space
-     * separators: kept whatever surrounds them. Modifier letters of the Common script depend on what
-     * they follow; the letters that are emoji (ℹ) are dropped with the other emoji, and the
-     * superscript and subscript letters (ª º ᵉ) with the superscript digits.
+     * ASCII, letters, decimal digits, the letter numbers of scripts other than Latin (〇), the Roman
+     * numerals that are ASCII letters (Ⅷ) and space separators: kept whatever surrounds them. Modifier
+     * letters of the Common script depend on what they follow; the letters that are emoji (ℹ) are
+     * dropped with the other emoji, and the superscript and subscript letters (ª º ᵉ) with the
+     * superscript digits.
      */
     private boolean isKeptOnItsOwn(int codePoint) {
         if (codePoint < 0x80) {
@@ -625,7 +642,7 @@ public class PathPatternResolver {
         }
         int type = Character.getType(codePoint);
         return type == Character.DECIMAL_DIGIT_NUMBER
-                || (type == Character.LETTER_NUMBER && isOfANonLatinScript(codePoint))
+                || (type == Character.LETTER_NUMBER && (isOfANonLatinScript(codePoint) || asciiNumberOf(codePoint) != null))
                 || Character.isSpaceChar(codePoint);
     }
 
@@ -656,13 +673,14 @@ public class PathPatternResolver {
 
     /**
      * A non-ASCII letter, decimal digit or letter number kept on its own that is not Latin: Arabic, CJK,
-     * Cyrillic or Devanagari, say, and the fullwidth digits.
+     * Cyrillic or Devanagari, say, and the fullwidth digits. The Roman numerals count too, though they are
+     * Latin, as numbers that written in ASCII would run into the next (see {@link #punctuationBetweenNonLatinWords}).
      */
-    private boolean isNonLatinLetterOrDigit(int codePoint) {
+    private boolean isNonLatinLetterOrNumber(int codePoint) {
         return codePoint >= 0x80
                 && isKeptOnItsOwn(codePoint)
                 && !Character.isSpaceChar(codePoint)
-                && Character.UnicodeScript.of(codePoint) != Character.UnicodeScript.LATIN;
+                && (Character.UnicodeScript.of(codePoint) != Character.UnicodeScript.LATIN || asciiNumberOf(codePoint) != null);
     }
 
     private String truncateAuthorsForFilesystem(String authors) {

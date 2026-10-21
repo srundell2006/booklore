@@ -1,6 +1,8 @@
 const MODIFIER_PLACEHOLDER_REGEX = /\{([^}:]+)(?::([^}]+))?}/g;
 const LATIN_ACCENT_REGEX = /(?<=\p{Script=Latin})\p{M}+/gu;
 const ASCII_REGEX = /\p{ASCII}/u;
+// eslint-disable-next-line no-control-regex
+const ASCII_ONLY_REGEX = /^[\x00-\x7F]*$/;
 const ASCII_LETTERS_AND_DIGITS_REGEX = /^[A-Za-z0-9]+$/;
 const SPACE_SEPARATOR_REGEX = /\p{Z}/u;
 const LETTER_REGEX = /\p{L}/u;
@@ -147,10 +149,10 @@ export function resolveFilePath(pattern: string, values: Record<string, string>,
  * so the preview shows the name the server will write.
  *
  * A letter that is only another form of ASCII letters is written as them (its NFKC form): ligatures
- * (ﬁ → fi), fullwidth and mathematical letters (Ａ → A, 𝐁𝐨𝐥𝐝 → Bold), circled and squared letters
- * (Ⓐ 🄰 → A) and Roman numerals (Ⅷ → VIII, so that ドラゴンクエストⅡ and Ⅲ keep apart), and so is
- * a digit that is only another form of an ASCII one (fullwidth １, mathematical 𝟏). Superscript and
- * subscript letters, the ordinal indicators among them (ª º ᵉ ⁿ), are dropped like the superscript
+ * (ﬁ → fi), fullwidth and mathematical letters (Ａ → A, 𝐁𝐨𝐥𝐝 → Bold) and circled and squared letters
+ * (Ⓐ 🄰 → A), and so is a number that is only another form of ASCII: a fullwidth or mathematical digit
+ * (１ 𝟏 → 1) and a Roman numeral (Ⅷ → VIII, so that ドラゴンクエストⅡ and Ⅲ keep apart). Superscript
+ * and subscript letters, the ordinal indicators among them (ª º ᵉ ⁿ), are dropped like the superscript
  * digits (² ³), as they were when every non-ASCII code point was dropped: "Nº 5" and "451º Fahrenheit"
  * keep their names. Other numbers (½ ①), symbols that spell letters (™ №) and the letters that are
  * emoji (ℹ Ⓜ) are dropped too, as they always were.
@@ -165,23 +167,32 @@ export function resolveFilePath(pattern: string, values: Record<string, string>,
  * and ASCII control characters. Punctuation or a symbol whose nearest kept neighbours on both sides
  * are non-Latin letters or digits becomes a space instead, so that it keeps the words apart
  * (三体·黑暗森林 → 三体 黑暗森林). ASCII neighbours do not count, but a fullwidth digit does, though
- * it is written in ASCII (第１・２巻 → 第1 2巻), and the illegal and control characters removed are
- * looked through (なぜ?・どうして → なぜ どうして). Punctuation that sits inside a word or a number is
- * dropped all the same: apostrophes (п’ять → пять), the Armenian question mark over a vowel
- * (Ինչո՞ւ → Ինչու), the Arabic thousands separator (١٬٠٠٠ → ١٠٠٠) and the spacing dakuten
- * (ト゛ → ト). Latin names so come out as they did when every non-ASCII code point was dropped, but
- * for Unicode spaces, Latin letters with no accent to strip (ø ł æ ß) and the ASCII forms above.
+ * it is written in ASCII (第１・２巻 → 第1 2巻), and so does a Roman numeral, though it is Latin:
+ * dropped, the punctuation would run two numerals into another one (ドラゴンクエストⅠ・Ⅱ →
+ * ドラゴンクエストI II, not the III of ドラゴンクエストⅢ; Episode Ⅰ–Ⅲ → Episode I III). The illegal
+ * and control characters removed are looked through (なぜ?・どうして → なぜ どうして). Punctuation
+ * that sits inside a word or a number is dropped all the same: apostrophes (п’ять → пять), the
+ * Armenian question mark over a vowel (Ինչո՞ւ → Ինչու), the Arabic thousands separator (١٬٠٠٠ → ١٠٠٠)
+ * and the spacing dakuten (ト゛ → ト). Latin names so come out as they did when every non-ASCII code
+ * point was dropped, but for Unicode spaces, Latin letters with no accent to strip (ø ł æ ß) and the
+ * ASCII forms above.
  *
  * Like the backend, it decides what to keep on the decomposed text and recomposes only at the end,
  * so a symbol that decomposes to ASCII plus a mark keeps the ASCII part (≠ → =), as it did when
  * every non-ASCII code point was dropped. Sanitizing a sanitized value returns it unchanged.
+ *
+ * The move preview sanitizes several values of every book it shows, so a value that is ASCII once
+ * decomposed, as most are, skips the steps that only change what is not ASCII, and the Unicode
+ * properties of each other character are looked up once (classOf) rather than at every step.
  */
 export function sanitize(input: string | null | undefined): string {
   if (!input) return '';
-  const decomposed = writeCompatibilityFormsInAscii(input.normalize('NFD'));
-  // Strip accents from Latin letters: drop the combining marks that follow them
-  const unaccented = decomposed.replace(LATIN_ACCENT_REGEX, '');
-  return keepNameCharacters(unaccented)
+  const decomposed = input.normalize('NFD');
+  const kept = ASCII_ONLY_REGEX.test(decomposed)
+    ? decomposed
+    // Strip accents from Latin letters: drop the combining marks that follow them
+    : keepNameCharacters(writeCompatibilityFormsInAscii(decomposed).replace(LATIN_ACCENT_REGEX, ''));
+  return kept
     .replace(INVALID_CHARS_REGEX, '')
     .replace(CONTROL_CHARS_REGEX, '')
     .normalize('NFC')
@@ -189,44 +200,102 @@ export function sanitize(input: string | null | undefined): string {
     .trim();
 }
 
-/**
- * Writes each letter that is only another form of ASCII letters as those, as the backend's
- * writeCompatibilityFormsInAscii does. It runs before accents are stripped, so that a mark on a
- * mathematical letter (𝐀 + ́) is stripped from the A it becomes. Digits are written in ASCII later,
- * by keepNameCharacters (see asciiDigitOf).
- */
-function writeCompatibilityFormsInAscii(decomposed: string): string {
-  return Array.from(decomposed, char => asciiFormOf(char) ?? char).join('');
+/** What sanitize needs to know of a character, from the Unicode property tests below, which are slow to repeat. */
+interface CharacterClass {
+  /** The ASCII letters writeCompatibilityFormsInAscii writes it as (asciiFormOf), or null. */
+  asciiLetters: string | null;
+  /** The ASCII keepNameCharacters writes it as (asciiNumberOf), or null. */
+  asciiNumber: string | null;
+  keptOnItsOwn: boolean;
+  /** Kept on its own and not removed afterwards as an illegal or control character. */
+  staysOnItsOwn: boolean;
+  space: boolean;
+  letter: boolean;
+  mark: boolean;
+  joiner: boolean;
+  commonModifierLetter: boolean;
+  nonLatinLetter: boolean;
+  nonLatinLetterOrNumber: boolean;
+  separatesWords: boolean;
+}
+
+// The classes of the characters seen so far. A library's names hold only so many different characters, but should
+// unusual names fill it, it is emptied rather than left to grow.
+const CHARACTER_CLASSES = new Map<string, CharacterClass>();
+const MAX_CHARACTER_CLASSES = 10_000;
+
+function classOf(char: string): CharacterClass {
+  let found = CHARACTER_CLASSES.get(char);
+  if (found === undefined) {
+    if (CHARACTER_CLASSES.size >= MAX_CHARACTER_CLASSES) {
+      CHARACTER_CLASSES.clear();
+    }
+    const keptOnItsOwn = isKeptOnItsOwn(char);
+    found = {
+      asciiLetters: asciiFormOf(char),
+      asciiNumber: asciiNumberOf(char),
+      keptOnItsOwn,
+      staysOnItsOwn: keptOnItsOwn && !REMOVED_LATER_REGEX.test(char),
+      space: SPACE_SEPARATOR_REGEX.test(char),
+      letter: LETTER_REGEX.test(char),
+      mark: isMark(char),
+      joiner: isJoiner(char),
+      commonModifierLetter: isCommonModifierLetter(char),
+      nonLatinLetter: isNonLatinLetter(char),
+      nonLatinLetterOrNumber: isNonLatinLetterOrNumber(char),
+      separatesWords: separatesWords(char),
+    };
+    CHARACTER_CLASSES.set(char, found);
+  }
+  return found;
 }
 
 /**
- * The ASCII letters a non-ASCII letter, Roman numeral or circled letter stands for, or null when it is
- * more than a form of them, or a superscript or subscript letter.
+ * Writes each letter that is only another form of ASCII letters as those, as the backend's
+ * writeCompatibilityFormsInAscii does. It runs before accents are stripped, so that a mark on a
+ * mathematical letter (𝐀 + ́) is stripped from the A it becomes. Digits and Roman numerals are
+ * written in ASCII later, by keepNameCharacters (see asciiNumberOf).
+ */
+function writeCompatibilityFormsInAscii(decomposed: string): string {
+  let written = '';
+  for (const char of decomposed) {
+    written += classOf(char).asciiLetters ?? char;
+  }
+  return written;
+}
+
+/**
+ * The ASCII letters a non-ASCII letter or circled letter stands for, or null when it is more than a
+ * form of them, or a superscript or subscript letter.
  */
 function asciiFormOf(char: string): string | null {
   if (ASCII_REGEX.test(char) || EMOJI_REGEX.test(char) || isSuperscriptOrSubscriptLetter(char)) {
     return null;
   }
   const letter = LETTER_REGEX.test(char)
-    // Roman numerals (Ⅷ) are letter numbers
-    || LETTER_NUMBER_REGEX.test(char)
     // Circled and squared Latin letters (Ⓐ 🄰) are symbols, but alphabetic ones
     || (OTHER_SYMBOL_REGEX.test(char) && ALPHABETIC_REGEX.test(char));
   return letter ? asciiCompatibilityForm(char) : null;
 }
 
 /**
- * The ASCII digit a non-ASCII decimal digit is only another form of (fullwidth １, mathematical 𝟏), or
- * null. Unlike letters, digits are written in ASCII only once punctuationBetweenNonLatinWords has seen
- * them as the non-Latin digits they are, so that 第１・２巻 keeps its numbers apart (第1 2巻) the way
- * 三体·黑暗 keeps its words.
+ * The ASCII a non-ASCII number is only another form of, or null: the digit of a fullwidth or
+ * mathematical digit (１ 𝟏 → 1) and the letters of a Roman numeral (Ⅷ → VIII, ⅻ → xii), as the
+ * backend's asciiNumberOf decides. Unlike letters, these are written in ASCII only once
+ * punctuationBetweenNonLatinWords has seen them as the numbers they are, so that 第１・２巻 keeps its
+ * numbers apart (第1 2巻) the way 三体·黑暗 keeps its words, and ドラゴンクエストⅠ・Ⅱ does not
+ * become the III of ドラゴンクエストⅢ (ドラゴンクエストI II).
  */
-function asciiDigitOf(char: string): string | null {
-  if (ASCII_REGEX.test(char) || !DECIMAL_DIGIT_REGEX.test(char)) {
+function asciiNumberOf(char: string): string | null {
+  if (ASCII_REGEX.test(char)) {
     return null;
   }
-  const compatible = asciiCompatibilityForm(char);
-  return compatible?.length === 1 ? compatible : null;
+  if (DECIMAL_DIGIT_REGEX.test(char)) {
+    const compatible = asciiCompatibilityForm(char);
+    return compatible?.length === 1 ? compatible : null;
+  }
+  // Only the Roman numerals are letter numbers whose NFKC form is ASCII
+  return LETTER_NUMBER_REGEX.test(char) ? asciiCompatibilityForm(char) : null;
 }
 
 /** The NFKC form of char when it is ASCII letters and digits only, or null. */
@@ -250,93 +319,98 @@ function isSuperscriptOrSubscriptLetter(char: string): boolean {
  * Keeps ASCII, letters, decimal digits, the letter numbers of other scripts and Unicode spaces (as
  * plain spaces), as the backend's keepNameCharacters does. A combining mark belongs to the code point
  * before it, so it is kept only along with a letter (or the mark or joiner that follows one), never
- * moved onto whatever came before a dropped emoji or symbol. The digits that are another form of
- * ASCII ones are written in ASCII here.
+ * moved onto whatever came before a dropped emoji or symbol. The digits and Roman numerals that are
+ * another form of ASCII ones are written in ASCII here.
  */
 function keepNameCharacters(decomposed: string): string {
   const chars = Array.from(decomposed);
-  const keptModifiers = modifierLettersOfNonLatinWords(chars);
-  const spaced = punctuationBetweenNonLatinWords(chars, keptModifiers);
-  const kept: string[] = [];
+  const classes = chars.map(classOf);
+  const keptModifiers = modifierLettersOfNonLatinWords(classes);
+  const spaced = punctuationBetweenNonLatinWords(classes, keptModifiers);
+  let kept = '';
+  // What was written last: a character, a space, or the ASCII of a number
+  let lastWritten: string | undefined;
   let previousTakesMarks = false;
   for (let i = 0; i < chars.length; i++) {
-    let char = chars[i];
-    let keep = false;
+    const char = chars[i];
+    const charClass = classes[i];
+    let written: string | null = null;
     if (spaced[i]) {
-      char = ' ';
-      keep = true;
-    } else if (isCommonModifierLetter(char)) {
-      keep = keptModifiers[i];
-    } else if (isKeptOnItsOwn(char)) {
-      char = SPACE_SEPARATOR_REGEX.test(char) ? ' ' : asciiDigitOf(char) ?? char;
-      keep = true;
-    } else if (isMark(char)) {
-      keep = previousTakesMarks;
-    } else if (isJoiner(char)) {
-      keep = joinsNonLatinLetters(kept, chars, i, keptModifiers, spaced);
+      written = ' ';
+    } else if (charClass.commonModifierLetter) {
+      written = keptModifiers[i] ? char : null;
+    } else if (charClass.keptOnItsOwn) {
+      written = charClass.space ? ' ' : charClass.asciiNumber ?? char;
+    } else if (charClass.mark) {
+      written = previousTakesMarks ? char : null;
+    } else if (charClass.joiner) {
+      written = joinsNonLatinLetters(lastWritten, classes, i, keptModifiers, spaced) ? char : null;
     }
-    if (keep) {
-      kept.push(char);
+    if (written !== null) {
+      kept += written;
+      lastWritten = written;
     }
-    previousTakesMarks = keep && (LETTER_REGEX.test(char) || isMark(char) || isJoiner(char));
+    previousTakesMarks = written !== null && (written === char
+      ? charClass.letter || charClass.mark || charClass.joiner
+      // A space, or the ASCII of a number: letters for a Roman numeral (XII)
+      : LETTER_REGEX.test(written));
   }
-  return kept.join('');
+  return kept;
 }
 
 /**
- * Which of chars are modifier letters of the Common script (ー ـ ʼ) kept as part of a non-Latin
+ * Which characters are modifier letters of the Common script (ー ـ ʼ) kept as part of a non-Latin
  * word: those that follow a non-Latin letter or digit with nothing but marks, joiners and other such
  * modifier letters between (コーヒー, ｶﾞｰﾙ, Ukrainian мʼята). Anywhere else, next to Latin letters,
  * ASCII, punctuation or a space, they are dropped as they always were.
  */
-function modifierLettersOfNonLatinWords(chars: string[]): boolean[] {
-  const kept = new Array<boolean>(chars.length).fill(false);
+function modifierLettersOfNonLatinWords(classes: CharacterClass[]): boolean[] {
+  const kept = new Array<boolean>(classes.length).fill(false);
   let inNonLatinWord = false;
-  chars.forEach((char, i) => {
-    if (isCommonModifierLetter(char)) {
+  classes.forEach((charClass, i) => {
+    if (charClass.commonModifierLetter) {
       kept[i] = inNonLatinWord;
-    } else if (!isMark(char) && !isJoiner(char)) {
-      // A fullwidth digit is written in ASCII, after which a modifier letter would not be kept the next time
-      inNonLatinWord = isNonLatinLetterOrDigit(char) && asciiDigitOf(char) === null;
+    } else if (!charClass.mark && !charClass.joiner) {
+      // A fullwidth digit or Roman numeral is written in ASCII, after which a modifier letter would not be kept the
+      // next time
+      inNonLatinWord = charClass.nonLatinLetterOrNumber && charClass.asciiNumber === null;
     }
   });
   return kept;
 }
 
 /**
- * Which of chars are non-ASCII punctuation or symbols that become a space: those whose nearest kept
+ * Which characters are non-ASCII punctuation or symbols that become a space: those whose nearest kept
  * neighbours on both sides are non-Latin letters or digits (or the marks and modifier letters kept
  * with them), so that "三体·黑暗森林" and "東京・大阪" keep their words apart. Marks, joiners, other
  * punctuation, whatever is dropped and the illegal and control characters removed afterwards
  * (なぜ?・どうして) are looked through. An ASCII character that stays (a space, a digit, a Latin
  * letter) or a non-ASCII Latin letter on either side leaves it dropped as it always was, so Latin
  * names do not change. A fullwidth or mathematical digit counts as the non-Latin digit it is, though
- * it is then written in ASCII (第１・２巻 → 第1 2巻). Punctuation that sits inside a word or a number
- * (IN_WORD_PUNCTUATION) is always dropped.
+ * it is then written in ASCII (第１・２巻 → 第1 2巻), and so does a Roman numeral, though it is Latin
+ * (ドラゴンクエストⅠ・Ⅱ → ドラゴンクエストI II, Episode Ⅰ–Ⅲ → Episode I III): written in ASCII, two
+ * numerals the punctuation no longer kept apart would run into another one (III, the name of
+ * ドラゴンクエストⅢ). Punctuation that sits inside a word or a number (IN_WORD_PUNCTUATION) is always
+ * dropped.
  */
-function punctuationBetweenNonLatinWords(chars: string[], keptModifiers: boolean[]): boolean[] {
-  const afterNonLatin = new Array<boolean>(chars.length).fill(false);
+function punctuationBetweenNonLatinWords(classes: CharacterClass[], keptModifiers: boolean[]): boolean[] {
+  const afterNonLatin = new Array<boolean>(classes.length).fill(false);
   let nonLatin = false;
-  for (let i = 0; i < chars.length; i++) {
+  for (let i = 0; i < classes.length; i++) {
     afterNonLatin[i] = nonLatin;
-    if (staysInTheName(chars[i], keptModifiers[i])) {
-      nonLatin = keptModifiers[i] || isNonLatinLetterOrDigit(chars[i]);
+    if (keptModifiers[i] || classes[i].staysOnItsOwn) {
+      nonLatin = keptModifiers[i] || classes[i].nonLatinLetterOrNumber;
     }
   }
-  const spaced = new Array<boolean>(chars.length).fill(false);
+  const spaced = new Array<boolean>(classes.length).fill(false);
   nonLatin = false;
-  for (let i = chars.length - 1; i >= 0; i--) {
-    spaced[i] = afterNonLatin[i] && nonLatin && separatesWords(chars[i]);
-    if (staysInTheName(chars[i], keptModifiers[i])) {
-      nonLatin = keptModifiers[i] || isNonLatinLetterOrDigit(chars[i]);
+  for (let i = classes.length - 1; i >= 0; i--) {
+    spaced[i] = afterNonLatin[i] && nonLatin && classes[i].separatesWords;
+    if (keptModifiers[i] || classes[i].staysOnItsOwn) {
+      nonLatin = keptModifiers[i] || classes[i].nonLatinLetterOrNumber;
     }
   }
   return spaced;
-}
-
-/** Whether char is in the sanitized name: kept by keepNameCharacters and not removed afterwards. */
-function staysInTheName(char: string, keptModifier: boolean): boolean {
-  return keptModifier || (isKeptOnItsOwn(char) && !REMOVED_LATER_REGEX.test(char));
 }
 
 /** Non-ASCII punctuation, symbols and emoji, but for the punctuation that sits inside a word or a number. */
@@ -350,45 +424,44 @@ function separatesWords(char: string): boolean {
 
 /**
  * Whether the zero-width (non-)joiner at index sits between non-Latin letters or marks once
- * dropped characters are gone. Persian and Indic text need it there; anywhere else it is invisible
- * noise that Latin names never had.
+ * dropped characters are gone, previous being what keepNameCharacters wrote before it. Persian and
+ * Indic text need it there; anywhere else it is invisible noise that Latin names never had.
  */
-function joinsNonLatinLetters(kept: string[], chars: string[], index: number, keptModifiers: boolean[], spaced: boolean[]): boolean {
-  const previous = kept[kept.length - 1];
+function joinsNonLatinLetters(previous: string | undefined, classes: CharacterClass[], index: number, keptModifiers: boolean[], spaced: boolean[]): boolean {
   if (previous === undefined || (!isNonLatinLetter(previous) && !isMark(previous))) {
     return false;
   }
   let skippedDropped = false;
-  for (let i = index + 1; i < chars.length; i++) {
-    const next = chars[i];
+  for (let i = index + 1; i < classes.length; i++) {
+    const next = classes[i];
     if (spaced[i]) {
       // Punctuation that becomes a space ends the word
       return false;
-    } else if (isMark(next)) {
+    } else if (next.mark) {
       if (!skippedDropped) {
         // The mark sits on the joiner itself (Sinhala touching letters) and is kept with it
         return true;
       }
       // Dropped along with the character it sits on
-    } else if (isCommonModifierLetter(next)) {
+    } else if (next.commonModifierLetter) {
       if (keptModifiers[i]) {
         return true;
       }
       skippedDropped = true;
-    } else if (!isKeptOnItsOwn(next) && !isJoiner(next)) {
+    } else if (!next.keptOnItsOwn && !next.joiner) {
       skippedDropped = true;
     } else {
-      return isNonLatinLetter(next);
+      return next.nonLatinLetter;
     }
   }
   return false;
 }
 
 /**
- * ASCII, letters, decimal digits, the letter numbers of scripts other than Latin (〇) and space
- * separators: kept whatever surrounds them. Modifier letters of the Common script depend on what they
- * follow; the letters that are emoji (ℹ) are dropped with the other emoji, and the superscript and
- * subscript letters (ª º ᵉ) with the superscript digits.
+ * ASCII, letters, decimal digits, the letter numbers of scripts other than Latin (〇), the Roman
+ * numerals that are ASCII letters (Ⅷ) and space separators: kept whatever surrounds them. Modifier
+ * letters of the Common script depend on what they follow; the letters that are emoji (ℹ) are dropped
+ * with the other emoji, and the superscript and subscript letters (ª º ᵉ) with the superscript digits.
  */
 function isKeptOnItsOwn(char: string): boolean {
   if (ASCII_REGEX.test(char)) {
@@ -398,7 +471,8 @@ function isKeptOnItsOwn(char: string): boolean {
     return !isCommonModifierLetter(char) && !EMOJI_REGEX.test(char) && !isSuperscriptOrSubscriptLetter(char);
   }
   return DECIMAL_DIGIT_REGEX.test(char)
-    || (LETTER_NUMBER_REGEX.test(char) && !LATIN_REGEX.test(char) && !COMMON_SCRIPT_REGEX.test(char))
+    || (LETTER_NUMBER_REGEX.test(char)
+      && ((!LATIN_REGEX.test(char) && !COMMON_SCRIPT_REGEX.test(char)) || asciiNumberOf(char) !== null))
     || SPACE_SEPARATOR_REGEX.test(char);
 }
 
@@ -421,13 +495,14 @@ function isNonLatinLetter(char: string): boolean {
 
 /**
  * A non-ASCII letter, decimal digit or letter number kept on its own that is not Latin: Arabic, CJK,
- * Cyrillic or Devanagari, say, and the fullwidth digits.
+ * Cyrillic or Devanagari, say, and the fullwidth digits. The Roman numerals count too, though they are
+ * Latin, as numbers that written in ASCII would run into the next (see punctuationBetweenNonLatinWords).
  */
-function isNonLatinLetterOrDigit(char: string): boolean {
+function isNonLatinLetterOrNumber(char: string): boolean {
   return !ASCII_REGEX.test(char)
     && isKeptOnItsOwn(char)
     && !SPACE_SEPARATOR_REGEX.test(char)
-    && !LATIN_REGEX.test(char);
+    && (!LATIN_REGEX.test(char) || asciiNumberOf(char) !== null);
 }
 
 /**
