@@ -33,13 +33,15 @@ public class LibraryWatchService {
     public LibraryWatchService(LibraryFileEventProcessor eventProcessor) throws IOException {
         this.eventProcessor = eventProcessor;
         this.watchService = FileSystems.getDefault().newWatchService();
+        // Platform threads, as both make calls on library storage: on JDK 25 a virtual thread blocked in a file call keeps
+        // its carrier, so a wedged network share would stall every virtual thread in the application.
         this.registrationExecutor = Executors.newSingleThreadExecutor(
-                Thread.ofVirtual().name("watch-registrar").factory());
+                Thread.ofPlatform().daemon(true).name("watch-registrar").factory());
     }
 
     @PostConstruct
     public void start() {
-        Thread.ofVirtual().name("watch-poll").start(this::pollLoop);
+        Thread.ofPlatform().daemon(true).name("watch-poll").start(this::pollLoop);
     }
 
     private void pollLoop() {

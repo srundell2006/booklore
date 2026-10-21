@@ -8,15 +8,23 @@ import lombok.extern.slf4j.Slf4j;
 
 import java.io.File;
 import java.io.IOException;
+import java.nio.file.DirectoryIteratorException;
+import java.nio.file.DirectoryStream;
 import java.nio.file.Files;
+import java.nio.file.NoSuchFileException;
+import java.nio.file.NotDirectoryException;
 import java.nio.file.Path;
 import java.util.Arrays;
 import java.util.Comparator;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.List;
+import java.util.Locale;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 import java.util.regex.Pattern;
+import java.util.stream.Stream;
 
 @UtilityClass
 @Slf4j
@@ -86,17 +94,19 @@ public class FileUtils {
                 log.warn("Folder does not exist or is not a directory: {}", folderPath.toAbsolutePath());
                 return null;
             }
-            long totalBytes = Files.walk(folderPath)
-                    .filter(Files::isRegularFile)
-                    .mapToLong(p -> {
-                        try {
-                            return Files.size(p);
-                        } catch (IOException e) {
-                            return 0L;
-                        }
-                    })
-                    .sum();
-            return totalBytes / 1024;
+            try (Stream<Path> walk = Files.walk(folderPath)) {
+                long totalBytes = walk
+                        .filter(Files::isRegularFile)
+                        .mapToLong(p -> {
+                            try {
+                                return Files.size(p);
+                            } catch (IOException e) {
+                                return 0L;
+                            }
+                        })
+                        .sum();
+                return totalBytes / 1024;
+            }
         } catch (IOException e) {
             log.error("Failed to get folder size for path [{}]: {}", folderPath, e.getMessage(), e);
             return null;
@@ -111,11 +121,13 @@ public class FileUtils {
             if (!Files.exists(folderPath) || !Files.isDirectory(folderPath)) {
                 return Optional.empty();
             }
-            return Files.list(folderPath)
-                    .filter(Files::isRegularFile)
-                    .filter(p -> isAudioFile(p.getFileName().toString()))
-                    .sorted(Comparator.comparing(p -> p.getFileName().toString()))
-                    .findFirst();
+            try (Stream<Path> children = Files.list(folderPath)) {
+                return children
+                        .filter(Files::isRegularFile)
+                        .filter(p -> isAudioFile(p.getFileName().toString()))
+                        .sorted(Comparator.comparing(p -> p.getFileName().toString()))
+                        .findFirst();
+            }
         } catch (IOException e) {
             log.error("Failed to list folder [{}]: {}", folderPath, e.getMessage(), e);
             return Optional.empty();
@@ -125,28 +137,87 @@ public class FileUtils {
     private static final List<String> COVER_IMAGE_BASENAMES = List.of("cover", "folder", "image");
     private static final List<String> IMAGE_EXTENSIONS = List.of("jpg", "jpeg", "png", "webp", "gif", "bmp");
 
+    // A folder with more entries than this is probed name by name instead of listed
+    private static final int COVER_LISTING_LIMIT = 1024;
+
     /**
      * Find a cover image file in a folder by looking for well-known filenames
      * (cover, folder, image) with common image extensions.
+     * <p>
+     * The folder is listed once and the names are matched as {@link #findCoverImageInNames} does, so on network
+     * storage this costs one listing and one check of the chosen file instead of a lookup per candidate name. A folder
+     * with more than {@value #COVER_LISTING_LIMIT} entries, or one that cannot be listed, is probed name by name.
      */
     public Optional<Path> findCoverImageInFolder(Path folderPath) {
+        if (folderPath == null) {
+            return Optional.empty();
+        }
         try {
-            if (folderPath == null || !Files.exists(folderPath) || !Files.isDirectory(folderPath)) {
-                return Optional.empty();
-            }
-            for (String baseName : COVER_IMAGE_BASENAMES) {
-                for (String ext : IMAGE_EXTENSIONS) {
-                    Path candidate = folderPath.resolve(baseName + "." + ext);
-                    if (Files.isRegularFile(candidate)) {
-                        return Optional.of(candidate);
+            Set<String> names = new HashSet<>();
+            try (DirectoryStream<Path> entries = Files.newDirectoryStream(folderPath)) {
+                for (Path entry : entries) {
+                    if (names.size() == COVER_LISTING_LIMIT) {
+                        return probeCoverImageInFolder(folderPath);
                     }
+                    names.add(entry.getFileName().toString());
                 }
+            } catch (NoSuchFileException | NotDirectoryException e) {
+                return Optional.empty();
+            } catch (IOException | DirectoryIteratorException e) {
+                return probeCoverImageInFolder(folderPath);
+            }
+            // A listed name can belong to a directory, so each pick is checked before it is returned
+            Optional<Path> candidate;
+            while ((candidate = findCoverImageInNames(folderPath, names)).isPresent()) {
+                if (Files.isRegularFile(candidate.get())) {
+                    return candidate;
+                }
+                names.remove(candidate.get().getFileName().toString());
             }
             return Optional.empty();
         } catch (Exception e) {
             log.error("Failed to find cover image in folder [{}]: {}", folderPath, e.getMessage(), e);
             return Optional.empty();
         }
+    }
+
+    /**
+     * The cover image among the names of a folder's files, without touching the filesystem. Takes the first of the
+     * well-known names (cover, folder, image, each with jpg, jpeg, png, webp, gif and bmp in turn) that is present,
+     * compared case-insensitively as SMB shares compare names. A name in exactly that case is preferred.
+     */
+    public Optional<Path> findCoverImageInNames(Path folderPath, Set<String> names) {
+        Map<String, String> byLowerCase = new HashMap<>();
+        for (String name : names) {
+            // The first in sort order wins among names that differ only in case, so the pick does not depend on
+            // the order of the set
+            byLowerCase.merge(name.toLowerCase(Locale.ROOT), name, (a, b) -> a.compareTo(b) <= 0 ? a : b);
+        }
+        for (String baseName : COVER_IMAGE_BASENAMES) {
+            for (String ext : IMAGE_EXTENSIONS) {
+                String wanted = baseName + "." + ext;
+                if (names.contains(wanted)) {
+                    return Optional.of(folderPath.resolve(wanted));
+                }
+                String sameIgnoringCase = byLowerCase.get(wanted);
+                if (sameIgnoringCase != null) {
+                    return Optional.of(folderPath.resolve(sameIgnoringCase));
+                }
+            }
+        }
+        return Optional.empty();
+    }
+
+    private Optional<Path> probeCoverImageInFolder(Path folderPath) {
+        for (String baseName : COVER_IMAGE_BASENAMES) {
+            for (String ext : IMAGE_EXTENSIONS) {
+                Path candidate = folderPath.resolve(baseName + "." + ext);
+                if (Files.isRegularFile(candidate)) {
+                    return Optional.of(candidate);
+                }
+            }
+        }
+        return Optional.empty();
     }
 
     /**
@@ -166,11 +237,13 @@ public class FileUtils {
             if (!Files.exists(folderPath) || !Files.isDirectory(folderPath)) {
                 return List.of();
             }
-            return Files.list(folderPath)
-                    .filter(Files::isRegularFile)
-                    .filter(p -> isAudioFile(p.getFileName().toString()))
-                    .sorted(Comparator.comparing(p -> p.getFileName().toString()))
-                    .toList();
+            try (Stream<Path> children = Files.list(folderPath)) {
+                return children
+                        .filter(Files::isRegularFile)
+                        .filter(p -> isAudioFile(p.getFileName().toString()))
+                        .sorted(Comparator.comparing(p -> p.getFileName().toString()))
+                        .toList();
+            }
         } catch (IOException e) {
             log.error("Failed to list audio files in folder [{}]: {}", folderPath, e.getMessage(), e);
             return List.of();

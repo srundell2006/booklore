@@ -8,6 +8,7 @@ import java.security.MessageDigest;
 import java.security.NoSuchAlgorithmException;
 import java.util.Comparator;
 import java.util.List;
+import java.util.stream.Stream;
 
 public class FileFingerprint {
 
@@ -52,20 +53,32 @@ public class FileFingerprint {
                 throw new RuntimeException("Folder does not exist: " + folderPath);
             }
 
-            List<Path> audioFiles = Files.list(folderPath)
-                    .filter(Files::isRegularFile)
-                    .filter(p -> isAudioFile(p.getFileName().toString()))
-                    .sorted(Comparator.comparing(p -> p.getFileName().toString()))
-                    .toList();
+            List<Path> audioFiles;
+            try (Stream<Path> children = Files.list(folderPath)) {
+                audioFiles = children
+                        .filter(Files::isRegularFile)
+                        .filter(p -> isAudioFile(p.getFileName().toString()))
+                        .sorted(Comparator.comparing(p -> p.getFileName().toString()))
+                        .toList();
+            }
 
             if (audioFiles.isEmpty()) {
                 throw new RuntimeException("No audio files in folder: " + folderPath);
             }
 
             // Hash first file and combine with file count for a representative hash
-            String firstFileHash = generateHash(audioFiles.getFirst());
-            int fileCount = audioFiles.size();
+            return folderHash(generateHash(audioFiles.getFirst()), audioFiles.size());
 
+        } catch (IOException e) {
+            throw new RuntimeException("Failed to compute folder hash for: " + folderPath, e);
+        }
+    }
+
+    /**
+     * The hash of a folder-based audiobook from the hash of its first audio file and its number of audio files.
+     */
+    public static String folderHash(String firstFileHash, int fileCount) {
+        try {
             MessageDigest md5 = MessageDigest.getInstance("MD5");
             md5.update(firstFileHash.getBytes());
             md5.update(String.valueOf(fileCount).getBytes());
@@ -76,9 +89,8 @@ public class FileFingerprint {
                 result.append(String.format("%02x", b));
             }
             return result.toString();
-
-        } catch (IOException | NoSuchAlgorithmException e) {
-            throw new RuntimeException("Failed to compute folder hash for: " + folderPath, e);
+        } catch (NoSuchAlgorithmException e) {
+            throw new IllegalStateException("MD5 is not available", e);
         }
     }
 

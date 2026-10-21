@@ -9,7 +9,9 @@ import org.apache.commons.io.FilenameUtils;
 import org.booklore.model.dto.BookMetadata;
 import org.booklore.model.dto.ComicMetadata;
 import org.booklore.util.ArchiveUtils;
+import org.booklore.util.CbxArchive;
 import org.booklore.util.UnrarHelper;
+import org.booklore.util.cover.CoverImages;
 import org.springframework.stereotype.Component;
 import org.w3c.dom.Document;
 import org.w3c.dom.NodeList;
@@ -50,78 +52,36 @@ public class CbxMetadataExtractor implements FileMetadataExtractor {
     @Override
     public BookMetadata extractMetadata(File file) {
         String baseName = FilenameUtils.getBaseName(file.getName());
-        ArchiveUtils.ArchiveType type = ArchiveUtils.detectArchiveType(file);
-
-        // CBZ path (ZIP)
-        if (type == ArchiveUtils.ArchiveType.ZIP) {
-            try (ZipFile zipFile = new ZipFile(file)) {
-                ZipEntry entry = findComicInfoEntry(zipFile);
-                if (entry == null) {
-                    return BookMetadata.builder().title(baseName).build();
-                }
-                try (InputStream is = zipFile.getInputStream(entry)) {
-                    Document document = buildSecureDocument(is);
-                    return mapDocumentToMetadata(document, baseName);
-                }
-            } catch (Exception e) {
-                log.warn("Failed to extract metadata from CBZ", e);
-                return BookMetadata.builder().title(baseName).build();
-            }
+        try (CbxArchive archive = CbxArchive.open(file, ArchiveUtils.detectArchiveType(file))) {
+            return extractMetadata(archive, baseName);
+        } catch (Exception e) {
+            log.warn("Failed to open comic archive {}: {}", file.getName(), e.getMessage());
+            return BookMetadata.builder().title(baseName).build();
         }
+    }
 
-        // CB7 path (7z)
-        if (type == ArchiveUtils.ArchiveType.SEVEN_ZIP) {
-            try (SevenZFile sevenZ = SevenZFile.builder().setFile(file).get()) {
-                SevenZArchiveEntry entry = findSevenZComicInfoEntry(sevenZ);
-                if (entry == null) {
-                    return BookMetadata.builder().title(baseName).build();
-                }
-                byte[] xmlBytes = readSevenZEntryBytes(sevenZ, entry);
-                if (xmlBytes == null) {
-                    return BookMetadata.builder().title(baseName).build();
-                }
-                try (InputStream is = new ByteArrayInputStream(xmlBytes)) {
-                    Document document = buildSecureDocument(is);
-                    return mapDocumentToMetadata(document, baseName);
-                }
-            } catch (Exception e) {
-                log.warn("Failed to extract metadata from CB7", e);
-                return BookMetadata.builder().title(baseName).build();
-            }
+    /**
+     * Reads ComicInfo.xml from an archive the caller already has open, so that a scan can take
+     * the cover and the metadata from a single open. The first ComicInfo.xml in archive order is
+     * used, in any folder and in any case.
+     *
+     * @param fallbackTitle title used when there is no ComicInfo.xml, it has no Title, or it cannot be read
+     */
+    public BookMetadata extractMetadata(CbxArchive archive, String fallbackTitle) {
+        String comicInfoName = archive.fileNames().stream()
+                .filter(CbxMetadataExtractor::isComicInfoName)
+                .findFirst()
+                .orElse(null);
+        if (comicInfoName == null) {
+            return BookMetadata.builder().title(fallbackTitle).build();
         }
-
-        // CBR path (RAR)
-        if (type == ArchiveUtils.ArchiveType.RAR) {
-            try (Archive archive = new Archive(file)) {
-                try {
-                    FileHeader header = findComicInfoHeader(archive);
-                    if (header == null) {
-                        return BookMetadata.builder().title(baseName).build();
-                    }
-                    byte[] xmlBytes = readRarEntryBytes(archive, header);
-                    if (xmlBytes == null) {
-                        return BookMetadata.builder().title(baseName).build();
-                    }
-                    try (InputStream is = new ByteArrayInputStream(xmlBytes)) {
-                        Document document = buildSecureDocument(is);
-                        return mapDocumentToMetadata(document, baseName);
-                    }
-                } catch (Exception e) {
-                    log.warn("Failed to extract metadata from CBR", e);
-                    return BookMetadata.builder().title(baseName).build();
-                }
-            } catch (Exception e) {
-                if (UnrarHelper.isAvailable()) {
-                    log.info("junrar failed for {}, falling back to unrar CLI: {}", file.getName(), e.getMessage());
-                    try {
-                        return extractMetadataFromRarViaCli(file.toPath(), baseName);
-                    } catch (Exception ex) {
-                        log.warn("unrar CLI fallback also failed for {}", file.getName(), ex);
-                    }
-                }
-            }
+        try (InputStream is = new ByteArrayInputStream(archive.readEntry(comicInfoName))) {
+            Document document = buildSecureDocument(is);
+            return mapDocumentToMetadata(document, fallbackTitle);
+        } catch (Exception e) {
+            log.warn("Failed to extract metadata from {} in comic archive", comicInfoName, e);
+            return BookMetadata.builder().title(fallbackTitle).build();
         }
-        return BookMetadata.builder().title(baseName).build();
     }
 
     private ZipEntry findComicInfoEntry(ZipFile zipFile) {
@@ -776,9 +736,8 @@ public class CbxMetadataExtractor implements FileMetadataExtractor {
 
     private boolean canDecode(byte[] bytes) {
         if (bytes == null || bytes.length == 0) return false;
-        try (ByteArrayInputStream bais = new ByteArrayInputStream(bytes)) {
-            BufferedImage img = ImageIO.read(bais);
-            return img != null;
+        try {
+            return CoverImages.canDecode(bytes);
         } catch (IOException e) {
             return false;
         }
@@ -1144,25 +1103,6 @@ public class CbxMetadataExtractor implements FileMetadataExtractor {
         if (n.endsWith("/")) return false;
         String lower = n.toLowerCase();
         return "comicinfo.xml".equals(lower) || lower.endsWith("/comicinfo.xml");
-    }
-
-    private BookMetadata extractMetadataFromRarViaCli(Path rarPath, String baseName) throws Exception {
-        List<String> entries = UnrarHelper.listEntries(rarPath);
-        String comicInfoEntry = entries.stream()
-                .filter(CbxMetadataExtractor::isComicInfoName)
-                .findFirst()
-                .orElse(null);
-        if (comicInfoEntry == null) {
-            return BookMetadata.builder().title(baseName).build();
-        }
-        byte[] xmlBytes = UnrarHelper.extractEntryBytes(rarPath, comicInfoEntry);
-        if (xmlBytes == null || xmlBytes.length == 0) {
-            return BookMetadata.builder().title(baseName).build();
-        }
-        try (InputStream is = new ByteArrayInputStream(xmlBytes)) {
-            Document document = buildSecureDocument(is);
-            return mapDocumentToMetadata(document, baseName);
-        }
     }
 
     private byte[] extractCoverFromRarViaCli(Path rarPath) throws Exception {

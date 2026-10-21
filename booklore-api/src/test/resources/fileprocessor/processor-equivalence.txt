@@ -1,0 +1,1862 @@
+### epub with metadata and cover
+book:
+  addedOn: <set>
+  bookCoverHash: <set>
+  bookFiles:
+      -:
+        addedOn: <set>
+        bookType: EPUB
+        currentHash: <hash of the book file>
+        fileName: book.epub
+        fileSizeKb: 34
+        fileSubPath: Author/Book
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+      -:
+        addedOn: <set>
+        bookType: EPUB
+        currentHash: <hash of the book file>
+        fileName: book.epub
+        fileSizeKb: 34
+        fileSubPath: Author/Book
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+  deleted: false
+  id: 7
+  isComic: false
+  isPhysical: false
+  library: <the library's>
+  libraryPath: <the library's>
+  metadata:
+    abridgedLocked: false
+    ageRating: 16
+    ageRatingLocked: false
+    amazonRatingLocked: false
+    amazonReviewCountLocked: false
+    asinLocked: false
+    audibleIdLocked: false
+    audibleRatingLocked: false
+    audibleReviewCountLocked: false
+    audiobookCoverLocked: false
+    authors:
+        -: Jane Doe
+        -: John Roe
+    authorsLocked: false
+    categories:
+        -: Adventure
+        -: Fiction
+    categoriesLocked: false
+    comicvineIdLocked: false
+    contentRatingLocked: false
+    coverLocked: false
+    coverUpdatedOn: <set>
+    description: A book made for tests.
+    descriptionLocked: false
+    goodreadsId: 12345
+    goodreadsIdLocked: false
+    goodreadsRatingLocked: false
+    goodreadsReviewCountLocked: false
+    googleIdLocked: false
+    hardcoverBookIdLocked: false
+    hardcoverIdLocked: false
+    hardcoverRatingLocked: false
+    hardcoverReviewCountLocked: false
+    isbn10Locked: false
+    isbn13: 9780306406157
+    isbn13Locked: false
+    language: en
+    languageLocked: false
+    lubimyczytacIdLocked: false
+    lubimyczytacRatingLocked: false
+    moods:
+        -: Dark
+        -: Tense
+    moodsLocked: false
+    narratorLocked: false
+    pageCount: 321
+    pageCountLocked: false
+    publishedDate: 2020-05-17
+    publishedDateLocked: false
+    publisher: Fixture House
+    publisherLocked: false
+    ranobedbIdLocked: false
+    ranobedbRatingLocked: false
+    reviews: []
+    reviewsLocked: false
+    searchText: the fixture book a subtitle fixture series jane doe john roe
+    seriesName: Fixture Series
+    seriesNameLocked: false
+    seriesNumber: 3.0
+    seriesNumberLocked: false
+    seriesTotalLocked: false
+    subtitle: A Subtitle
+    subtitleLocked: false
+    tags:
+        -: Favourite
+    tagsLocked: false
+    title: The Fixture Book
+    titleChangedByAutoFetch: false
+    titleLocked: false
+  metadataMatchScore: 68.085106
+images:
+  cover.jpg b3be46ba25314031335b4cf38f6500445827afc8204805bbec1e37d6a10d50e3
+  thumbnail.jpg f7fd7a4db2481a205cdb254f04078d2eac8a8fabac980448f96637712886cec8
+### epub in a folder per book with only a folder cover
+book:
+  addedOn: <set>
+  bookCoverHash: <set>
+  bookFiles:
+      -:
+        addedOn: <set>
+        bookType: EPUB
+        currentHash: <hash of the book file>
+        fileName: book.epub
+        fileSizeKb: 0
+        fileSubPath: Author/Book
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+      -:
+        addedOn: <set>
+        bookType: EPUB
+        currentHash: <hash of the book file>
+        fileName: book.epub
+        fileSizeKb: 0
+        fileSubPath: Author/Book
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+  deleted: false
+  id: 7
+  isComic: false
+  isPhysical: false
+  library: <the library's>
+  libraryPath: <the library's>
+  metadata:
+    abridgedLocked: false
+    ageRatingLocked: false
+    amazonRatingLocked: false
+    amazonReviewCountLocked: false
+    asinLocked: false
+    audibleIdLocked: false
+    audibleRatingLocked: false
+    audibleReviewCountLocked: false
+    audiobookCoverLocked: false
+    authorsLocked: false
+    categoriesLocked: false
+    comicvineIdLocked: false
+    contentRatingLocked: false
+    coverLocked: false
+    coverUpdatedOn: <set>
+    descriptionLocked: false
+    goodreadsIdLocked: false
+    goodreadsRatingLocked: false
+    goodreadsReviewCountLocked: false
+    googleIdLocked: false
+    hardcoverBookIdLocked: false
+    hardcoverIdLocked: false
+    hardcoverRatingLocked: false
+    hardcoverReviewCountLocked: false
+    isbn10Locked: false
+    isbn13Locked: false
+    language: en
+    languageLocked: false
+    lubimyczytacIdLocked: false
+    lubimyczytacRatingLocked: false
+    moodsLocked: false
+    narratorLocked: false
+    pageCountLocked: false
+    publishedDateLocked: false
+    publisherLocked: false
+    ranobedbIdLocked: false
+    ranobedbRatingLocked: false
+    reviews: []
+    reviewsLocked: false
+    seriesNameLocked: false
+    seriesNumberLocked: false
+    seriesTotalLocked: false
+    subtitleLocked: false
+    tagsLocked: false
+    title: Folder Cover
+    titleChangedByAutoFetch: false
+    titleLocked: false
+  metadataMatchScore: 18.085106
+images:
+  cover.jpg f9e2bb11d5c7921cec630dab34ff6d361332214617fbeb5280b038a7e136188a
+  thumbnail.jpg ac51f116ddeea536e076e615ce9a73cf7c7ea3824ed3b95adea4635d5a18a4b3
+### epub with an extremely tall cover, smart cropping on
+book:
+  addedOn: <set>
+  bookCoverHash: <set>
+  bookFiles:
+      -:
+        addedOn: <set>
+        bookType: EPUB
+        currentHash: <hash of the book file>
+        fileName: tall.epub
+        fileSizeKb: 71
+        fileSubPath: 
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+      -:
+        addedOn: <set>
+        bookType: EPUB
+        currentHash: <hash of the book file>
+        fileName: tall.epub
+        fileSizeKb: 71
+        fileSubPath: 
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+  deleted: false
+  id: 7
+  isComic: false
+  isPhysical: false
+  library: <the library's>
+  libraryPath: <the library's>
+  metadata:
+    abridgedLocked: false
+    ageRatingLocked: false
+    amazonRatingLocked: false
+    amazonReviewCountLocked: false
+    asinLocked: false
+    audibleIdLocked: false
+    audibleRatingLocked: false
+    audibleReviewCountLocked: false
+    audiobookCoverLocked: false
+    authorsLocked: false
+    categoriesLocked: false
+    comicvineIdLocked: false
+    contentRatingLocked: false
+    coverLocked: false
+    coverUpdatedOn: <set>
+    descriptionLocked: false
+    goodreadsIdLocked: false
+    goodreadsRatingLocked: false
+    goodreadsReviewCountLocked: false
+    googleIdLocked: false
+    hardcoverBookIdLocked: false
+    hardcoverIdLocked: false
+    hardcoverRatingLocked: false
+    hardcoverReviewCountLocked: false
+    isbn10Locked: false
+    isbn13Locked: false
+    language: en
+    languageLocked: false
+    lubimyczytacIdLocked: false
+    lubimyczytacRatingLocked: false
+    moodsLocked: false
+    narratorLocked: false
+    pageCountLocked: false
+    publishedDateLocked: false
+    publisherLocked: false
+    ranobedbIdLocked: false
+    ranobedbRatingLocked: false
+    reviews: []
+    reviewsLocked: false
+    seriesNameLocked: false
+    seriesNumberLocked: false
+    seriesTotalLocked: false
+    subtitleLocked: false
+    tagsLocked: false
+    title: Tall
+    titleChangedByAutoFetch: false
+    titleLocked: false
+  metadataMatchScore: 18.085106
+images:
+  cover.jpg 0f2baec50ef0d21969836a64754a0688013202e55445443be6c122c93a2d92d0
+  thumbnail.jpg 6327e42cff2e7e2b375403cbe36b2041071d331162e5763c1682cf6239cdd9a4
+### epub already in the library
+book:
+  addedOn: <set>
+  bookCoverHash: <set>
+  bookFiles:
+      -:
+        addedOn: <set>
+        bookType: EPUB
+        currentHash: <hash of the book file>
+        fileName: book.epub
+        fileSizeKb: 33
+        fileSubPath: Author/Book
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+      -:
+        addedOn: <set>
+        bookType: EPUB
+        currentHash: <hash of the book file>
+        fileName: book.epub
+        fileSizeKb: 33
+        fileSubPath: Author/Book
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+  deleted: false
+  id: 7
+  isComic: false
+  isPhysical: false
+  library: <the library's>
+  libraryPath: <the library's>
+  metadata:
+    abridgedLocked: false
+    ageRating: 16
+    ageRatingLocked: false
+    amazonRatingLocked: false
+    amazonReviewCountLocked: false
+    asinLocked: false
+    audibleIdLocked: false
+    audibleRatingLocked: false
+    audibleReviewCountLocked: false
+    audiobookCoverLocked: false
+    authors:
+        -: Jane Doe
+        -: John Roe
+    authorsLocked: false
+    bookId: 7
+    categories:
+        -: Adventure
+        -: Fiction
+    categoriesLocked: false
+    comicvineIdLocked: false
+    contentRatingLocked: false
+    coverLocked: false
+    coverUpdatedOn: <set>
+    description: A book made for tests.
+    descriptionLocked: false
+    goodreadsId: 12345
+    goodreadsIdLocked: false
+    goodreadsRatingLocked: false
+    goodreadsReviewCountLocked: false
+    googleIdLocked: false
+    hardcoverBookIdLocked: false
+    hardcoverIdLocked: false
+    hardcoverRatingLocked: false
+    hardcoverReviewCountLocked: false
+    isbn10Locked: false
+    isbn13: 9780306406157
+    isbn13Locked: false
+    language: en
+    languageLocked: false
+    lubimyczytacIdLocked: false
+    lubimyczytacRatingLocked: false
+    moods:
+        -: Dark
+        -: Tense
+    moodsLocked: false
+    narratorLocked: false
+    pageCount: 321
+    pageCountLocked: false
+    publishedDate: 2020-05-17
+    publishedDateLocked: false
+    publisher: Fixture House
+    publisherLocked: false
+    ranobedbIdLocked: false
+    ranobedbRatingLocked: false
+    reviews: []
+    reviewsLocked: false
+    searchText: the fixture book a subtitle fixture series jane doe john roe
+    seriesName: Fixture Series
+    seriesNameLocked: false
+    seriesNumber: 3.0
+    seriesNumberLocked: false
+    seriesTotalLocked: false
+    subtitle: A Subtitle
+    subtitleLocked: false
+    tags:
+        -: Favourite
+    tagsLocked: false
+    title: The Fixture Book
+    titleChangedByAutoFetch: false
+    titleLocked: false
+  metadataMatchScore: 68.085106
+images:
+  cover.jpg 8662b125a0c66fe9b74babf21b9103553138a3931edab9052439a6042de9e6dc
+  thumbnail.jpg 37d295e2d5ec40cfc25ca655b02c2d4e424f5a091544dc3a40aeff2949048e4b
+### epub with the sidecar written on scan
+book:
+  addedOn: <set>
+  bookCoverHash: <set>
+  bookFiles:
+      -:
+        addedOn: <set>
+        bookType: EPUB
+        currentHash: <hash of the book file>
+        fileName: book.epub
+        fileSizeKb: 33
+        fileSubPath: Author/Book
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+      -:
+        addedOn: <set>
+        bookType: EPUB
+        currentHash: <hash of the book file>
+        fileName: book.epub
+        fileSizeKb: 33
+        fileSubPath: Author/Book
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+  deleted: false
+  id: 7
+  isComic: false
+  isPhysical: false
+  library: <the library's>
+  libraryPath: <the library's>
+  metadata:
+    abridgedLocked: false
+    ageRating: 16
+    ageRatingLocked: false
+    amazonRatingLocked: false
+    amazonReviewCountLocked: false
+    asinLocked: false
+    audibleIdLocked: false
+    audibleRatingLocked: false
+    audibleReviewCountLocked: false
+    audiobookCoverLocked: false
+    authors:
+        -: Jane Doe
+        -: John Roe
+    authorsLocked: false
+    categories:
+        -: Adventure
+        -: Fiction
+    categoriesLocked: false
+    comicvineIdLocked: false
+    contentRatingLocked: false
+    coverLocked: false
+    coverUpdatedOn: <set>
+    description: A book made for tests.
+    descriptionLocked: false
+    goodreadsId: 12345
+    goodreadsIdLocked: false
+    goodreadsRatingLocked: false
+    goodreadsReviewCountLocked: false
+    googleIdLocked: false
+    hardcoverBookIdLocked: false
+    hardcoverIdLocked: false
+    hardcoverRatingLocked: false
+    hardcoverReviewCountLocked: false
+    isbn10Locked: false
+    isbn13: 9780306406157
+    isbn13Locked: false
+    language: en
+    languageLocked: false
+    lubimyczytacIdLocked: false
+    lubimyczytacRatingLocked: false
+    moods:
+        -: Dark
+        -: Tense
+    moodsLocked: false
+    narratorLocked: false
+    pageCount: 321
+    pageCountLocked: false
+    publishedDate: 2020-05-17
+    publishedDateLocked: false
+    publisher: Fixture House
+    publisherLocked: false
+    ranobedbIdLocked: false
+    ranobedbRatingLocked: false
+    reviews: []
+    reviewsLocked: false
+    searchText: the fixture book a subtitle fixture series jane doe john roe
+    seriesName: Fixture Series
+    seriesNameLocked: false
+    seriesNumber: 3.0
+    seriesNumberLocked: false
+    seriesTotalLocked: false
+    subtitle: A Subtitle
+    subtitleLocked: false
+    tags:
+        -: Favourite
+    tagsLocked: false
+    title: The Fixture Book
+    titleChangedByAutoFetch: false
+    titleLocked: false
+  metadataMatchScore: 68.085106
+images:
+  cover.jpg c35d82f3724cf6788d6ce98a35d64f6417e83f8e5c3e7cfbb50e00b1b2f2affe
+  thumbnail.jpg d471306d94779986ceb22e52d3a927af1f308da11be816397973702cf6d57115
+sidecar:
+  {
+    "version": "1.0",
+    "generatedAt": <set>,
+    "generatedBy": "booklore",
+    "metadata": {
+      "title": "The Fixture Book",
+      "subtitle": "A Subtitle",
+      "authors": [ "Jane Doe", "John Roe" ],
+      "publisher": "Fixture House",
+      "publishedDate": "2020-05-17",
+      "description": "A book made for tests.",
+      "isbn13": "9780306406157",
+      "language": "en",
+      "pageCount": 321,
+      "categories": [ "Adventure", "Fiction" ],
+      "moods": [ "Tense", "Dark" ],
+      "tags": [ "Favourite" ],
+      "series": {
+        "name": "Fixture Series",
+        "number": 3.0
+      },
+      "identifiers": {
+        "goodreadsId": "12345"
+      },
+      "ratings": { },
+      "ageRating": 16
+    },
+    "cover": {
+      "source": "external",
+      "path": "book.cover.jpg"
+    }
+  }
+sidecar cover: c35d82f3724cf6788d6ce98a35d64f6417e83f8e5c3e7cfbb50e00b1b2f2affe
+### pdf with document information
+book:
+  addedOn: <set>
+  bookCoverHash: <set>
+  bookFiles:
+      -:
+        addedOn: <set>
+        bookType: PDF
+        currentHash: <hash of the book file>
+        fileName: paper.pdf
+        fileSizeKb: 0
+        fileSubPath: Papers
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+      -:
+        addedOn: <set>
+        bookType: PDF
+        currentHash: <hash of the book file>
+        fileName: paper.pdf
+        fileSizeKb: 0
+        fileSubPath: Papers
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+  deleted: false
+  id: 7
+  isComic: false
+  isPhysical: false
+  library: <the library's>
+  libraryPath: <the library's>
+  metadata:
+    abridgedLocked: false
+    ageRatingLocked: false
+    amazonRatingLocked: false
+    amazonReviewCountLocked: false
+    asinLocked: false
+    audibleIdLocked: false
+    audibleRatingLocked: false
+    audibleReviewCountLocked: false
+    audiobookCoverLocked: false
+    authors:
+        -: Ann Author
+        -: Bob Writer
+    authorsLocked: false
+    categories:
+        -: science
+        -: tests
+    categoriesLocked: false
+    comicvineIdLocked: false
+    contentRatingLocked: false
+    coverLocked: false
+    coverUpdatedOn: <set>
+    description: What the paper is about.
+    descriptionLocked: false
+    goodreadsIdLocked: false
+    goodreadsRatingLocked: false
+    goodreadsReviewCountLocked: false
+    googleIdLocked: false
+    hardcoverBookIdLocked: false
+    hardcoverIdLocked: false
+    hardcoverRatingLocked: false
+    hardcoverReviewCountLocked: false
+    isbn10Locked: false
+    isbn13Locked: false
+    languageLocked: false
+    lubimyczytacIdLocked: false
+    lubimyczytacRatingLocked: false
+    moodsLocked: false
+    narratorLocked: false
+    pageCount: 1
+    pageCountLocked: false
+    publishedDateLocked: false
+    publisherLocked: false
+    ranobedbIdLocked: false
+    ranobedbRatingLocked: false
+    reviews: []
+    reviewsLocked: false
+    searchText: a paper ann author bob writer
+    seriesNameLocked: false
+    seriesNumberLocked: false
+    seriesTotalLocked: false
+    subtitleLocked: false
+    tagsLocked: false
+    title: A Paper
+    titleChangedByAutoFetch: false
+    titleLocked: false
+  metadataMatchScore: 48.93617
+images:
+  cover.jpg ba86f87f5910ea6f2fb754e4e11069bb98a26a3ba7232bad810984ed705cb354
+  thumbnail.jpg 0dac15f900177c0a6a8fc55914ac7b1eddc30b7c49a99cd2d4b58d4e78ba8808
+### unreadable pdf in a folder per book with a folder cover
+book:
+  addedOn: <set>
+  bookCoverHash: <set>
+  bookFiles:
+      -:
+        addedOn: <set>
+        bookType: PDF
+        currentHash: <hash of the book file>
+        fileName: broken.pdf
+        fileSizeKb: 0
+        fileSubPath: Papers/One
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+      -:
+        addedOn: <set>
+        bookType: PDF
+        currentHash: <hash of the book file>
+        fileName: broken.pdf
+        fileSizeKb: 0
+        fileSubPath: Papers/One
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+  deleted: false
+  id: 7
+  isComic: false
+  isPhysical: false
+  library: <the library's>
+  libraryPath: <the library's>
+  metadata:
+    abridgedLocked: false
+    ageRatingLocked: false
+    amazonRatingLocked: false
+    amazonReviewCountLocked: false
+    asinLocked: false
+    audibleIdLocked: false
+    audibleRatingLocked: false
+    audibleReviewCountLocked: false
+    audiobookCoverLocked: false
+    authorsLocked: false
+    categoriesLocked: false
+    comicvineIdLocked: false
+    contentRatingLocked: false
+    coverLocked: false
+    coverUpdatedOn: <set>
+    descriptionLocked: false
+    goodreadsIdLocked: false
+    goodreadsRatingLocked: false
+    goodreadsReviewCountLocked: false
+    googleIdLocked: false
+    hardcoverBookIdLocked: false
+    hardcoverIdLocked: false
+    hardcoverRatingLocked: false
+    hardcoverReviewCountLocked: false
+    isbn10Locked: false
+    isbn13Locked: false
+    languageLocked: false
+    lubimyczytacIdLocked: false
+    lubimyczytacRatingLocked: false
+    moodsLocked: false
+    narratorLocked: false
+    pageCountLocked: false
+    publishedDateLocked: false
+    publisherLocked: false
+    ranobedbIdLocked: false
+    ranobedbRatingLocked: false
+    reviews: []
+    reviewsLocked: false
+    seriesNameLocked: false
+    seriesNumberLocked: false
+    seriesTotalLocked: false
+    subtitleLocked: false
+    tagsLocked: false
+    titleChangedByAutoFetch: false
+    titleLocked: false
+  metadataMatchScore: 5.319149
+images:
+  cover.jpg f97b14eeec5956a4355883ba03d41ad6c201b3413a851f28bcda129756bc1058
+  thumbnail.jpg 189b374df42a290017b03b702b0ae5abc809096c5a8fc2bf564ad676319f22dc
+### cbz with comic info
+book:
+  addedOn: <set>
+  bookCoverHash: <set>
+  bookFiles:
+      -:
+        addedOn: <set>
+        archiveType: ZIP
+        bookType: CBX
+        currentHash: <hash of the book file>
+        fileName: My_Comic-01.cbz
+        fileSizeKb: 12
+        fileSubPath: Comics
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+      -:
+        addedOn: <set>
+        archiveType: ZIP
+        bookType: CBX
+        currentHash: <hash of the book file>
+        fileName: My_Comic-01.cbz
+        fileSizeKb: 12
+        fileSubPath: Comics
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+  deleted: false
+  id: 7
+  isComic: false
+  isPhysical: false
+  library: <the library's>
+  libraryPath: <the library's>
+  metadata:
+    abridgedLocked: false
+    ageRatingLocked: false
+    amazonRatingLocked: false
+    amazonReviewCountLocked: false
+    asinLocked: false
+    audibleIdLocked: false
+    audibleRatingLocked: false
+    audibleReviewCountLocked: false
+    audiobookCoverLocked: false
+    authors:
+        -: John Roe
+        -: Jane Doe
+    authorsLocked: false
+    categories:
+        -: Action
+        -: Drama
+    categoriesLocked: false
+    comicMetadata:
+      alternateIssue: 3
+      alternateIssueLocked: false
+      alternateSeries: Other Series
+      alternateSeriesLocked: false
+      blackAndWhite: true
+      blackAndWhiteLocked: false
+      bookId: 7
+      characters:
+          -: Hero
+          -: Sidekick
+      charactersLocked: false
+      coloristsLocked: false
+      coverArtistsLocked: false
+      creatorMappings:
+          -:
+            creator: Color One
+            role: COLORIST
+          -:
+            creator: Cover One
+            role: COVER_ARTIST
+          -:
+            creator: Edit One
+            role: EDITOR
+          -:
+            creator: Ink One
+            role: INKER
+          -:
+            creator: Letter One
+            role: LETTERER
+          -:
+            creator: Pen One
+            role: PENCILLER
+      creatorsLocked: false
+      editorsLocked: false
+      format: Trade
+      formatLocked: false
+      imprint: Fixture Imprint
+      imprintLocked: false
+      inkersLocked: false
+      issueNumber: 7
+      issueNumberLocked: false
+      letterersLocked: false
+      locations:
+          -: The City
+      locationsLocked: false
+      manga: true
+      mangaLocked: false
+      notes: Some notes
+      notesLocked: false
+      pencillersLocked: false
+      readingDirection: rtl
+      readingDirectionLocked: false
+      storyArc: The Arc
+      storyArcLocked: false
+      storyArcNumber: 1
+      storyArcNumberLocked: false
+      teams:
+          -: The Team
+      teamsLocked: false
+      volumeName: The Series
+      volumeNameLocked: false
+      volumeNumber: 2
+      volumeNumberLocked: false
+      webLink: https://example.org/comic
+      webLinkLocked: false
+    comicvineIdLocked: false
+    contentRatingLocked: false
+    coverLocked: false
+    coverUpdatedOn: <set>
+    description: A comic made for tests.
+    descriptionLocked: false
+    goodreadsIdLocked: false
+    goodreadsRatingLocked: false
+    goodreadsReviewCountLocked: false
+    googleIdLocked: false
+    hardcoverBookIdLocked: false
+    hardcoverIdLocked: false
+    hardcoverRatingLocked: false
+    hardcoverReviewCountLocked: false
+    isbn10Locked: false
+    isbn13: 9780306406157
+    isbn13Locked: false
+    language: fr
+    languageLocked: false
+    lubimyczytacIdLocked: false
+    lubimyczytacRatingLocked: false
+    moodsLocked: false
+    narratorLocked: false
+    pageCount: 24
+    pageCountLocked: false
+    publishedDate: 2021-04-09
+    publishedDateLocked: false
+    publisher: Fixture Comics
+    publisherLocked: false
+    ranobedbIdLocked: false
+    ranobedbRatingLocked: false
+    reviews: []
+    reviewsLocked: false
+    searchText: the title the series john roe jane doe
+    seriesName: The Series
+    seriesNameLocked: false
+    seriesNumber: 7.0
+    seriesNumberLocked: false
+    seriesTotal: 12
+    seriesTotalLocked: false
+    subtitleLocked: false
+    tags:
+        -: Collected
+    tagsLocked: false
+    title: The Title
+    titleChangedByAutoFetch: false
+    titleLocked: false
+  metadataMatchScore: 68.085106
+images:
+  cover.jpg 86497ff837f59ad1302e00b5a7253c6d2c9fe2f8b678ad64b4de77bbd8e6a71d
+  thumbnail.jpg 1565324266eef65c1cdaf34f750e000a24cb064860e789c10619aa29c206e963
+### cbr whose first image is broken
+book:
+  addedOn: <set>
+  bookCoverHash: <set>
+  bookFiles:
+      -:
+        addedOn: <set>
+        archiveType: RAR
+        bookType: CBX
+        currentHash: <hash of the book file>
+        fileName: broken-first.cbr
+        fileSizeKb: 32
+        fileSubPath: Comics
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+      -:
+        addedOn: <set>
+        archiveType: RAR
+        bookType: CBX
+        currentHash: <hash of the book file>
+        fileName: broken-first.cbr
+        fileSizeKb: 32
+        fileSubPath: Comics
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+  deleted: false
+  id: 7
+  isComic: false
+  isPhysical: false
+  library: <the library's>
+  libraryPath: <the library's>
+  metadata:
+    abridgedLocked: false
+    ageRatingLocked: false
+    amazonRatingLocked: false
+    amazonReviewCountLocked: false
+    asinLocked: false
+    audibleIdLocked: false
+    audibleRatingLocked: false
+    audibleReviewCountLocked: false
+    audiobookCoverLocked: false
+    authors:
+        -: Jane Doe
+    authorsLocked: false
+    categoriesLocked: false
+    comicvineIdLocked: false
+    contentRatingLocked: false
+    coverLocked: false
+    coverUpdatedOn: <set>
+    descriptionLocked: false
+    goodreadsIdLocked: false
+    goodreadsRatingLocked: false
+    goodreadsReviewCountLocked: false
+    googleIdLocked: false
+    hardcoverBookIdLocked: false
+    hardcoverIdLocked: false
+    hardcoverRatingLocked: false
+    hardcoverReviewCountLocked: false
+    isbn10Locked: false
+    isbn13Locked: false
+    languageLocked: false
+    lubimyczytacIdLocked: false
+    lubimyczytacRatingLocked: false
+    moodsLocked: false
+    narratorLocked: false
+    pageCountLocked: false
+    publishedDateLocked: false
+    publisherLocked: false
+    ranobedbIdLocked: false
+    ranobedbRatingLocked: false
+    reviews: []
+    reviewsLocked: false
+    searchText: second page jane doe
+    seriesNameLocked: false
+    seriesNumberLocked: false
+    seriesTotalLocked: false
+    subtitleLocked: false
+    tagsLocked: false
+    title: Second Page
+    titleChangedByAutoFetch: false
+    titleLocked: false
+  metadataMatchScore: 26.595745
+images:
+  cover.jpg 72f881575c3f255240130da601e7dae03c56f05fab7ad0bd740b55add8b3f7a4
+  thumbnail.jpg 7ab0d091483d4af47912b4b9c3050c9ef84e29fc63e0a4134f8e6db6f788d35d
+### cb7 without images
+book:
+  addedOn: <set>
+  bookFiles:
+      -:
+        addedOn: <set>
+        archiveType: SEVEN_ZIP
+        bookType: CBX
+        currentHash: <hash of the book file>
+        fileName: text-only.cb7
+        fileSizeKb: 0
+        fileSubPath: Comics
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+      -:
+        addedOn: <set>
+        archiveType: SEVEN_ZIP
+        bookType: CBX
+        currentHash: <hash of the book file>
+        fileName: text-only.cb7
+        fileSizeKb: 0
+        fileSubPath: Comics
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+  deleted: false
+  id: 7
+  isComic: false
+  isPhysical: false
+  library: <the library's>
+  libraryPath: <the library's>
+  metadata:
+    abridgedLocked: false
+    ageRatingLocked: false
+    amazonRatingLocked: false
+    amazonReviewCountLocked: false
+    asinLocked: false
+    audibleIdLocked: false
+    audibleRatingLocked: false
+    audibleReviewCountLocked: false
+    audiobookCoverLocked: false
+    authorsLocked: false
+    categoriesLocked: false
+    comicMetadata:
+      alternateIssueLocked: false
+      alternateSeriesLocked: false
+      blackAndWhite: false
+      blackAndWhiteLocked: false
+      bookId: 7
+      characters: []
+      charactersLocked: false
+      coloristsLocked: false
+      coverArtistsLocked: false
+      creatorMappings: []
+      creatorsLocked: false
+      editorsLocked: false
+      formatLocked: false
+      imprintLocked: false
+      inkersLocked: false
+      issueNumber: 2
+      issueNumberLocked: false
+      letterersLocked: false
+      locations: []
+      locationsLocked: false
+      manga: false
+      mangaLocked: false
+      notesLocked: false
+      pencillersLocked: false
+      readingDirection: ltr
+      readingDirectionLocked: false
+      storyArcLocked: false
+      storyArcNumberLocked: false
+      teams: []
+      teamsLocked: false
+      volumeNameLocked: false
+      volumeNumberLocked: false
+      webLinkLocked: false
+    comicvineIdLocked: false
+    contentRatingLocked: false
+    coverLocked: false
+    descriptionLocked: false
+    goodreadsIdLocked: false
+    goodreadsRatingLocked: false
+    goodreadsReviewCountLocked: false
+    googleIdLocked: false
+    hardcoverBookIdLocked: false
+    hardcoverIdLocked: false
+    hardcoverRatingLocked: false
+    hardcoverReviewCountLocked: false
+    isbn10Locked: false
+    isbn13Locked: false
+    languageLocked: false
+    lubimyczytacIdLocked: false
+    lubimyczytacRatingLocked: false
+    moodsLocked: false
+    narratorLocked: false
+    pageCountLocked: false
+    publishedDateLocked: false
+    publisherLocked: false
+    ranobedbIdLocked: false
+    ranobedbRatingLocked: false
+    reviews: []
+    reviewsLocked: false
+    seriesName: Words
+    seriesNameLocked: false
+    seriesNumber: 2.0
+    seriesNumberLocked: false
+    seriesTotalLocked: false
+    subtitleLocked: false
+    tagsLocked: false
+    title: Text Only
+    titleChangedByAutoFetch: false
+    titleLocked: false
+  metadataMatchScore: 14.893617
+images:
+### unreadable cbz
+book:
+  addedOn: <set>
+  bookFiles:
+      -:
+        addedOn: <set>
+        archiveType: ZIP
+        bookType: CBX
+        currentHash: <hash of the book file>
+        fileName: Broken_Book-02.cbz
+        fileSizeKb: 0
+        fileSubPath: Comics
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+      -:
+        addedOn: <set>
+        archiveType: ZIP
+        bookType: CBX
+        currentHash: <hash of the book file>
+        fileName: Broken_Book-02.cbz
+        fileSizeKb: 0
+        fileSubPath: Comics
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+  deleted: false
+  id: 7
+  isComic: false
+  isPhysical: false
+  library: <the library's>
+  libraryPath: <the library's>
+  metadata:
+    abridgedLocked: false
+    ageRatingLocked: false
+    amazonRatingLocked: false
+    amazonReviewCountLocked: false
+    asinLocked: false
+    audibleIdLocked: false
+    audibleRatingLocked: false
+    audibleReviewCountLocked: false
+    audiobookCoverLocked: false
+    authorsLocked: false
+    categoriesLocked: false
+    comicvineIdLocked: false
+    contentRatingLocked: false
+    coverLocked: false
+    descriptionLocked: false
+    goodreadsIdLocked: false
+    goodreadsRatingLocked: false
+    goodreadsReviewCountLocked: false
+    googleIdLocked: false
+    hardcoverBookIdLocked: false
+    hardcoverIdLocked: false
+    hardcoverRatingLocked: false
+    hardcoverReviewCountLocked: false
+    isbn10Locked: false
+    isbn13Locked: false
+    languageLocked: false
+    lubimyczytacIdLocked: false
+    lubimyczytacRatingLocked: false
+    moodsLocked: false
+    narratorLocked: false
+    pageCountLocked: false
+    publishedDateLocked: false
+    publisherLocked: false
+    ranobedbIdLocked: false
+    ranobedbRatingLocked: false
+    reviews: []
+    reviewsLocked: false
+    seriesNameLocked: false
+    seriesNumberLocked: false
+    seriesTotalLocked: false
+    subtitleLocked: false
+    tagsLocked: false
+    title: Broken_Book-02
+    titleChangedByAutoFetch: false
+    titleLocked: false
+  metadataMatchScore: 10.638298
+images:
+### fb2 with metadata and cover
+book:
+  addedOn: <set>
+  bookCoverHash: <set>
+  bookFiles:
+      -:
+        addedOn: <set>
+        bookType: FB2
+        currentHash: <hash of the book file>
+        fileName: war.fb2
+        fileSizeKb: 14
+        fileSubPath: Classics
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+      -:
+        addedOn: <set>
+        bookType: FB2
+        currentHash: <hash of the book file>
+        fileName: war.fb2
+        fileSizeKb: 14
+        fileSubPath: Classics
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+  deleted: false
+  id: 7
+  isComic: false
+  isPhysical: false
+  library: <the library's>
+  libraryPath: <the library's>
+  metadata:
+    abridgedLocked: false
+    ageRatingLocked: false
+    amazonRatingLocked: false
+    amazonReviewCountLocked: false
+    asinLocked: false
+    audibleIdLocked: false
+    audibleRatingLocked: false
+    audibleReviewCountLocked: false
+    audiobookCoverLocked: false
+    authors:
+        -: Leo Tolstoy
+    authorsLocked: false
+    categories:
+        -: peace
+        -: prose_classic
+        -: sf_fantasy
+        -: war
+    categoriesLocked: false
+    comicvineIdLocked: false
+    contentRatingLocked: false
+    coverLocked: false
+    coverUpdatedOn: <set>
+    description: A long book.
+    descriptionLocked: false
+    goodreadsIdLocked: false
+    goodreadsRatingLocked: false
+    goodreadsReviewCountLocked: false
+    googleIdLocked: false
+    hardcoverBookIdLocked: false
+    hardcoverIdLocked: false
+    hardcoverRatingLocked: false
+    hardcoverReviewCountLocked: false
+    isbn10Locked: false
+    isbn13: 9780306406157
+    isbn13Locked: false
+    language: ru
+    languageLocked: false
+    lubimyczytacIdLocked: false
+    lubimyczytacRatingLocked: false
+    moodsLocked: false
+    narratorLocked: false
+    pageCountLocked: false
+    publishedDate: 1869-01-01
+    publishedDateLocked: false
+    publisher: Fixture House
+    publisherLocked: false
+    ranobedbIdLocked: false
+    ranobedbRatingLocked: false
+    reviews: []
+    reviewsLocked: false
+    searchText: war and peace classics leo tolstoy
+    seriesName: Classics
+    seriesNameLocked: false
+    seriesNumber: 2.0
+    seriesNumberLocked: false
+    seriesTotalLocked: false
+    subtitleLocked: false
+    tagsLocked: false
+    title: War and Peace
+    titleChangedByAutoFetch: false
+    titleLocked: false
+  metadataMatchScore: 65.95744
+images:
+  cover.jpg 4237f2f776456cbfacd5d2a94f2aae030904fbd44077ec5a5f7ab5bd13527ffc
+  thumbnail.jpg 61fd1009cdc4c2cbb8e0b365516fe403f5af3ce76353f6a7f981d00d4723a269
+### mobi with metadata and cover
+book:
+  addedOn: <set>
+  bookCoverHash: <set>
+  bookFiles:
+      -:
+        addedOn: <set>
+        bookType: MOBI
+        currentHash: <hash of the book file>
+        fileName: book.mobi
+        fileSizeKb: 12
+        fileSubPath: Kindle
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+      -:
+        addedOn: <set>
+        bookType: MOBI
+        currentHash: <hash of the book file>
+        fileName: book.mobi
+        fileSizeKb: 12
+        fileSubPath: Kindle
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+  deleted: false
+  id: 7
+  isComic: false
+  isPhysical: false
+  library: <the library's>
+  libraryPath: <the library's>
+  metadata:
+    abridgedLocked: false
+    ageRatingLocked: false
+    amazonRatingLocked: false
+    amazonReviewCountLocked: false
+    asin: B00FIXTURE
+    asinLocked: false
+    audibleIdLocked: false
+    audibleRatingLocked: false
+    audibleReviewCountLocked: false
+    audiobookCoverLocked: false
+    authors:
+        -: Jane Doe
+    authorsLocked: false
+    categories:
+        -: Adventure
+        -: Fiction
+    categoriesLocked: false
+    comicvineIdLocked: false
+    contentRatingLocked: false
+    coverLocked: false
+    coverUpdatedOn: <set>
+    description: A book made for tests.
+    descriptionLocked: false
+    goodreadsIdLocked: false
+    goodreadsRatingLocked: false
+    goodreadsReviewCountLocked: false
+    googleIdLocked: false
+    hardcoverBookIdLocked: false
+    hardcoverIdLocked: false
+    hardcoverRatingLocked: false
+    hardcoverReviewCountLocked: false
+    isbn10Locked: false
+    isbn13: 9780306406157
+    isbn13Locked: false
+    language: en
+    languageLocked: false
+    lubimyczytacIdLocked: false
+    lubimyczytacRatingLocked: false
+    moodsLocked: false
+    narratorLocked: false
+    pageCountLocked: false
+    publishedDate: 2020-05-17
+    publishedDateLocked: false
+    publisher: Fixture House
+    publisherLocked: false
+    ranobedbIdLocked: false
+    ranobedbRatingLocked: false
+    reviews: []
+    reviewsLocked: false
+    searchText: the fixture book jane doe
+    seriesNameLocked: false
+    seriesNumberLocked: false
+    seriesTotalLocked: false
+    subtitleLocked: false
+    tagsLocked: false
+    title: The Fixture Book
+    titleChangedByAutoFetch: false
+    titleLocked: false
+  metadataMatchScore: 61.702126
+images:
+  cover.jpg e0eb852493e61292c37478c08854f0f6cbffbb66bea4d07533ecffe9b9623618
+  thumbnail.jpg 48dbc2fa8c946972fd9107b29a3be1458e50ddeb07f0ff10277b5bc75b032838
+### azw3 with metadata and cover
+book:
+  addedOn: <set>
+  bookCoverHash: <set>
+  bookFiles:
+      -:
+        addedOn: <set>
+        bookType: AZW3
+        currentHash: <hash of the book file>
+        fileName: book.azw3
+        fileSizeKb: 12
+        fileSubPath: Kindle
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+      -:
+        addedOn: <set>
+        bookType: AZW3
+        currentHash: <hash of the book file>
+        fileName: book.azw3
+        fileSizeKb: 12
+        fileSubPath: Kindle
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+  deleted: false
+  id: 7
+  isComic: false
+  isPhysical: false
+  library: <the library's>
+  libraryPath: <the library's>
+  metadata:
+    abridgedLocked: false
+    ageRatingLocked: false
+    amazonRatingLocked: false
+    amazonReviewCountLocked: false
+    asin: B00FIXTURE
+    asinLocked: false
+    audibleIdLocked: false
+    audibleRatingLocked: false
+    audibleReviewCountLocked: false
+    audiobookCoverLocked: false
+    authors:
+        -: Jane Doe
+    authorsLocked: false
+    categories:
+        -: Adventure
+        -: Fiction
+    categoriesLocked: false
+    comicvineIdLocked: false
+    contentRatingLocked: false
+    coverLocked: false
+    coverUpdatedOn: <set>
+    description: A book made for tests.
+    descriptionLocked: false
+    goodreadsIdLocked: false
+    goodreadsRatingLocked: false
+    goodreadsReviewCountLocked: false
+    googleIdLocked: false
+    hardcoverBookIdLocked: false
+    hardcoverIdLocked: false
+    hardcoverRatingLocked: false
+    hardcoverReviewCountLocked: false
+    isbn10Locked: false
+    isbn13: 9780306406157
+    isbn13Locked: false
+    language: en
+    languageLocked: false
+    lubimyczytacIdLocked: false
+    lubimyczytacRatingLocked: false
+    moodsLocked: false
+    narratorLocked: false
+    pageCountLocked: false
+    publishedDate: 2020-05-17
+    publishedDateLocked: false
+    publisher: Fixture House
+    publisherLocked: false
+    ranobedbIdLocked: false
+    ranobedbRatingLocked: false
+    reviews: []
+    reviewsLocked: false
+    searchText: the fixture book jane doe
+    seriesNameLocked: false
+    seriesNumberLocked: false
+    seriesTotalLocked: false
+    subtitleLocked: false
+    tagsLocked: false
+    title: The Fixture Book
+    titleChangedByAutoFetch: false
+    titleLocked: false
+  metadataMatchScore: 61.702126
+images:
+  cover.jpg e0eb852493e61292c37478c08854f0f6cbffbb66bea4d07533ecffe9b9623618
+  thumbnail.jpg 48dbc2fa8c946972fd9107b29a3be1458e50ddeb07f0ff10277b5bc75b032838
+### mp3 audiobook
+book:
+  addedOn: <set>
+  audiobookCoverHash: <set>
+  bookFiles:
+      -:
+        addedOn: <set>
+        bitrate: 56
+        bookType: AUDIOBOOK
+        channels: 1
+        chapterCount: 1
+        chapters:
+            -:
+              durationMs: 1253
+              endTimeMs: 1253
+              index: 0
+              startTimeMs: 0
+              title: Full Audiobook
+        codec: mp3
+        currentHash: <hash of the book file>
+        durationSeconds: 1
+        fileName: book.mp3
+        fileSizeKb: 5
+        fileSubPath: Audio
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+        sampleRate: 22050
+      -:
+        addedOn: <set>
+        bitrate: 56
+        bookType: AUDIOBOOK
+        channels: 1
+        chapterCount: 1
+        chapters:
+            -:
+              durationMs: 1253
+              endTimeMs: 1253
+              index: 0
+              startTimeMs: 0
+              title: Full Audiobook
+        codec: mp3
+        currentHash: <hash of the book file>
+        durationSeconds: 1
+        fileName: book.mp3
+        fileSizeKb: 5
+        fileSubPath: Audio
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+        sampleRate: 22050
+  deleted: false
+  id: 7
+  isComic: false
+  isPhysical: false
+  library: <the library's>
+  libraryPath: <the library's>
+  metadata:
+    abridgedLocked: false
+    ageRatingLocked: false
+    amazonRatingLocked: false
+    amazonReviewCountLocked: false
+    asinLocked: false
+    audibleIdLocked: false
+    audibleRatingLocked: false
+    audibleReviewCountLocked: false
+    audiobookCoverLocked: false
+    audiobookCoverUpdatedOn: <set>
+    authors:
+        -: Album_Artist
+    authorsLocked: false
+    categories:
+        -: Fantasy
+    categoriesLocked: false
+    comicvineIdLocked: false
+    contentRatingLocked: false
+    coverLocked: false
+    descriptionLocked: false
+    goodreadsIdLocked: false
+    goodreadsRatingLocked: false
+    goodreadsReviewCountLocked: false
+    googleIdLocked: false
+    hardcoverBookIdLocked: false
+    hardcoverIdLocked: false
+    hardcoverRatingLocked: false
+    hardcoverReviewCountLocked: false
+    isbn10Locked: false
+    isbn13Locked: false
+    language: en
+    languageLocked: false
+    lubimyczytacIdLocked: false
+    lubimyczytacRatingLocked: false
+    moodsLocked: false
+    narrator: The_Narrator
+    narratorLocked: false
+    pageCountLocked: false
+    publishedDate: 2019-01-01
+    publishedDateLocked: false
+    publisher: Fixture_House
+    publisherLocked: false
+    ranobedbIdLocked: false
+    ranobedbRatingLocked: false
+    reviews: []
+    reviewsLocked: false
+    searchText: fixturealbum albumartist
+    seriesNameLocked: false
+    seriesNumber: 3.0
+    seriesNumberLocked: false
+    seriesTotal: 12
+    seriesTotalLocked: false
+    subtitleLocked: false
+    tagsLocked: false
+    title: Fixture_Album
+    titleChangedByAutoFetch: false
+    titleLocked: false
+  metadataMatchScore: 45.744682
+images:
+  audiobook-cover.jpg 50a1cf73ea5c7aa2a4d313ded935343c7a6c16dcb71db03b6f25aee2ff3188f5
+  audiobook-thumbnail.jpg 308c78c51d8a2b58318cd99ba981ee4bbe41d71a151b49dff9a1f9a87864a824
+### m4b audiobook with chapters
+book:
+  addedOn: <set>
+  audiobookCoverHash: <set>
+  bookFiles:
+      -:
+        addedOn: <set>
+        bookType: AUDIOBOOK
+        channels: 15
+        chapterCount: 1
+        chapters:
+            -:
+              durationMs: 1000
+              endTimeMs: 1000
+              index: 0
+              startTimeMs: 0
+              title: Full Audiobook
+        codec: AAC
+        currentHash: <hash of the book file>
+        durationSeconds: 1
+        fileName: book.m4b
+        fileSizeKb: 4
+        fileSubPath: Audio
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+        sampleRate: 22050
+      -:
+        addedOn: <set>
+        bookType: AUDIOBOOK
+        channels: 15
+        chapterCount: 1
+        chapters:
+            -:
+              durationMs: 1000
+              endTimeMs: 1000
+              index: 0
+              startTimeMs: 0
+              title: Full Audiobook
+        codec: AAC
+        currentHash: <hash of the book file>
+        durationSeconds: 1
+        fileName: book.m4b
+        fileSizeKb: 4
+        fileSubPath: Audio
+        folderBased: false
+        initialHash: <hash of the book file>
+        isBookFormat: true
+        sampleRate: 22050
+  deleted: false
+  id: 7
+  isComic: false
+  isPhysical: false
+  library: <the library's>
+  libraryPath: <the library's>
+  metadata:
+    abridgedLocked: false
+    ageRatingLocked: false
+    amazonRatingLocked: false
+    amazonReviewCountLocked: false
+    asinLocked: false
+    audibleIdLocked: false
+    audibleRatingLocked: false
+    audibleReviewCountLocked: false
+    audiobookCoverLocked: false
+    audiobookCoverUpdatedOn: <set>
+    authors:
+        -: Album_Artist
+    authorsLocked: false
+    categories:
+        -: Fantasy
+    categoriesLocked: false
+    comicvineIdLocked: false
+    contentRatingLocked: false
+    coverLocked: false
+    description: A_fixture_description
+    descriptionLocked: false
+    goodreadsIdLocked: false
+    goodreadsRatingLocked: false
+    goodreadsReviewCountLocked: false
+    googleIdLocked: false
+    hardcoverBookIdLocked: false
+    hardcoverIdLocked: false
+    hardcoverRatingLocked: false
+    hardcoverReviewCountLocked: false
+    isbn10Locked: false
+    isbn13Locked: false
+    language: en
+    languageLocked: false
+    lubimyczytacIdLocked: false
+    lubimyczytacRatingLocked: false
+    moodsLocked: false
+    narrator: The_Narrator
+    narratorLocked: false
+    pageCountLocked: false
+    publishedDate: 2019-01-01
+    publishedDateLocked: false
+    publisherLocked: false
+    ranobedbIdLocked: false
+    ranobedbRatingLocked: false
+    reviews: []
+    reviewsLocked: false
+    searchText: fixturealbum albumartist
+    seriesNameLocked: false
+    seriesNumber: 3.0
+    seriesNumberLocked: false
+    seriesTotal: 12
+    seriesTotalLocked: false
+    subtitleLocked: false
+    tagsLocked: false
+    title: Fixture_Album
+    titleChangedByAutoFetch: false
+    titleLocked: false
+  metadataMatchScore: 51.06383
+images:
+  audiobook-cover.jpg 50a1cf73ea5c7aa2a4d313ded935343c7a6c16dcb71db03b6f25aee2ff3188f5
+  audiobook-thumbnail.jpg 308c78c51d8a2b58318cd99ba981ee4bbe41d71a151b49dff9a1f9a87864a824
+### folder audiobook
+book:
+  addedOn: <set>
+  audiobookCoverHash: <set>
+  bookFiles:
+      -:
+        addedOn: <set>
+        bitrate: 56
+        bookType: AUDIOBOOK
+        channels: 1
+        chapterCount: 1
+        chapters:
+            -:
+              durationMs: 1253
+              endTimeMs: 1253
+              index: 0
+              startTimeMs: 0
+              title: Full Audiobook
+        codec: mp3
+        currentHash: <hash of the book file>
+        durationSeconds: 1
+        fileName: Folder Book
+        fileSizeKb: 25
+        fileSubPath: Audio
+        folderBased: true
+        initialHash: <hash of the book file>
+        isBookFormat: true
+        sampleRate: 22050
+      -:
+        addedOn: <set>
+        bitrate: 56
+        bookType: AUDIOBOOK
+        channels: 1
+        chapterCount: 1
+        chapters:
+            -:
+              durationMs: 1253
+              endTimeMs: 1253
+              index: 0
+              startTimeMs: 0
+              title: Full Audiobook
+        codec: mp3
+        currentHash: <hash of the book file>
+        durationSeconds: 1
+        fileName: Folder Book
+        fileSizeKb: 25
+        fileSubPath: Audio
+        folderBased: true
+        initialHash: <hash of the book file>
+        isBookFormat: true
+        sampleRate: 22050
+  deleted: false
+  id: 7
+  isComic: false
+  isPhysical: false
+  library: <the library's>
+  libraryPath: <the library's>
+  metadata:
+    abridgedLocked: false
+    ageRatingLocked: false
+    amazonRatingLocked: false
+    amazonReviewCountLocked: false
+    asinLocked: false
+    audibleIdLocked: false
+    audibleRatingLocked: false
+    audibleReviewCountLocked: false
+    audiobookCoverLocked: false
+    audiobookCoverUpdatedOn: <set>
+    authors:
+        -: Album_Artist
+    authorsLocked: false
+    categories:
+        -: Fantasy
+    categoriesLocked: false
+    comicvineIdLocked: false
+    contentRatingLocked: false
+    coverLocked: false
+    descriptionLocked: false
+    goodreadsIdLocked: false
+    goodreadsRatingLocked: false
+    goodreadsReviewCountLocked: false
+    googleIdLocked: false
+    hardcoverBookIdLocked: false
+    hardcoverIdLocked: false
+    hardcoverRatingLocked: false
+    hardcoverReviewCountLocked: false
+    isbn10Locked: false
+    isbn13Locked: false
+    language: en
+    languageLocked: false
+    lubimyczytacIdLocked: false
+    lubimyczytacRatingLocked: false
+    moodsLocked: false
+    narrator: The_Narrator
+    narratorLocked: false
+    pageCountLocked: false
+    publishedDate: 2019-01-01
+    publishedDateLocked: false
+    publisher: Fixture_House
+    publisherLocked: false
+    ranobedbIdLocked: false
+    ranobedbRatingLocked: false
+    reviews: []
+    reviewsLocked: false
+    searchText: fixturealbum albumartist
+    seriesNameLocked: false
+    seriesNumber: 3.0
+    seriesNumberLocked: false
+    seriesTotal: 12
+    seriesTotalLocked: false
+    subtitleLocked: false
+    tagsLocked: false
+    title: Fixture_Album
+    titleChangedByAutoFetch: false
+    titleLocked: false
+  metadataMatchScore: 45.744682
+images:
+  audiobook-cover.jpg 50a1cf73ea5c7aa2a4d313ded935343c7a6c16dcb71db03b6f25aee2ff3188f5
+  audiobook-thumbnail.jpg 308c78c51d8a2b58318cd99ba981ee4bbe41d71a151b49dff9a1f9a87864a824
+### folder audiobook with an unreadable audio file and a folder cover
+book:
+  addedOn: <set>
+  audiobookCoverHash: <set>
+  bookFiles:
+      -:
+        addedOn: <set>
+        bookType: AUDIOBOOK
+        currentHash: <hash of the book file>
+        fileName: Unreadable
+        fileSizeKb: 47
+        fileSubPath: Audio
+        folderBased: true
+        initialHash: <hash of the book file>
+        isBookFormat: true
+      -:
+        addedOn: <set>
+        bookType: AUDIOBOOK
+        currentHash: <hash of the book file>
+        fileName: Unreadable
+        fileSizeKb: 47
+        fileSubPath: Audio
+        folderBased: true
+        initialHash: <hash of the book file>
+        isBookFormat: true
+  deleted: false
+  id: 7
+  isComic: false
+  isPhysical: false
+  library: <the library's>
+  libraryPath: <the library's>
+  metadata:
+    abridgedLocked: false
+    ageRatingLocked: false
+    amazonRatingLocked: false
+    amazonReviewCountLocked: false
+    asinLocked: false
+    audibleIdLocked: false
+    audibleRatingLocked: false
+    audibleReviewCountLocked: false
+    audiobookCoverLocked: false
+    audiobookCoverUpdatedOn: <set>
+    authorsLocked: false
+    categoriesLocked: false
+    comicvineIdLocked: false
+    contentRatingLocked: false
+    coverLocked: false
+    descriptionLocked: false
+    goodreadsIdLocked: false
+    goodreadsRatingLocked: false
+    goodreadsReviewCountLocked: false
+    googleIdLocked: false
+    hardcoverBookIdLocked: false
+    hardcoverIdLocked: false
+    hardcoverRatingLocked: false
+    hardcoverReviewCountLocked: false
+    isbn10Locked: false
+    isbn13Locked: false
+    language: en
+    languageLocked: false
+    lubimyczytacIdLocked: false
+    lubimyczytacRatingLocked: false
+    moodsLocked: false
+    narratorLocked: false
+    pageCountLocked: false
+    publishedDateLocked: false
+    publisherLocked: false
+    ranobedbIdLocked: false
+    ranobedbRatingLocked: false
+    reviews: []
+    reviewsLocked: false
+    seriesNameLocked: false
+    seriesNumberLocked: false
+    seriesTotalLocked: false
+    subtitleLocked: false
+    tagsLocked: false
+    title: 01
+    titleChangedByAutoFetch: false
+    titleLocked: false
+  metadataMatchScore: 12.765958
+images:
+  audiobook-cover.jpg 2ee080c8811b132a0b09af6734994b099a3b6064526759ac63465457a670fb9b
+  audiobook-thumbnail.jpg 05631c6328875fa7169b02c2aaf5769bf91fd9368afab7a18d2b33eefe4f6e3f

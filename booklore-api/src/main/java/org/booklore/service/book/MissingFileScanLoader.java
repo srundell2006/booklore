@@ -5,11 +5,13 @@ import lombok.extern.slf4j.Slf4j;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.BookMetadataEntity;
+import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.entity.TagEntity;
 import org.booklore.repository.BookRepository;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.file.InvalidPathException;
 import java.nio.file.Path;
 import java.util.ArrayList;
 import java.util.List;
@@ -31,8 +33,12 @@ public class MissingFileScanLoader {
 
     private final BookRepository bookRepository;
 
-    /** One book's identity, file paths and current tag state. */
-    public record FileCheckTarget(Long bookId, String title, List<FileRef> files, boolean alreadyTagged) {
+    /**
+     * One book's identity, file paths and current tag state, and the library path its
+     * files are under (null when it has none).
+     */
+    public record FileCheckTarget(Long bookId, String title, Path libraryPath, List<FileRef> files,
+                                  boolean alreadyTagged) {
     }
 
     public record FileRef(String name, Path path) {
@@ -60,9 +66,20 @@ public class MissingFileScanLoader {
                 }
             }
 
-            targets.add(new FileCheckTarget(book.getId(), title(book, meta), files, hasTag(meta, tagName)));
+            targets.add(new FileCheckTarget(book.getId(), title(book, meta), libraryPath(book), files,
+                    hasTag(meta, tagName)));
         }
         return targets;
+    }
+
+    private Path libraryPath(BookEntity book) {
+        LibraryPathEntity libraryPath = book.getLibraryPath();
+        if (libraryPath == null || libraryPath.getPath() == null) return null;
+        try {
+            return Path.of(libraryPath.getPath());
+        } catch (InvalidPathException e) {
+            return null;
+        }
     }
 
     private boolean hasTag(BookMetadataEntity meta, String tagName) {

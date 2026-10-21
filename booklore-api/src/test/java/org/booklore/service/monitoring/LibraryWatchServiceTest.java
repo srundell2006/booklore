@@ -14,6 +14,8 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.List;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.TimeUnit;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.*;
@@ -37,6 +39,24 @@ class LibraryWatchServiceTest {
         try {
             service.shutdown();
         } catch (Exception ignored) {}
+    }
+
+    @Test
+    void start_pollsForEventsOnAPlatformDaemonThread() throws Exception {
+        Path root = tmp.resolve("polled");
+        Files.createDirectories(root);
+        service.registerPath(root, 5L);
+        CompletableFuture<Thread> polledOn = new CompletableFuture<>();
+        doAnswer(inv -> polledOn.complete(Thread.currentThread()))
+                .when(processor).processEvent(any(), anyLong(), any(), anyBoolean());
+
+        service.start();
+        Files.createDirectories(root.resolve("sub"));
+
+        Thread poll = polledOn.get(10, TimeUnit.SECONDS);
+        assertThat(poll.isVirtual()).isFalse();
+        assertThat(poll.isDaemon()).isTrue();
+        assertThat(poll.getName()).isEqualTo("watch-poll");
     }
 
     @Test

@@ -19,6 +19,7 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mockito;
 import org.mockito.junit.jupiter.MockitoExtension;
+import tools.jackson.databind.ObjectMapper;
 
 import java.io.File;
 import java.io.IOException;
@@ -76,7 +77,8 @@ class BookServiceDeleteTests {
                 ebookViewerPreferenceRepository,
                 sidecarMetadataWriter,
                 fileStreamingService,
-                auditService
+                auditService,
+                new ObjectMapper()
         );
     }
 

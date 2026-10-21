@@ -39,51 +39,7 @@ public class Fb2MetadataExtractor implements FileMetadataExtractor {
     @Override
     public byte[] extractCover(File file) {
         try (InputStream inputStream = getInputStream(file)) {
-            DocumentBuilderFactory dbf = SecureXmlUtils.createSecureDocumentBuilderFactory(true);
-            DocumentBuilder builder = dbf.newDocumentBuilder();
-            Document doc = builder.parse(inputStream);
-
-            // Look for cover image in binary elements
-            NodeList binaries = doc.getElementsByTagNameNS(FB2_NAMESPACE, "binary");
-            for (int i = 0; i < binaries.getLength(); i++) {
-                Element binary = (Element) binaries.item(i);
-                String id = binary.getAttribute("id");
-
-                if (id != null && id.toLowerCase().contains("cover")) {
-                    String contentType = binary.getAttribute("content-type");
-                    if (contentType != null && contentType.startsWith("image/")) {
-                        String base64Data = binary.getTextContent().trim();
-                        return Base64.getDecoder().decode(base64Data);
-                    }
-                }
-            }
-
-            // If no cover found by name, try to find the first referenced image in title-info
-            Element titleInfo = getFirstElementByTagNameNS(doc, FB2_NAMESPACE, "title-info");
-            if (titleInfo != null) {
-                NodeList coverPages = titleInfo.getElementsByTagNameNS(FB2_NAMESPACE, "coverpage");
-                if (coverPages.getLength() > 0) {
-                    Element coverPage = (Element) coverPages.item(0);
-                    NodeList images = coverPage.getElementsByTagNameNS(FB2_NAMESPACE, "image");
-                    if (images.getLength() > 0) {
-                        Element image = (Element) images.item(0);
-                        String href = image.getAttributeNS("http://www.w3.org/1999/xlink", "href");
-                        if (href != null && href.startsWith("#")) {
-                            String imageId = href.substring(1);
-                            // Find the binary with this ID
-                            for (int i = 0; i < binaries.getLength(); i++) {
-                                Element binary = (Element) binaries.item(i);
-                                if (imageId.equals(binary.getAttribute("id"))) {
-                                    String base64Data = binary.getTextContent().trim();
-                                    return Base64.getDecoder().decode(base64Data);
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-
-            return null;
+            return findCover(parse(inputStream));
         } catch (Exception e) {
             log.warn("Failed to extract cover from FB2: {}", file.getName(), e);
             return null;
@@ -93,40 +49,123 @@ public class Fb2MetadataExtractor implements FileMetadataExtractor {
     @Override
     public BookMetadata extractMetadata(File file) {
         try (InputStream inputStream = getInputStream(file)) {
-            DocumentBuilderFactory dbf = SecureXmlUtils.createSecureDocumentBuilderFactory(true);
-            DocumentBuilder builder = dbf.newDocumentBuilder();
-            Document doc = builder.parse(inputStream);
-
-            BookMetadata.BookMetadataBuilder metadataBuilder = BookMetadata.builder();
-            List<String> authors = new ArrayList<>();
-            Set<String> categories = new HashSet<>();
-
-            // Extract title-info (main metadata section)
-            Element titleInfo = getFirstElementByTagNameNS(doc, FB2_NAMESPACE, "title-info");
-            if (titleInfo != null) {
-                extractTitleInfo(titleInfo, metadataBuilder, authors, categories);
-            }
-
-            // Extract publish-info (publisher, year, ISBN)
-            Element publishInfo = getFirstElementByTagNameNS(doc, FB2_NAMESPACE, "publish-info");
-            if (publishInfo != null) {
-                extractPublishInfo(publishInfo, metadataBuilder);
-            }
-
-            // Extract document-info (optional metadata)
-            Element documentInfo = getFirstElementByTagNameNS(doc, FB2_NAMESPACE, "document-info");
-            if (documentInfo != null) {
-                extractDocumentInfo(documentInfo, metadataBuilder);
-            }
-
-            metadataBuilder.authors(authors);
-            metadataBuilder.categories(categories);
-
-            return metadataBuilder.build();
+            return buildMetadata(parse(inputStream));
         } catch (Exception e) {
             log.warn("Failed to extract metadata from FB2: {}", file.getName(), e);
             return null;
         }
+    }
+
+    /**
+     * Metadata and cover from one read and parse of the file, each what {@link #extractMetadata(File)} and
+     * {@link #extractCover(File)} return, with the same logs when either part fails.
+     */
+    @Override
+    public MetadataAndCover extractMetadataAndCover(File file) {
+        Document doc;
+        try (InputStream inputStream = getInputStream(file)) {
+            doc = parse(inputStream);
+        } catch (Exception e) {
+            // Both parts need the document, so both fail, as each would on its own
+            log.warn("Failed to extract metadata from FB2: {}", file.getName(), e);
+            log.warn("Failed to extract cover from FB2: {}", file.getName(), e);
+            return new MetadataAndCover(null, null);
+        }
+
+        BookMetadata metadata;
+        try {
+            metadata = buildMetadata(doc);
+        } catch (Exception e) {
+            log.warn("Failed to extract metadata from FB2: {}", file.getName(), e);
+            metadata = null;
+        }
+        byte[] cover;
+        try {
+            cover = findCover(doc);
+        } catch (Exception e) {
+            log.warn("Failed to extract cover from FB2: {}", file.getName(), e);
+            cover = null;
+        }
+        return new MetadataAndCover(metadata, cover);
+    }
+
+    private Document parse(InputStream inputStream) throws Exception {
+        DocumentBuilderFactory dbf = SecureXmlUtils.createSecureDocumentBuilderFactory(true);
+        DocumentBuilder builder = dbf.newDocumentBuilder();
+        return builder.parse(inputStream);
+    }
+
+    private byte[] findCover(Document doc) {
+        // Look for cover image in binary elements
+        NodeList binaries = doc.getElementsByTagNameNS(FB2_NAMESPACE, "binary");
+        for (int i = 0; i < binaries.getLength(); i++) {
+            Element binary = (Element) binaries.item(i);
+            String id = binary.getAttribute("id");
+
+            if (id != null && id.toLowerCase().contains("cover")) {
+                String contentType = binary.getAttribute("content-type");
+                if (contentType != null && contentType.startsWith("image/")) {
+                    String base64Data = binary.getTextContent().trim();
+                    return Base64.getDecoder().decode(base64Data);
+                }
+            }
+        }
+
+        // If no cover found by name, try to find the first referenced image in title-info
+        Element titleInfo = getFirstElementByTagNameNS(doc, FB2_NAMESPACE, "title-info");
+        if (titleInfo != null) {
+            NodeList coverPages = titleInfo.getElementsByTagNameNS(FB2_NAMESPACE, "coverpage");
+            if (coverPages.getLength() > 0) {
+                Element coverPage = (Element) coverPages.item(0);
+                NodeList images = coverPage.getElementsByTagNameNS(FB2_NAMESPACE, "image");
+                if (images.getLength() > 0) {
+                    Element image = (Element) images.item(0);
+                    String href = image.getAttributeNS("http://www.w3.org/1999/xlink", "href");
+                    if (href != null && href.startsWith("#")) {
+                        String imageId = href.substring(1);
+                        // Find the binary with this ID
+                        for (int i = 0; i < binaries.getLength(); i++) {
+                            Element binary = (Element) binaries.item(i);
+                            if (imageId.equals(binary.getAttribute("id"))) {
+                                String base64Data = binary.getTextContent().trim();
+                                return Base64.getDecoder().decode(base64Data);
+                            }
+                        }
+                    }
+                }
+            }
+        }
+
+        return null;
+    }
+
+    private BookMetadata buildMetadata(Document doc) {
+        BookMetadata.BookMetadataBuilder metadataBuilder = BookMetadata.builder();
+        List<String> authors = new ArrayList<>();
+        Set<String> categories = new HashSet<>();
+
+        // Extract title-info (main metadata section)
+        Element titleInfo = getFirstElementByTagNameNS(doc, FB2_NAMESPACE, "title-info");
+        if (titleInfo != null) {
+            extractTitleInfo(titleInfo, metadataBuilder, authors, categories);
+        }
+
+        // Extract publish-info (publisher, year, ISBN)
+        Element publishInfo = getFirstElementByTagNameNS(doc, FB2_NAMESPACE, "publish-info");
+        if (publishInfo != null) {
+            extractPublishInfo(publishInfo, metadataBuilder);
+        }
+
+        // Extract document-info (optional metadata)
+        Element documentInfo = getFirstElementByTagNameNS(doc, FB2_NAMESPACE, "document-info");
+        if (documentInfo != null) {
+            extractDocumentInfo(documentInfo, metadataBuilder);
+        }
+
+        metadataBuilder.authors(authors);
+        metadataBuilder.categories(categories);
+
+        return metadataBuilder.build();
     }
 
     private void extractTitleInfo(Element titleInfo, BookMetadata.BookMetadataBuilder builder,
@@ -350,7 +389,8 @@ public class Fb2MetadataExtractor implements FileMetadataExtractor {
         return nodes.getLength() > 0 ? (Element) nodes.item(0) : null;
     }
 
-    private InputStream getInputStream(File file) throws Exception {
+    // Seam for tests that count how often a file is opened
+    InputStream getInputStream(File file) throws Exception {
         FileInputStream fis = new FileInputStream(file);
         if (file.getName().toLowerCase().endsWith(".gz")) {
             try {

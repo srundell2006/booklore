@@ -140,10 +140,7 @@ public class SidecarMetadataMapper {
     }
 
     public String getCoverFileName(Path bookPath) {
-        String fileName = bookPath.getFileName().toString();
-        int dotIndex = fileName.lastIndexOf('.');
-        String baseName = (dotIndex > 0) ? fileName.substring(0, dotIndex) : fileName;
-        return baseName + ".cover.jpg";
+        return SidecarFileNames.baseName(bookPath) + ".cover.jpg";
     }
 
     private List<String> extractNames(List<AuthorEntity> entities) {

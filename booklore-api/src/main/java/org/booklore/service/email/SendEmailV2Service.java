@@ -17,7 +17,7 @@ import org.booklore.repository.EmailRecipientV2Repository;
 import org.booklore.repository.UserEmailProviderPreferenceRepository;
 import org.booklore.service.NotificationService;
 import org.booklore.util.FileUtils;
-import org.booklore.util.SecurityContextVirtualThread;
+import org.booklore.util.SecurityContextThreads;
 import jakarta.mail.MessagingException;
 import jakarta.mail.internet.MimeMessage;
 import lombok.AllArgsConstructor;
@@ -52,7 +52,7 @@ public class SendEmailV2Service {
         EmailProviderV2Entity defaultEmailProvider = getDefaultEmailProvider();
         EmailRecipientV2Entity defaultEmailRecipient = emailRecipientRepository.findDefaultEmailRecipientByUserId(user.getId()).orElseThrow(ApiError.DEFAULT_EMAIL_RECIPIENT_NOT_FOUND::createException);
         BookFileEntity bookFile = book.getPrimaryBookFile();
-        sendEmailInVirtualThread(defaultEmailProvider, defaultEmailRecipient.getEmail(), book, bookFile);
+        sendEmailInBackground(defaultEmailProvider, defaultEmailRecipient.getEmail(), book, bookFile);
     }
 
     public void emailBook(SendBookByEmailRequest request) {
@@ -65,15 +65,15 @@ public class SendEmailV2Service {
         BookEntity book = bookRepository.findByIdWithBookFiles(request.getBookId()).orElseThrow(() -> ApiError.BOOK_NOT_FOUND.createException(request.getBookId()));
         EmailRecipientV2Entity emailRecipient = emailRecipientRepository.findByIdAndUserId(request.getRecipientId(), user.getId()).orElseThrow(() -> ApiError.EMAIL_RECIPIENT_NOT_FOUND.createException(request.getRecipientId()));
         BookFileEntity bookFile = resolveBookFile(book, request.getBookFileId());
-        sendEmailInVirtualThread(emailProvider, emailRecipient.getEmail(), book, bookFile);
+        sendEmailInBackground(emailProvider, emailRecipient.getEmail(), book, bookFile);
     }
 
-    private void sendEmailInVirtualThread(EmailProviderV2Entity emailProvider, String recipientEmail, BookEntity book, BookFileEntity bookFile) {
+    private void sendEmailInBackground(EmailProviderV2Entity emailProvider, String recipientEmail, BookEntity book, BookFileEntity bookFile) {
         String bookTitle = book.getMetadata().getTitle();
         String logMessage = "Email dispatch initiated for book: " + bookTitle + " to " + recipientEmail;
         notificationService.sendMessage(Topic.LOG, LogNotification.info(logMessage));
         log.info(logMessage);
-        SecurityContextVirtualThread.runWithSecurityContext(() -> {
+        SecurityContextThreads.start("email-book-" + book.getId(), () -> {
             try {
                 sendEmail(emailProvider, recipientEmail, book, bookFile);
                 auditService.log(AuditAction.BOOK_SENT, "Book", book.getId(), "Sent book: " + bookTitle + " to " + recipientEmail);

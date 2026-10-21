@@ -5,12 +5,23 @@ import org.apache.commons.io.FilenameUtils;
 import org.apache.commons.io.IOUtils;
 import org.apache.commons.lang3.StringUtils;
 import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.contentstream.PDContentStream;
+import org.apache.pdfbox.contentstream.operator.Operator;
+import org.apache.pdfbox.contentstream.operator.OperatorName;
+import org.apache.pdfbox.cos.COSArray;
+import org.apache.pdfbox.cos.COSBase;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
+import org.apache.pdfbox.cos.COSStream;
 import org.apache.pdfbox.io.RandomAccessReadBufferedFile;
+import org.apache.pdfbox.pdfparser.PDFStreamParser;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDDocumentInformation;
+import org.apache.pdfbox.pdmodel.PDPage;
+import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.common.PDMetadata;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
 import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
 import org.booklore.model.dto.BookMetadata;
@@ -30,6 +41,7 @@ import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
+import java.io.IOException;
 import java.io.InputStream;
 import java.nio.charset.StandardCharsets;
 import java.time.LocalDate;
@@ -46,24 +58,182 @@ public class PdfMetadataExtractor implements FileMetadataExtractor {
     private static final Pattern COMMA_AMPERSAND_PATTERN = Pattern.compile("[,&]");
     private static final Pattern ISBN_CLEANUP_PATTERN = Pattern.compile("[^0-9Xx]");
 
+    // FileService.saveCoverImages scales stored covers down to fit within this box
+    private static final int STORED_COVER_MAX_WIDTH = 1000;
+    private static final int STORED_COVER_MAX_HEIGHT = 1500;
+    private static final float EXTRACTED_COVER_MAX_DPI = 300f;
+    // Heap PDFBox 3 takes to decode an image, per pixel, measured under G1: 10-12 bytes for an 8-bit RGB or CMYK
+    // JPEG or Flate image, 6 for 8-bit gray, 1-4 for a 1-bit image or stencil mask and 22 for JPEG 2000
+    private static final long IMAGE_DECODE_BYTES_PER_PIXEL = 12;
+    private static final long BILEVEL_DECODE_BYTES_PER_PIXEL = 4;
+    private static final long JPX_DECODE_BYTES_PER_PIXEL = 24;
+    // Forms drawn inside forms deeper than this are not looked into
+    private static final int MAX_FORM_DEPTH = 8;
+
     @Override
     public byte[] extractCover(File file) {
-        BufferedImage coverImage = null;
         try (RandomAccessReadBufferedFile randomAccessRead = new RandomAccessReadBufferedFile(file);
              PDDocument pdf = Loader.loadPDF(randomAccessRead)) {
-            coverImage = new PDFRenderer(pdf).renderImageWithDPI(0, 300, ImageType.RGB);
+            return extractCover(pdf);
+        } catch (Exception e) {
+            log.warn("Failed to extract cover from PDF: {}", file.getAbsolutePath(), e);
+            return null;
+        }
+    }
+
+    /**
+     * The cover {@link #extractCover(File)} makes, from a document the caller has loaded, so a caller can reserve heap
+     * for the render once it knows the page: see {@link #imageDecodeBytes}.
+     */
+    public byte[] extractCover(PDDocument pdf) throws IOException {
+        BufferedImage coverImage = null;
+        try {
+            coverImage = renderCover(pdf, EXTRACTED_COVER_MAX_DPI);
             try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
                 ImageIO.write(coverImage, "jpg", baos);
                 return baos.toByteArray();
             }
-        } catch (Exception e) {
-            log.warn("Failed to extract cover from PDF: {}", file.getAbsolutePath(), e);
-            return null;
         } finally {
             if (coverImage != null) {
                 coverImage.flush(); // Release native resources
             }
         }
+    }
+
+    /**
+     * Renders the first page only as large as the cover FileService.saveCoverImages stores from it, and no sharper
+     * than {@code maxDpi}, since saveCoverImages discards extra pixels. That saves render time on text, vector and
+     * large pages. A page that is one scanned image at more than twice the render DPI gains nothing and can take a few
+     * percent longer: PDFBox then area-averages the whole scan, which costs about what rendering at {@code maxDpi}
+     * and downscaling did. Its faster options, subsampling or a lower imageDownscalingOptimizationThreshold, leave
+     * the cover visibly aliased.
+     */
+    public BufferedImage renderCover(PDDocument pdf, float maxDpi) throws IOException {
+        return new PDFRenderer(pdf).renderImageWithDPI(0, coverDpi(pdf.getPage(0), maxDpi), ImageType.RGB);
+    }
+
+    /**
+     * The DPI at which the page just fills the edge of the stored cover that saveCoverImages keeps whole, capped at
+     * {@code maxDpi}. saveCoverImages scales covers down to fit 1000x1500, and its optional cover cropping trims tall
+     * images to 2:3 keeping their width and wide images keeping their height, so portrait pages render 1000 wide and
+     * landscape pages 1500 tall. Pages too small for that render at {@code maxDpi}, exactly as before. Other pages
+     * round differently from a downscaled {@code maxDpi} render: each side of the stored cover can differ by a pixel,
+     * and a page whose aspect ratio sits on one of saveCoverImages' thresholds (square thumbnail, cover cropping) can
+     * land on the other side of it.
+     */
+    static float coverDpi(PDPage page, float maxDpi) {
+        PDRectangle cropBox = page.getCropBox();
+        // PDFRenderer sizes the image from the crop box, swapping its sides for a quarter-turn rotation
+        boolean quarterTurn = page.getRotation() == 90 || page.getRotation() == 270;
+        float widthPt = quarterTurn ? cropBox.getHeight() : cropBox.getWidth();
+        float heightPt = quarterTurn ? cropBox.getWidth() : cropBox.getHeight();
+        // Half a pixel past the cap, so PDFRenderer rounding the size down cannot leave the edge a pixel short
+        float dpi = heightPt >= widthPt
+                ? (STORED_COVER_MAX_WIDTH + 0.5f) * 72 / widthPt
+                : (STORED_COVER_MAX_HEIGHT + 0.5f) * 72 / heightPt;
+        return Math.min(dpi, maxDpi);
+    }
+
+    /**
+     * How many pixels {@link #renderCover} renders the page with at {@code maxDpi}: PDFRenderer's raster for the crop
+     * box at {@link #coverDpi}, each side rounded down and at least one pixel. A quarter-turn rotation swaps the sides,
+     * which leaves the count alone. Lets a caller budget memory for the render before running it.
+     */
+    public static long coverPixels(PDPage page, float maxDpi) {
+        PDRectangle cropBox = page.getCropBox();
+        float scale = coverDpi(page, maxDpi) / 72f;
+        long width = (long) Math.max(Math.floor(cropBox.getWidth() * scale), 1);
+        long height = (long) Math.max(Math.floor(cropBox.getHeight() * scale), 1);
+        return width * height;
+    }
+
+    /**
+     * Heap PDFBox needs to decode the largest image {@link #renderCover} draws on the page. PDFRenderer decodes each
+     * image at its full size however small it draws it, so a page that is one scanned image needs far more heap than
+     * the raster it renders into: about 400 MB for an A4 page scanned at 600 dpi. It draws one image at a time and
+     * holds what it keeps of earlier ones softly, so the largest is what counts. Lets a caller budget memory for the
+     * render before running it.
+     *
+     * <p>Reads only what the render reads anyway: the page's content, the dictionaries of the images it draws, and
+     * the content of the forms it draws, {@value #MAX_FORM_DEPTH} deep. No image is decoded, and an image the page's
+     * resources list but its content does not draw is not counted. Images in patterns, soft masks, annotations and
+     * Type 3 glyphs are not looked for.
+     *
+     * @return 0 when the page draws no image; what was found before the content stopped parsing, when it does
+     */
+    public static long imageDecodeBytes(PDPage page) {
+        return largestImageDecodeBytes(page, page.getResources(), Collections.newSetFromMap(new IdentityHashMap<>()), 0);
+    }
+
+    private static long largestImageDecodeBytes(PDContentStream content, PDResources resources, Set<COSBase> seen, int depth) {
+        COSDictionary xObjects = resources != null ? resources.getCOSObject().getCOSDictionary(COSName.XOBJECT) : null;
+        long largest = 0;
+        PDFStreamParser parser = null;
+        try {
+            parser = new PDFStreamParser(content);
+            // The operand just before the current token, if it was a name: what a Do operator draws
+            COSName name = null;
+            for (Object token = parser.parseNextToken(); token != null; token = parser.parseNextToken()) {
+                if (token instanceof Operator operator) {
+                    if (OperatorName.BEGIN_INLINE_IMAGE.equals(operator.getName()) && operator.getImageParameters() != null) {
+                        largest = Math.max(largest, decodeBytes(operator.getImageParameters()));
+                    } else if (OperatorName.DRAW_OBJECT.equals(operator.getName()) && name != null && xObjects != null
+                            && xObjects.getDictionaryObject(name) instanceof COSStream xObject && seen.add(xObject)) {
+                        largest = Math.max(largest, xObjectDecodeBytes(xObject, resources, seen, depth));
+                    }
+                }
+                name = token instanceof COSName tokenName ? tokenName : null;
+            }
+        } catch (IOException | RuntimeException e) {
+            log.debug("Stopped sizing the images of a PDF page at a content parse error: {}", e.getMessage());
+        } finally {
+            if (parser != null) {
+                try {
+                    parser.close();
+                } catch (IOException e) {
+                    log.debug("Failed to close a PDF content parser: {}", e.getMessage());
+                }
+            }
+        }
+        return largest;
+    }
+
+    private static long xObjectDecodeBytes(COSStream xObject, PDResources resources, Set<COSBase> seen, int depth) {
+        COSName subtype = xObject.getCOSName(COSName.SUBTYPE);
+        if (COSName.IMAGE.equals(subtype)) {
+            return decodeBytes(xObject);
+        }
+        if (COSName.FORM.equals(subtype) && depth < MAX_FORM_DEPTH) {
+            PDFormXObject form = new PDFormXObject(xObject);
+            // As PDFBox draws it: a form without resources of its own uses those of what draws it
+            PDResources formResources = form.getResources() != null ? form.getResources() : resources;
+            return largestImageDecodeBytes(form, formResources, seen, depth + 1);
+        }
+        return 0;
+    }
+
+    /** What decoding the image takes, from its dictionary: an image XObject's, or an inline image's abbreviated one. */
+    private static long decodeBytes(COSDictionary image) {
+        long width = Math.max(image.getInt(COSName.WIDTH, COSName.W, 0), 0);
+        long height = Math.max(image.getInt(COSName.HEIGHT, COSName.H, 0), 0);
+        int bitsPerComponent = image.getInt(COSName.BITS_PER_COMPONENT, COSName.BPC, 8);
+        long bytesPerPixel;
+        if (isJpx(image.getDictionaryObject(COSName.FILTER, COSName.F))) {
+            bytesPerPixel = JPX_DECODE_BYTES_PER_PIXEL;
+        } else if (image.getBoolean(COSName.IMAGE_MASK, COSName.IM, false) || bitsPerComponent == 1) {
+            bytesPerPixel = BILEVEL_DECODE_BYTES_PER_PIXEL;
+        } else {
+            bytesPerPixel = IMAGE_DECODE_BYTES_PER_PIXEL * Math.clamp(bitsPerComponent, 8, 16) / 8;
+        }
+        // No more pixels than a Java array holds can be decoded
+        return Math.min(width * height, Integer.MAX_VALUE) * bytesPerPixel;
+    }
+
+    private static boolean isJpx(COSBase filter) {
+        if (filter instanceof COSArray filters) {
+            return filters.indexOfObject(COSName.JPX_DECODE) >= 0;
+        }
+        return COSName.JPX_DECODE.equals(filter);
     }
 
     @Override
@@ -73,10 +243,24 @@ public class PdfMetadataExtractor implements FileMetadataExtractor {
             return BookMetadata.builder().build();
         }
 
-        BookMetadata.BookMetadataBuilder metadataBuilder = BookMetadata.builder();
-
+        BookMetadata metadata = BookMetadata.builder().build();
         try (RandomAccessReadBufferedFile randomAccessRead = new RandomAccessReadBufferedFile(file);
              PDDocument pdf = Loader.loadPDF(randomAccessRead)) {
+            metadata = extractMetadata(pdf, file);
+        } catch (Exception e) {
+            log.error("Failed to load PDF file: {}", file.getPath(), e);
+        }
+        return metadata;
+    }
+
+    /**
+     * Extracts metadata from a document the caller has already loaded, so a caller that also renders the cover loads
+     * the file once. The file is not read: it only supplies the name used as the title fallback and in log messages.
+     */
+    public BookMetadata extractMetadata(PDDocument pdf, File file) {
+        BookMetadata.BookMetadataBuilder metadataBuilder = BookMetadata.builder();
+
+        try {
             PDDocumentInformation info = pdf.getDocumentInformation();
 
             if (info != null) {
@@ -244,7 +428,7 @@ public class PdfMetadataExtractor implements FileMetadataExtractor {
             }
 
         } catch (Exception e) {
-            log.error("Failed to load PDF file: {}", file.getPath(), e);
+            log.error("Failed to read PDF metadata: {}", file.getPath(), e);
         }
 
         return metadataBuilder.build();

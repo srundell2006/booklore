@@ -1,20 +1,34 @@
 package org.booklore.service.metadata.extractor;
 
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSArray;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.cos.COSString;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDDocumentCatalog;
 import org.apache.pdfbox.pdmodel.PDDocumentInformation;
+import org.apache.pdfbox.pdmodel.PDFormContentStream;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.common.PDMetadata;
+import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.common.PDStream;
+import org.apache.pdfbox.pdmodel.graphics.color.PDColorSpace;
+import org.apache.pdfbox.pdmodel.graphics.color.PDDeviceCMYK;
+import org.apache.pdfbox.pdmodel.graphics.color.PDDeviceGray;
+import org.apache.pdfbox.pdmodel.graphics.color.PDDeviceRGB;
+import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.booklore.model.dto.BookMetadata;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 
+import javax.imageio.ImageIO;
+import java.awt.image.BufferedImage;
 import java.io.ByteArrayInputStream;
 import java.io.File;
 import java.io.InputStream;
@@ -25,6 +39,7 @@ import java.util.GregorianCalendar;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.within;
 
 class PdfMetadataExtractorTest {
 
@@ -879,6 +894,408 @@ class PdfMetadataExtractorTest {
             File nonExistent = new File("/tmp/no_such_file_ever.pdf");
             byte[] cover = extractor.extractCover(nonExistent);
             assertThat(cover).isNull();
+        }
+
+        @Test
+        void extractCover_rendersOnlyAsLargeAsTheStoredCover() throws Exception {
+            File pdf = createPdf(_ -> {});
+            BufferedImage cover = ImageIO.read(new ByteArrayInputStream(extractor.extractCover(pdf)));
+            // A Letter page used to render at 300 DPI (2550x3299) only for saveCoverImages to scale it to 1000 wide
+            assertThat(cover.getWidth()).isEqualTo(1000);
+            assertThat(cover.getHeight()).isEqualTo(1294);
+        }
+    }
+
+    // --- Cover render size ---
+
+    @Nested
+    class CoverRenderSizeTests {
+
+        private static final PDRectangle LETTER_LANDSCAPE = new PDRectangle(PDRectangle.LETTER.getHeight(), PDRectangle.LETTER.getWidth());
+
+        @Test
+        void letterPage_rendersTheWidthAtTheCap() throws Exception {
+            assertCoverRender(PDRectangle.LETTER, 0, 150, 117.706f, 1000, 1294);
+        }
+
+        @Test
+        void a4Page_rendersTheWidthAtTheCap() throws Exception {
+            assertCoverRender(PDRectangle.A4, 0, 150, 121.013f, 1000, 1414);
+        }
+
+        @Test
+        void squarePage_rendersTheWidthAtTheCap() throws Exception {
+            assertCoverRender(new PDRectangle(576, 576), 0, 150, 125.063f, 1000, 1000);
+        }
+
+        @Test
+        void landscapePage_rendersTheHeightAtTheCap() throws Exception {
+            assertCoverRender(new PDRectangle(1224, 792), 0, 150, 136.409f, 2318, 1500);
+        }
+
+        @Test
+        void landscapePage_tooSmallToReachTheCap_rendersAtMaxDpi() throws Exception {
+            // 1500 px tall would need 176.5 DPI; at 150 DPI the render is the same as before
+            assertCoverRender(LETTER_LANDSCAPE, 0, 150, 150f, 1649, 1275);
+            assertCoverRender(LETTER_LANDSCAPE, 0, 300, 176.529f, 1941, 1500);
+        }
+
+        @Test
+        void quarterTurnRotation_swapsTheEdges() throws Exception {
+            // A landscape crop box turned 90 degrees displays, and renders, as a portrait page
+            assertCoverRender(LETTER_LANDSCAPE, 90, 150, 117.706f, 1000, 1294);
+            // A portrait crop box turned 270 degrees renders as a landscape page
+            assertCoverRender(PDRectangle.LETTER, 270, 150, 150f, 1649, 1275);
+        }
+
+        @Test
+        void halfTurnRotation_keepsTheEdges() throws Exception {
+            assertCoverRender(PDRectangle.LETTER, 180, 150, 117.706f, 1000, 1294);
+        }
+
+        @Test
+        void posterPage_rendersFarBelowMaxDpi() throws Exception {
+            // 150 DPI used to render 4966x7021 here
+            assertCoverRender(PDRectangle.A0, 0, 150, 30.217f, 1000, 1414);
+        }
+
+        @Test
+        void tinyPage_rendersAtMaxDpi() throws Exception {
+            PDRectangle twoByThreeInches = new PDRectangle(144, 216);
+            assertCoverRender(twoByThreeInches, 0, 150, 150f, 300, 449);
+            assertCoverRender(twoByThreeInches, 0, 300, 300f, 600, 899);
+        }
+
+        @Test
+        void usesTheCropBoxRatherThanTheMediaBox() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDPage page = new PDPage(new PDRectangle(1224, 1584));
+                page.setCropBox(new PDRectangle(306, 396, 612, 792));
+                doc.addPage(page);
+                assertThat(PdfMetadataExtractor.coverDpi(page, 150)).isCloseTo(117.706f, within(0.001f));
+                BufferedImage image = extractor.renderCover(doc, 150);
+                assertThat(image.getWidth()).isEqualTo(1000);
+                assertThat(image.getHeight()).isEqualTo(1294);
+                assertThat(PdfMetadataExtractor.coverPixels(page, 150)).isEqualTo(1000L * 1294);
+            }
+        }
+
+        @Test
+        void coverPixelsFollowPdfRendererRoundingOnOddSizes() throws Exception {
+            // Sizes whose scaled sides land just above, just below and on whole pixels
+            float[][] boxes = {{100.3f, 333.7f}, {611.9f, 791.1f}, {1f, 1f}, {0.2f, 5000f}, {2000f, 33.3f}};
+            for (float[] box : boxes) {
+                for (float maxDpi : new float[]{72f, 150f, 300f}) {
+                    assertCoverPixelsMatchTheRender(new PDRectangle(box[0], box[1]), 0, maxDpi);
+                    assertCoverPixelsMatchTheRender(new PDRectangle(box[0], box[1]), 90, maxDpi);
+                }
+            }
+        }
+
+        private void assertCoverPixelsMatchTheRender(PDRectangle box, int rotation, float maxDpi) throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDPage page = new PDPage(box);
+                page.setRotation(rotation);
+                doc.addPage(page);
+                BufferedImage image = extractor.renderCover(doc, maxDpi);
+                assertThat(PdfMetadataExtractor.coverPixels(page, maxDpi))
+                        .as("%sx%s turned %d at %s DPI", box.getWidth(), box.getHeight(), rotation, maxDpi)
+                        .isEqualTo((long) image.getWidth() * image.getHeight());
+                image.flush();
+            }
+        }
+
+        private void assertCoverRender(PDRectangle box, int rotation, float maxDpi,
+                                       float expectedDpi, int expectedWidth, int expectedHeight) throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDPage page = new PDPage(box);
+                page.setRotation(rotation);
+                doc.addPage(page);
+                assertThat(PdfMetadataExtractor.coverDpi(page, maxDpi)).isCloseTo(expectedDpi, within(0.001f));
+                BufferedImage image = extractor.renderCover(doc, maxDpi);
+                assertThat(image.getWidth()).isEqualTo(expectedWidth);
+                assertThat(image.getHeight()).isEqualTo(expectedHeight);
+                assertThat(PdfMetadataExtractor.coverPixels(page, maxDpi)).isEqualTo((long) expectedWidth * expectedHeight);
+            }
+        }
+    }
+
+    // --- Heap for the images a cover render decodes ---
+
+    @Nested
+    class ImageDecodeSizeTests {
+
+        @Test
+        void aScannedPage_needsHeapForItsImageAtFullSize_howeverSmallItIsDrawn() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                // An A4 page scanned at 600 dpi, drawn over the page and drawn as a thumbnail
+                PDPage page = pageDrawing(doc, image(doc, COSName.DCT_DECODE, 4960, 7016, 8, PDDeviceRGB.INSTANCE), 595, 842);
+                PDPage thumbnail = pageDrawing(doc, image(doc, COSName.DCT_DECODE, 4960, 7016, 8, PDDeviceRGB.INSTANCE), 10, 14);
+
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(page)).isEqualTo(12L * 4960 * 7016);
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(thumbnail)).isEqualTo(12L * 4960 * 7016);
+            }
+        }
+
+        @Test
+        void aPageWithoutImages_needsNone() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDPage page = new PDPage(PDRectangle.A4);
+                doc.addPage(page);
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    cs.addRect(10, 10, 100, 100);
+                    cs.fill();
+                }
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(page)).isZero();
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(new PDPage())).isZero();
+            }
+        }
+
+        @Test
+        void eachKindOfImage_needsWhatPdfBoxTakesToDecodeIt() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDImageXObject mask = image(doc, COSName.FLATE_DECODE, 3000, 4000, 1, PDDeviceGray.INSTANCE);
+                mask.getCOSObject().setBoolean(COSName.IMAGE_MASK, true);
+                mask.getCOSObject().removeItem(COSName.COLORSPACE);
+                mask.getCOSObject().removeItem(COSName.BITS_PER_COMPONENT);
+
+                assertImageNeeds(doc, image(doc, COSName.JPX_DECODE, 3000, 4500, 8, PDDeviceRGB.INSTANCE), 24L * 3000 * 4500);
+                assertImageNeeds(doc, image(doc, COSName.CCITTFAX_DECODE, 3000, 4000, 1, PDDeviceGray.INSTANCE), 4L * 3000 * 4000);
+                assertImageNeeds(doc, mask, 4L * 3000 * 4000);
+                assertImageNeeds(doc, image(doc, COSName.FLATE_DECODE, 3000, 4000, 16, PDDeviceRGB.INSTANCE), 24L * 3000 * 4000);
+                assertImageNeeds(doc, image(doc, COSName.FLATE_DECODE, 3000, 4000, 4, PDDeviceGray.INSTANCE), 12L * 3000 * 4000);
+                assertImageNeeds(doc, image(doc, COSName.DCT_DECODE, 3000, 4000, 8, PDDeviceCMYK.INSTANCE), 12L * 3000 * 4000);
+            }
+        }
+
+        @Test
+        void filtersInAChainAreAllLookedAt() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDImageXObject jpx = image(doc, COSName.JPX_DECODE, 3000, 4500, 8, PDDeviceRGB.INSTANCE);
+                COSArray filters = new COSArray();
+                filters.add(COSName.FLATE_DECODE);
+                filters.add(COSName.JPX_DECODE);
+                jpx.getCOSObject().setItem(COSName.FILTER, filters);
+
+                assertImageNeeds(doc, jpx, 24L * 3000 * 4500);
+            }
+        }
+
+        @Test
+        void imagesAreDecodedOneAtATime_soTheLargestCounts() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDPage page = new PDPage(PDRectangle.A4);
+                doc.addPage(page);
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    cs.drawImage(image(doc, COSName.DCT_DECODE, 1000, 1000, 8, PDDeviceRGB.INSTANCE), 0, 0, 100, 100);
+                    cs.drawImage(image(doc, COSName.DCT_DECODE, 2000, 3000, 8, PDDeviceRGB.INSTANCE), 0, 100, 100, 150);
+                    cs.drawImage(image(doc, COSName.DCT_DECODE, 1500, 1500, 8, PDDeviceRGB.INSTANCE), 0, 250, 100, 100);
+                }
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(page)).isEqualTo(12L * 2000 * 3000);
+            }
+        }
+
+        @Test
+        void anImageThePageListsButDoesNotDraw_isNotCounted() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                // As in a document whose pages share one resource dictionary listing every page's scan
+                PDPage page = pageDrawing(doc, image(doc, COSName.DCT_DECODE, 1000, 1500, 8, PDDeviceRGB.INSTANCE), 595, 842);
+                page.getResources().add(image(doc, COSName.DCT_DECODE, 4960, 7016, 8, PDDeviceRGB.INSTANCE));
+
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(page)).isEqualTo(12L * 1000 * 1500);
+            }
+        }
+
+        @Test
+        void imagesDrawnInsideForms_count() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDFormXObject inner = form(doc, image(doc, COSName.DCT_DECODE, 2480, 3508, 8, PDDeviceRGB.INSTANCE));
+                PDFormXObject outer = new PDFormXObject(doc);
+                outer.setBBox(new PDRectangle(595, 842));
+                outer.setResources(new PDResources());
+                try (PDFormContentStream cs = new PDFormContentStream(outer)) {
+                    cs.drawForm(inner);
+                }
+                PDPage page = new PDPage(PDRectangle.A4);
+                doc.addPage(page);
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    cs.drawForm(outer);
+                }
+
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(page)).isEqualTo(12L * 2480 * 3508);
+            }
+        }
+
+        @Test
+        void aFormThatDrawsItself_isLookedIntoOnce() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDFormXObject form = new PDFormXObject(doc);
+                form.setBBox(new PDRectangle(595, 842));
+                form.setResources(new PDResources());
+                try (PDFormContentStream cs = new PDFormContentStream(form)) {
+                    cs.drawImage(image(doc, COSName.DCT_DECODE, 1000, 1500, 8, PDDeviceRGB.INSTANCE), 0, 0, 595, 842);
+                    cs.drawForm(form);
+                }
+                PDPage page = new PDPage(PDRectangle.A4);
+                doc.addPage(page);
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    cs.drawForm(form);
+                }
+
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(page)).isEqualTo(12L * 1000 * 1500);
+            }
+        }
+
+        @Test
+        void inlineImages_count() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDPage page = new PDPage(PDRectangle.A4);
+                doc.addPage(page);
+                String content = "q 595 0 0 842 0 0 cm BI /W 3000 /H 4000 /BPC 8 /CS /RGB /F /DCT ID \u0000\u0000 EI Q";
+                page.setContents(new PDStream(doc, new ByteArrayInputStream(content.getBytes(StandardCharsets.ISO_8859_1))));
+
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(page)).isEqualTo(12L * 3000 * 4000);
+            }
+        }
+
+        @Test
+        void readsTheImagesOfASavedDocument_withoutDecodingThem() throws Exception {
+            // The image data is not a JPEG at all: only its dictionary is read
+            File pdf = createPdf(doc -> {
+                PDPage page = doc.getPage(0);
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page, PDPageContentStream.AppendMode.APPEND, true)) {
+                    cs.drawImage(image(doc, COSName.DCT_DECODE, 4000, 6000, 8, PDDeviceRGB.INSTANCE), 0, 0, 612, 792);
+                }
+            });
+            try (PDDocument doc = Loader.loadPDF(pdf)) {
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(doc.getPage(0))).isEqualTo(12L * 4000 * 6000);
+            }
+        }
+
+        private void assertImageNeeds(PDDocument doc, PDImageXObject image, long bytes) throws Exception {
+            assertThat(PdfMetadataExtractor.imageDecodeBytes(pageDrawing(doc, image, 595, 842)))
+                    .as("%s", image.getCOSObject())
+                    .isEqualTo(bytes);
+        }
+
+        private static PDPage pageDrawing(PDDocument doc, PDImageXObject image, float width, float height) throws Exception {
+            PDPage page = new PDPage(PDRectangle.A4);
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawImage(image, 0, 0, width, height);
+            }
+            return page;
+        }
+
+        private static PDFormXObject form(PDDocument doc, PDImageXObject image) throws Exception {
+            PDFormXObject form = new PDFormXObject(doc);
+            form.setBBox(new PDRectangle(595, 842));
+            form.setResources(new PDResources());
+            try (PDFormContentStream cs = new PDFormContentStream(form)) {
+                cs.drawImage(image, 0, 0, 595, 842);
+            }
+            return form;
+        }
+
+        /** An image of the given dictionary whose data is one byte: nothing here decodes it. */
+        private static PDImageXObject image(PDDocument doc, COSName filter, int width, int height, int bitsPerComponent,
+                                            PDColorSpace colorSpace) throws Exception {
+            return new PDImageXObject(doc, new ByteArrayInputStream(new byte[]{0}), filter, width, height, bitsPerComponent, colorSpace);
+        }
+    }
+
+    // --- Already loaded document ---
+
+    @Nested
+    class LoadedDocumentTests {
+
+        @Test
+        void matchesFileOverload_forDocumentInfo() throws Exception {
+            File pdf = createPdf(doc -> {
+                PDDocumentInformation info = new PDDocumentInformation();
+                info.setTitle("Info Title");
+                info.setAuthor("Author One, Author Two & Author Three");
+                info.setSubject("Info subject");
+                info.setKeywords("Fantasy; Adventure");
+                info.setCreationDate(new GregorianCalendar(2020, Calendar.MARCH, 15));
+                info.setCustomMetadataValue("Language", "fr");
+                info.getCOSObject().setString(COSName.getPDFName("EBX_PUBLISHER"), "Ebx House");
+                doc.setDocumentInformation(info);
+                doc.addPage(new PDPage());
+            });
+
+            BookMetadata meta = assertLoadedDocumentMatchesFile(pdf);
+
+            assertThat(meta.getTitle()).isEqualTo("Info Title");
+            assertThat(meta.getAuthors()).containsExactly("Author One", "Author Two", "Author Three");
+            assertThat(meta.getDescription()).isEqualTo("Info subject");
+            assertThat(meta.getCategories()).containsExactlyInAnyOrder("Fantasy", "Adventure");
+            assertThat(meta.getPublishedDate()).isNotNull();
+            assertThat(meta.getLanguage()).isEqualTo("fr");
+            assertThat(meta.getPublisher()).isEqualTo("Ebx House");
+            assertThat(meta.getPageCount()).isEqualTo(2);
+        }
+
+        @Test
+        void matchesFileOverload_forXmp() throws Exception {
+            File pdf = createPdfWithXmp("""
+                <dc:title><rdf:Alt><rdf:li xml:lang="x-default">Xmp Title</rdf:li></rdf:Alt></dc:title>
+                <dc:creator><rdf:Seq><rdf:li>Xmp Author</rdf:li><rdf:li>Second Author</rdf:li></rdf:Seq></dc:creator>
+                <dc:subject><rdf:Bag><rdf:li>Sci-Fi</rdf:li></rdf:Bag></dc:subject>
+                <calibre:series><rdf:value>Calibre Series</rdf:value><calibreSI:series_index>2</calibreSI:series_index></calibre:series>
+                <booklore:subtitle>Xmp Subtitle</booklore:subtitle>
+                <booklore:seriesTotal>5</booklore:seriesTotal>
+                <booklore:goodreadsRating>4.5</booklore:goodreadsRating>
+                <booklore:tags><rdf:Bag><rdf:li>Favorites</rdf:li></rdf:Bag></booklore:tags>
+                <xmp:Identifier>
+                  <rdf:Bag>
+                    <rdf:li><xmpidq:Scheme>ISBN</xmpidq:Scheme><rdf:value>978-0-306-40615-7</rdf:value></rdf:li>
+                    <rdf:li><xmpidq:Scheme>GOOGLE</xmpidq:Scheme><rdf:value>gid123</rdf:value></rdf:li>
+                  </rdf:Bag>
+                </xmp:Identifier>
+                """);
+
+            BookMetadata meta = assertLoadedDocumentMatchesFile(pdf);
+
+            assertThat(meta.getTitle()).isEqualTo("Xmp Title");
+            assertThat(meta.getAuthors()).containsExactly("Xmp Author", "Second Author");
+            assertThat(meta.getSubtitle()).isEqualTo("Xmp Subtitle");
+            assertThat(meta.getSeriesName()).isEqualTo("Calibre Series");
+            assertThat(meta.getSeriesNumber()).isEqualTo(2.0f);
+            assertThat(meta.getSeriesTotal()).isEqualTo(5);
+            assertThat(meta.getGoodreadsRating()).isEqualTo(4.5);
+            assertThat(meta.getTags()).containsExactly("Favorites");
+            assertThat(meta.getIsbn13()).isEqualTo("9780306406157");
+            assertThat(meta.getGoogleId()).isEqualTo("gid123");
+        }
+
+        @Test
+        void matchesFileOverload_forFileNameTitleFallback() throws Exception {
+            File pdf = createPdf(_ -> {});
+
+            BookMetadata meta = assertLoadedDocumentMatchesFile(pdf);
+
+            assertThat(meta.getTitle()).isEqualTo("test");
+            assertThat(meta.getPageCount()).isEqualTo(1);
+        }
+
+        @Test
+        void takesTheTitleFallbackFromTheFileNameWithoutReadingTheFile() throws Exception {
+            File pdf = createPdf(_ -> {});
+            try (PDDocument doc = Loader.loadPDF(pdf)) {
+                BookMetadata meta = extractor.extractMetadata(doc, new File("/no/such/folder/Some Book.pdf"));
+                assertThat(meta.getTitle()).isEqualTo("Some Book");
+                assertThat(meta.getPageCount()).isEqualTo(1);
+            }
+        }
+
+        private BookMetadata assertLoadedDocumentMatchesFile(File pdf) throws Exception {
+            BookMetadata fromFile = extractor.extractMetadata(pdf);
+            try (PDDocument doc = Loader.loadPDF(pdf)) {
+                BookMetadata fromDocument = extractor.extractMetadata(doc, pdf);
+                assertThat(fromDocument).usingRecursiveComparison().isEqualTo(fromFile);
+                return fromDocument;
+            }
         }
     }
 

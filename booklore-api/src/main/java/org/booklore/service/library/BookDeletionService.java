@@ -1,6 +1,5 @@
 package org.booklore.service.library;
 
-import org.booklore.model.dto.settings.LibraryFile;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.LibraryEntity;
@@ -8,6 +7,7 @@ import org.booklore.model.enums.BookFileType;
 import org.booklore.model.websocket.Topic;
 import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
+import org.booklore.repository.projection.BookFileScanRow;
 import org.booklore.service.NotificationService;
 import org.booklore.util.FileService;
 import jakarta.persistence.EntityManager;
@@ -44,31 +44,34 @@ public class BookDeletionService {
             return;
         }
 
-        List<BookFileEntity> additionalFiles = bookAdditionalFileRepository.findAllById(additionalFileIds);
-        bookAdditionalFileRepository.deleteAll(additionalFiles);
-        entityManager.flush();
-        entityManager.clear();
+        // Nothing maps a cascade from book_file, so a bulk delete removes exactly what
+        // loading and removing each entity did, without the per-row selects.
+        bookAdditionalFileRepository.deleteAllByIdInBatch(additionalFileIds);
 
         log.info("Deleted {} additional files from database", additionalFileIds.size());
     }
 
+    /**
+     * Handles books whose primary file a rescan found gone. The rescan has already deleted
+     * every vanished file row it could vouch for, so this only decides from what is left: a
+     * book that still has a book-format file keeps it as its new primary file, the rest are
+     * deleted. It never drops files itself, because a file it does not know about (one added
+     * while the rescan ran, say) is not proof of anything.
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void processDeletedLibraryFiles(List<Long> deletedBookIds, List<LibraryFile> libraryFiles) {
+    public void processDeletedLibraryFiles(List<Long> deletedBookIds) {
         if (deletedBookIds.isEmpty()) {
             return;
         }
 
-        List<BookEntity> books = bookRepository.findAllById(deletedBookIds);
         List<Long> booksToDelete = new ArrayList<>();
-
-        for (BookEntity book : books) {
-            if (!tryPromoteAlternativeFormatToBook(book, libraryFiles)) {
+        for (BookEntity book : bookRepository.findAllById(deletedBookIds)) {
+            if (book.getBookFiles().stream().anyMatch(BookFileEntity::isBook)) {
+                log.info("Book ID {} lost its primary file but keeps another format", book.getId());
+            } else {
                 booksToDelete.add(book.getId());
             }
         }
-
-        entityManager.flush();
-        entityManager.clear();
 
         if (!booksToDelete.isEmpty()) {
             deleteRemovedBooks(booksToDelete);
@@ -96,42 +99,47 @@ public class BookDeletionService {
         if (bookIds.size() > 1) log.info("Books removed: {}", bookIds);
     }
 
+    /**
+     * Deletes the book files of formats the library no longer allows, then the books left
+     * without any book-format file of an allowed format.
+     *
+     * @return whether anything was deleted
+     */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void purgeDisallowedFormats(LibraryEntity libraryEntity) {
+    public boolean purgeDisallowedFormats(LibraryEntity libraryEntity, LibraryBookFiles bookFiles) {
         List<BookFileType> allowedFormats = libraryEntity.getAllowedFormats();
         if (allowedFormats == null || allowedFormats.isEmpty()) {
-            return;
+            return false;
         }
 
         Set<BookFileType> allowed = EnumSet.copyOf(allowedFormats);
-        List<BookFileEntity> allBookFiles = bookAdditionalFileRepository.findByLibraryId(libraryEntity.getId());
 
-        List<BookFileEntity> disallowedFiles = allBookFiles.stream()
-                .filter(BookFileEntity::isBook)
-                .filter(bf -> !allowed.contains(bf.getBookType()))
+        List<BookFileScanRow> disallowedFiles = bookFiles.rows().stream()
+                .filter(BookFileScanRow::bookFormat)
+                .filter(bf -> !allowed.contains(bf.bookType()))
                 .toList();
 
         if (disallowedFiles.isEmpty()) {
-            return;
+            return false;
         }
 
         Set<Long> affectedBookIds = disallowedFiles.stream()
-                .map(bf -> bf.getBook().getId())
+                .map(BookFileScanRow::bookId)
                 .collect(Collectors.toSet());
 
-        Map<Long, Long> remainingCounts = allBookFiles.stream()
-                .filter(BookFileEntity::isBook)
-                .filter(bf -> allowed.contains(bf.getBookType()))
-                .filter(bf -> affectedBookIds.contains(bf.getBook().getId()))
-                .collect(Collectors.groupingBy(bf -> bf.getBook().getId(), Collectors.counting()));
+        Map<Long, Long> remainingCounts = bookFiles.rows().stream()
+                .filter(BookFileScanRow::bookFormat)
+                .filter(bf -> allowed.contains(bf.bookType()))
+                .filter(bf -> affectedBookIds.contains(bf.bookId()))
+                .collect(Collectors.groupingBy(BookFileScanRow::bookId, Collectors.counting()));
 
         List<Long> booksToDelete = affectedBookIds.stream()
                 .filter(bookId -> remainingCounts.getOrDefault(bookId, 0L) == 0)
                 .toList();
 
-        bookAdditionalFileRepository.deleteAll(disallowedFiles);
-        entityManager.flush();
-        entityManager.clear();
+        bookAdditionalFileRepository.deleteAllByIdInBatch(disallowedFiles.stream()
+                .map(BookFileScanRow::bookFileId)
+                .toList());
 
         if (!booksToDelete.isEmpty()) {
             log.info("Deleting {} books with no remaining files of allowed formats in library: {}",
@@ -141,32 +149,7 @@ public class BookDeletionService {
 
         log.info("Purged {} book files of disallowed formats from library: {}",
                 disallowedFiles.size(), libraryEntity.getName());
-    }
-
-    private boolean tryPromoteAlternativeFormatToBook(BookEntity book, List<LibraryFile> libraryFiles) {
-        Set<String> existingFileNames = libraryFiles.stream()
-                .map(LibraryFile::getFileName)
-                .collect(Collectors.toSet());
-
-        List<BookFileEntity> deletedBookFiles = book.getBookFiles().stream()
-                .filter(BookFileEntity::isBook)
-                .filter(bf -> !existingFileNames.contains(bf.getFileName()))
-                .toList();
-
-        deletedBookFiles.forEach(bf -> {
-            book.getBookFiles().remove(bf);
-            bookAdditionalFileRepository.delete(bf);
-        });
-
-        boolean hasRemainingBookFiles = book.getBookFiles().stream()
-                .anyMatch(BookFileEntity::isBook);
-
-        if (hasRemainingBookFiles) {
-            bookRepository.save(book);
-            log.info("Removed {} deleted book file(s) for book ID {}", deletedBookFiles.size(), book.getId());
-            return true;
-        }
-        return false;
+        return true;
     }
 
 

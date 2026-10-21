@@ -258,6 +258,9 @@ class FileMoveServiceOrderingTest {
 
         Path target = Paths.get("/library/new/path/NewName.epub");
         mockStandardBehavior(book, target);
+        // Each format keeps its own extension: two files moved to one target would leave the book in place
+        when(fileMoveHelper.generateNewFilePath(eq(book), eq(file2), any(LibraryPathEntity.class), anyString()))
+                .thenReturn(Paths.get("/library/new/path/NewName.pdf"));
         when(monitoringRegistrationService.isLibraryMonitored(anyLong())).thenReturn(false);
         when(monitoringRegistrationService.getPathsForLibraries(anySet())).thenReturn(Collections.emptySet());
 
@@ -347,7 +350,8 @@ class FileMoveServiceOrderingTest {
         inOrder.verify(fileMoveHelper).moveFileWithBackup(any());
         inOrder.verify(fileMoveHelper).commitMove(any(), any()); // Committed
         
-        // Verify manual rollback (Target -> Source)
-        inOrder.verify(fileMoveHelper).moveFile(any(), any());
+        // Verify manual rollback (Target -> Source), which never replaces a file that took the source's place
+        inOrder.verify(fileMoveHelper).rollbackMove(target, Paths.get("/library/path/Book.epub"));
+        verify(fileMoveHelper, never()).moveFile(any(), any());
     }
 }

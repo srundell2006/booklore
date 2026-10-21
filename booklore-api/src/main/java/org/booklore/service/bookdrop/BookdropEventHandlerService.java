@@ -226,7 +226,7 @@ public class BookdropEventHandlerService {
 
     /**
      * If the imported file is an audiobook and verification is enabled,
-     * spawns a virtual thread to run ALL_UNVERIFIED verification in the background.
+     * starts a background thread to run ALL_UNVERIFIED verification.
      * This picks up the just-imported audiobook (its verification_status is NULL).
      */
     private void triggerVerificationIfAudiobook(String fileName) {
@@ -242,7 +242,7 @@ public class BookdropEventHandlerService {
 
             if (isAudiobook) {
                 log.info("Scheduling audiobook content verification for '{}'", fileName);
-                Thread.ofVirtual().start(() -> {
+                Thread.ofPlatform().daemon(true).name("audiobook-verification").start(() -> {
                     AudiobookVerificationRequest verifyReq = new AudiobookVerificationRequest();
                     verifyReq.setScanType(AudiobookVerificationRequest.ScanType.ALL_UNVERIFIED);
                     audiobookVerificationService.runVerification(

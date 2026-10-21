@@ -3,7 +3,6 @@ package org.booklore.service.fileprocessor;
 import org.booklore.mapper.BookMapper;
 import org.booklore.model.dto.BookMetadata;
 import org.booklore.model.dto.ComicMetadata;
-import org.booklore.model.dto.settings.LibraryFile;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.BookMetadataEntity;
@@ -12,28 +11,23 @@ import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.service.book.BookCreatorService;
+import org.booklore.service.fileprocessor.prepare.*;
 import org.booklore.service.metadata.MetadataMatchService;
 import org.booklore.service.metadata.extractor.CbxMetadataExtractor;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
 import org.booklore.util.ArchiveUtils;
-import org.booklore.util.BookCoverUtils;
+import org.booklore.util.CbxArchive;
 import org.booklore.util.FileService;
 import org.booklore.util.FileUtils;
-import org.booklore.util.UnrarHelper;
-import com.github.junrar.Archive;
-import com.github.junrar.rarfile.FileHeader;
+import org.booklore.util.cover.RenderedCover;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.compress.archivers.sevenz.SevenZArchiveEntry;
-import org.apache.commons.compress.archivers.sevenz.SevenZFile;
-import org.apache.commons.compress.archivers.zip.ZipArchiveEntry;
-import org.apache.commons.compress.archivers.zip.ZipFile;
+import org.apache.commons.compress.MemoryLimitException;
+import org.apache.commons.io.FilenameUtils;
 import org.springframework.stereotype.Service;
 
 import java.awt.image.BufferedImage;
-import java.io.ByteArrayInputStream;
-import java.io.ByteArrayOutputStream;
 import java.io.File;
-import java.io.InputStream;
+import java.io.IOException;
 import java.util.*;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
@@ -46,8 +40,11 @@ import static org.booklore.util.FileService.truncate;
 public class CbxProcessor extends AbstractFileProcessor implements BookFileProcessor {
 
     private static final Pattern UNDERSCORE_HYPHEN_PATTERN = Pattern.compile("[_\\-]");
-    private static final Pattern IMAGE_EXTENSION_PATTERN = Pattern.compile(".*\\.(jpg|jpeg|png|webp)");
     private static final Pattern IMAGE_EXTENSION_CASE_INSENSITIVE_PATTERN = Pattern.compile("(?i).*\\.(jpg|jpeg|png|webp)");
+    // Heap a 7z read reserves for its decoder: xz takes 64.1 MiB for a 64 MiB dictionary, the largest of 7-Zip's presets
+    static final int SEVEN_ZIP_DECODER_KIB = 66 * 1024;
+    // The most heap a 7z decoder is given: a quarter of the heap, what the import's heap budget is by default
+    private static final long MAX_SEVEN_ZIP_DECODER_KIB = Runtime.getRuntime().maxMemory() / 4 / 1024;
     private final CbxMetadataExtractor cbxMetadataExtractor;
 
     public CbxProcessor(BookRepository bookRepository,
@@ -63,22 +60,116 @@ public class CbxProcessor extends AbstractFileProcessor implements BookFileProce
     }
 
     @Override
-    public BookEntity processNewFile(LibraryFile libraryFile) {
-        BookEntity bookEntity = bookCreatorService.createShellBook(libraryFile, BookFileType.CBX);
-        bookEntity.getPrimaryBookFile().setArchiveType(ArchiveUtils.detectArchiveType(new File(FileUtils.getBookFullPath(bookEntity))));
-        boolean coverGenerated = generateCover(bookEntity);
-        if (!coverGenerated) {
-            var folder = getBookFolderForCoverFallback(libraryFile);
-            if (folder != null) {
-                coverGenerated = generateCoverFromFolderImage(bookEntity, folder);
+    protected ExtractedContent readContent(PrepareRequest request, FileFacts facts, FolderSnapshot folder,
+                                           CoverMaker covers, PrepareContext ctx) {
+        File file = request.path().toFile();
+        String baseName = FilenameUtils.getBaseName(file.getName());
+
+        // Detect the type and open the archive once for both the cover and ComicInfo.xml: on a
+        // network share every open costs round trips, and junrar walks every RAR header per open
+        ArchiveUtils.ArchiveType archiveType = ArchiveUtils.detectArchiveType(file);
+        if (archiveType == ArchiveUtils.ArchiveType.SEVEN_ZIP) {
+            return readSevenZip(request, file, baseName, covers, ctx);
+        }
+        RenderedCover cover = null;
+        BookMetadata extracted;
+        try (CbxArchive archive = CbxArchive.open(file, archiveType)) {
+            cover = renderCover(archive, archiveType, covers, ctx);
+            ctx.checkpoint();
+            extracted = cbxMetadataExtractor.extractMetadata(archive, baseName);
+        } catch (PrepareAbandonedException | PrepareDeadlineException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("Could not open comic archive '{}': {}", request.fileName(), e.getMessage());
+            // What CbxMetadataExtractor returns for an archive it cannot open
+            extracted = BookMetadata.builder().title(baseName).build();
+        }
+
+        if (cover == null) {
+            log.warn("Could not find cover image in CBZ file '{}'", request.fileName());
+        }
+        return new ExtractedContent(extracted, cover, archiveType);
+    }
+
+    /**
+     * {@link #readContent} for a 7z. Its LZMA decoder allocates the whole dictionary when it starts, up to 64 MiB
+     * with 7-Zip's presets, and keeps it until the archive is closed: with many 7z files read at once, and each held
+     * open while its cover waits to render, that is heap the import's budget would not know of. So the archive is
+     * read under heap reserved for its decoder, and closed before the cover is rendered. One with a larger dictionary
+     * than the presets' is opened again under heap for what its decoder needs, unless that is more than a quarter of
+     * the heap. As before, only the first image is tried.
+     */
+    private ExtractedContent readSevenZip(PrepareRequest request, File file, String baseName, CoverMaker covers,
+                                          PrepareContext ctx) {
+        SevenZipEntries entries;
+        try {
+            try {
+                entries = readSevenZipEntries(file, baseName, SEVEN_ZIP_DECODER_KIB, ctx);
+            } catch (MemoryLimitException e) {
+                if (e.getMemoryNeededInKb() > MAX_SEVEN_ZIP_DECODER_KIB) {
+                    throw new IOException("its 7z decoder needs " + e.getMemoryNeededInKb() / 1024
+                            + " MiB of heap, more than a quarter of the heap", e);
+                }
+                entries = readSevenZipEntries(file, baseName, (int) e.getMemoryNeededInKb(), ctx);
+            }
+        } catch (PrepareAbandonedException | PrepareDeadlineException e) {
+            throw e;
+        } catch (Exception e) {
+            log.warn("Could not open comic archive '{}': {}", request.fileName(), e.getMessage());
+            // What CbxMetadataExtractor returns for an archive it cannot open
+            entries = new SevenZipEntries(null, null, BookMetadata.builder().title(baseName).build());
+        }
+
+        RenderedCover cover = null;
+        if (entries.coverImage() != null) {
+            try {
+                cover = covers.fromEncodedOrThrow(entries.coverImage(), true);
+            } catch (PrepareAbandonedException | PrepareDeadlineException e) {
+                throw e;
+            } catch (Exception e) {
+                log.warn("Failed to read image from archive entry {}: {}", entries.coverName(), e.getMessage());
             }
         }
-        if (coverGenerated) {
-            FileService.setBookCoverPath(bookEntity.getMetadata());
-            bookEntity.setBookCoverHash(BookCoverUtils.generateCoverHash());
+        if (cover == null) {
+            log.warn("Could not find cover image in CBZ file '{}'", request.fileName());
         }
-        extractAndSetMetadata(bookEntity);
-        return bookEntity;
+        return new ExtractedContent(entries.metadata(), cover, ArchiveUtils.ArchiveType.SEVEN_ZIP);
+    }
+
+    /**
+     * The first image's bytes and the ComicInfo.xml metadata of a 7z, read under {@code decoderKib} of heap for its
+     * decoder.
+     *
+     * @throws MemoryLimitException when its decoder needs more than {@code decoderKib}
+     */
+    private SevenZipEntries readSevenZipEntries(File file, String baseName, int decoderKib, PrepareContext ctx)
+            throws IOException {
+        try (HeapReservation ignored = ctx.reserveHeap(decoderKib * 1024L);
+             CbxArchive archive = CbxArchive.open(file, ArchiveUtils.ArchiveType.SEVEN_ZIP, decoderKib)) {
+            String coverName = imageNames(archive).stream().findFirst().orElse(null);
+            byte[] coverImage = null;
+            if (coverName != null) {
+                ctx.checkpoint();
+                try {
+                    coverImage = archive.readEntry(coverName);
+                } catch (MemoryLimitException e) {
+                    throw e;
+                } catch (Exception e) {
+                    log.warn("Failed to read image from archive entry {}: {}", coverName, e.getMessage());
+                }
+            }
+            ctx.checkpoint();
+            return new SevenZipEntries(coverName, coverImage, cbxMetadataExtractor.extractMetadata(archive, baseName));
+        }
+    }
+
+    private record SevenZipEntries(String coverName, byte[] coverImage, BookMetadata metadata) {
+    }
+
+    @Override
+    protected void applyMetadata(BookEntity bookEntity, PreparedBookFile prepared) {
+        bookEntity.getPrimaryBookFile().setArchiveType(prepared.archiveType());
+        setExtractedMetadata(bookEntity, prepared.metadata());
     }
 
     @Override
@@ -89,27 +180,15 @@ public class CbxProcessor extends AbstractFileProcessor implements BookFileProce
     @Override
     public boolean generateCover(BookEntity bookEntity, BookFileEntity bookFile) {
         File file = new File(FileUtils.getBookFullPath(bookEntity, bookFile));
-        try {
-            Optional<BufferedImage> imageOptional = extractImagesFromArchive(file);
-            if (imageOptional.isPresent()) {
-                BufferedImage image = imageOptional.get();
-                try {
-                    boolean saved = fileService.saveCoverImages(image, bookEntity.getId());
-                    if (saved) {
-                        return true;
-                    } else {
-                        log.warn("Could not save image extracted from CBZ as cover for '{}'", bookFile.getFileName());
-                    }
-                } finally {
-                    image.flush(); // Release resources after processing
-                }
-            } else {
-                log.warn("Could not find cover image in CBZ file '{}'", bookFile.getFileName());
-            }
+        ArchiveUtils.ArchiveType archiveType = ArchiveUtils.detectArchiveType(file);
+        Optional<BufferedImage> cover;
+        try (CbxArchive archive = CbxArchive.open(file, archiveType)) {
+            cover = findCoverImage(archive, archiveType);
         } catch (Exception e) {
             log.error("Error generating cover for '{}': {}", bookFile.getFileName(), e.getMessage());
+            return false;
         }
-        return false;
+        return saveCover(bookEntity, bookFile, cover);
     }
 
     @Override
@@ -117,141 +196,74 @@ public class CbxProcessor extends AbstractFileProcessor implements BookFileProce
         return List.of(BookFileType.CBX);
     }
 
-    private Optional<BufferedImage> extractImagesFromArchive(File file) {
-        ArchiveUtils.ArchiveType type = ArchiveUtils.detectArchiveType(file);
-
-        return switch (type) {
-            case ZIP -> extractFirstImageFromZip(file);
-            case SEVEN_ZIP -> extractFirstImageFrom7z(file);
-            case RAR -> extractFirstImageFromRar(file);
-            default -> Optional.empty();
-        };
-    }
-
-    private Optional<BufferedImage> extractFirstImageFromZip(File file) {
-        // Fast path: Try reading from Central Directory
-        try (ZipFile zipFile = ZipFile.builder()
-                .setFile(file)
-                .setUseUnicodeExtraFields(true)
-                .setIgnoreLocalFileHeader(true)
-                .get()) {
-            Optional<BufferedImage> image = findAndReadFirstImage(zipFile);
-            if (image.isPresent()) return image;
-        } catch (Exception e) {
-            log.debug("Fast path failed for ZIP extraction: {}", e.getMessage());
-        }
-
-        // Slow path: Fallback to scanning local file headers
-        try (ZipFile zipFile = ZipFile.builder()
-                .setFile(file)
-                .setUseUnicodeExtraFields(true)
-                .setIgnoreLocalFileHeader(false)
-                .get()) {
-            return findAndReadFirstImage(zipFile);
-        } catch (Exception e) {
-            log.error("Error extracting ZIP: {}", e.getMessage());
-            return Optional.empty();
-        }
-    }
-
-    private Optional<BufferedImage> findAndReadFirstImage(ZipFile zipFile) {
-        return Collections.list(zipFile.getEntries()).stream()
-                .filter(e -> !e.isDirectory() && IMAGE_EXTENSION_CASE_INSENSITIVE_PATTERN.matcher(e.getName()).matches())
-                .min(Comparator.comparing(ZipArchiveEntry::getName))
-                .map(entry -> {
-                    try (InputStream is = zipFile.getInputStream(entry)) {
-                        return FileService.readImage(is);
-                    } catch (Exception e) {
-                        log.warn("Failed to read image from ZIP entry {}: {}", entry.getName(), e.getMessage());
-                        return null;
-                    }
-                });
-    }
-
-    private Optional<BufferedImage> extractFirstImageFrom7z(File file) {
-        try (SevenZFile sevenZFile = SevenZFile.builder().setFile(file).get()) {
-            List<SevenZArchiveEntry> imageEntries = new ArrayList<>();
-            SevenZArchiveEntry entry;
-            while ((entry = sevenZFile.getNextEntry()) != null) {
-                if (!entry.isDirectory() && IMAGE_EXTENSION_CASE_INSENSITIVE_PATTERN.matcher(entry.getName()).matches()) {
-                    imageEntries.add(entry);
+    /**
+     * The first jpg, jpeg, png or webp entry by name, in any folder. A RAR moves on to the next
+     * image when one cannot be extracted or decoded; a ZIP or 7z only ever tries the first.
+     */
+    private Optional<BufferedImage> findCoverImage(CbxArchive archive, ArchiveUtils.ArchiveType archiveType) {
+        for (String name : imageNames(archive)) {
+            try {
+                return Optional.ofNullable(FileService.readImage(archive.readEntry(name)));
+            } catch (Exception e) {
+                log.warn("Failed to read image from archive entry {}: {}", name, e.getMessage());
+                if (archiveType != ArchiveUtils.ArchiveType.RAR) {
+                    break;
                 }
             }
-            imageEntries.sort(Comparator.comparing(SevenZArchiveEntry::getName));
-
-            try (SevenZFile sevenZFileReset = SevenZFile.builder().setFile(file).get()) {
-                for (SevenZArchiveEntry imgEntry : imageEntries) {
-                    SevenZArchiveEntry current;
-                    while ((current = sevenZFileReset.getNextEntry()) != null) {
-                        if (current.equals(imgEntry)) {
-                            byte[] content = new byte[(int) current.getSize()];
-                            int offset = 0;
-                            while (offset < content.length) {
-                                int bytesRead = sevenZFileReset.read(content, offset, content.length - offset);
-                                if (bytesRead < 0) break;
-                                offset += bytesRead;
-                            }
-                            return Optional.ofNullable(FileService.readImage(new ByteArrayInputStream(content)));
-                        }
-                    }
-                }
-            }
-        } catch (Exception e) {
-            log.error("Error extracting 7z: {}", e.getMessage());
         }
         return Optional.empty();
     }
 
-    private Optional<BufferedImage> extractFirstImageFromRar(File file) {
-        try (Archive archive = new Archive(file)) {
-            List<FileHeader> imageHeaders = archive.getFileHeaders().stream()
-                    .filter(h -> !h.isDirectory() && IMAGE_EXTENSION_PATTERN.matcher(h.getFileName().toLowerCase()).matches())
-                    .sorted(Comparator.comparing(FileHeader::getFileName))
-                    .toList();
-
-            for (FileHeader header : imageHeaders) {
-                try (ByteArrayOutputStream baos = new ByteArrayOutputStream()) {
-                    archive.extractFile(header, baos);
-                    return Optional.ofNullable(FileService.readImage(new ByteArrayInputStream(baos.toByteArray())));
-                } catch (Exception e) {
-                    log.warn("Error reading RAR entry {}: {}", header.getFileName(), e.getMessage());
+    /** The cover rendered from the image {@link #findCoverImage} picks, chosen by the same rules. */
+    private RenderedCover renderCover(CbxArchive archive, ArchiveUtils.ArchiveType archiveType, CoverMaker covers,
+                                      PrepareContext ctx) {
+        for (String name : imageNames(archive)) {
+            // A RAR given up on would otherwise try every image in turn, each read failing at once: through unrar,
+            // every process it starts is killed, and the thread stays interrupted
+            ctx.checkpoint();
+            try {
+                return covers.fromEncodedOrThrow(archive.readEntry(name), true);
+            } catch (PrepareAbandonedException | PrepareDeadlineException e) {
+                throw e;
+            } catch (Exception e) {
+                log.warn("Failed to read image from archive entry {}: {}", name, e.getMessage());
+                if (archiveType != ArchiveUtils.ArchiveType.RAR) {
+                    break;
                 }
             }
-        } catch (Exception e) {
-            if (UnrarHelper.isAvailable()) {
-                log.info("junrar failed for {}, falling back to unrar CLI: {}", file.getName(), e.getMessage());
-                return extractFirstImageFromRarViaCli(file);
-            }
-            log.error("Error extracting RAR: {}", e.getMessage());
         }
-        return Optional.empty();
+        return null;
     }
 
-    private Optional<BufferedImage> extractFirstImageFromRarViaCli(File file) {
+    private List<String> imageNames(CbxArchive archive) {
+        return archive.fileNames().stream()
+                .filter(name -> IMAGE_EXTENSION_CASE_INSENSITIVE_PATTERN.matcher(name).matches())
+                .sorted()
+                .toList();
+    }
+
+    private boolean saveCover(BookEntity bookEntity, BookFileEntity bookFile, Optional<BufferedImage> cover) {
+        if (cover.isEmpty()) {
+            log.warn("Could not find cover image in CBZ file '{}'", bookFile.getFileName());
+            return false;
+        }
+        BufferedImage image = cover.get();
         try {
-            List<String> entries = UnrarHelper.listEntries(file.toPath());
-            List<String> imageEntries = entries.stream()
-                    .filter(name -> IMAGE_EXTENSION_CASE_INSENSITIVE_PATTERN.matcher(name).matches())
-                    .sorted()
-                    .toList();
-            for (String entry : imageEntries) {
-                try {
-                    byte[] bytes = UnrarHelper.extractEntryBytes(file.toPath(), entry);
-                    BufferedImage image = FileService.readImage(new ByteArrayInputStream(bytes));
-                    if (image != null) return Optional.of(image);
-                } catch (Exception ex) {
-                    log.warn("Error reading RAR entry via CLI {}: {}", entry, ex.getMessage());
-                }
+            boolean saved = fileService.saveCoverImages(image, bookEntity.getId());
+            if (saved) {
+                return true;
             }
+            log.warn("Could not save image extracted from CBZ as cover for '{}'", bookFile.getFileName());
         } catch (Exception e) {
-            log.error("unrar CLI fallback also failed for {}: {}", file.getName(), e.getMessage());
+            log.error("Error generating cover for '{}': {}", bookFile.getFileName(), e.getMessage());
+        } finally {
+            image.flush(); // Release resources after processing
         }
-        return Optional.empty();
+        return false;
     }
 
-    private void extractAndSetMetadata(BookEntity bookEntity) {
+    private void setExtractedMetadata(BookEntity bookEntity, BookMetadata extracted) {
         try {
-            BookMetadata extracted = cbxMetadataExtractor.extractMetadata(new File(FileUtils.getBookFullPath(bookEntity)));
             if (extracted == null) {
                 // Fallback to filename-derived title
                 setMetadata(bookEntity);
@@ -370,11 +382,8 @@ public class CbxProcessor extends AbstractFileProcessor implements BookFileProce
         comic.setWebLink(comicDto.getWebLink());
         comic.setNotes(comicDto.getNotes());
 
-        // Set on parent - relationships will be populated in saveConnections()
+        // Set on parent - relationships are populated in saveConnections(), which is handed the DTO
         bookEntity.getMetadata().setComicMetadata(comic);
-
-        // Store the DTO for later processing in saveConnections
-        bookCreatorService.setComicMetadataDto(bookEntity, comicDto);
     }
 }
 

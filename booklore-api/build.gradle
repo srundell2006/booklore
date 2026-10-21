@@ -131,6 +131,9 @@ hibernate {
 
 test {
     useJUnitPlatform()
+    // The whole suite shares one JVM, and the Spring/Hibernate integration contexts alone sat at ~450 MB of
+    // Gradle's 512 MB default; more integration tests pushed it into OutOfMemoryError part-way through.
+    maxHeapSize = '1g'
     jvmArgs("-XX:+EnableDynamicAgentLoading")
     finalizedBy jacocoTestReport
 }

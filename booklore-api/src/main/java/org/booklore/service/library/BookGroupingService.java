@@ -11,6 +11,7 @@ import org.booklore.util.BookFileGroupingUtils;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.annotation.Transactional;
 
 import java.util.*;
 
@@ -38,14 +39,20 @@ public class BookGroupingService {
         };
     }
 
+    /**
+     * Runs in one read-only transaction so every lookup shares a persistence context: the same
+     * book is the same instance across lookups, and the returned books are detached afterwards.
+     */
+    @Transactional(readOnly = true)
     public GroupingResult groupForRescan(List<LibraryFile> newFiles, LibraryEntity libraryEntity) {
         LibraryOrganizationMode mode = getOrganizationMode(libraryEntity);
+        RescanLookups lookups = new RescanLookups();
 
         Map<BookEntity, List<LibraryFile>> filesToAttach = new LinkedHashMap<>();
         List<LibraryFile> unmatched = new ArrayList<>();
 
         for (LibraryFile file : newFiles) {
-            BookEntity match = findMatchingBook(file, mode);
+            BookEntity match = findMatchingBook(file, mode, lookups);
             if (match != null) {
                 filesToAttach.computeIfAbsent(match, k -> new ArrayList<>()).add(file);
             } else {
@@ -144,10 +151,11 @@ public class BookGroupingService {
         return null;
     }
 
-    private BookEntity findMatchingBook(LibraryFile file, LibraryOrganizationMode mode) {
+    private BookEntity findMatchingBook(LibraryFile file, LibraryOrganizationMode mode, RescanLookups lookups) {
+        List<BookEntity> filelessBooks = lookups.filelessBooks(file.getLibraryEntity().getId());
         BookEntity filelessMatch = switch (mode) {
-            case BOOK_PER_FILE, BOOK_PER_FOLDER -> findExactFilelessMatch(file, file.getLibraryEntity());
-            case AUTO_DETECT -> findMatchingFilelessBook(file, file.getLibraryEntity());
+            case BOOK_PER_FILE, BOOK_PER_FOLDER -> findExactFilelessMatch(file, filelessBooks);
+            case AUTO_DETECT -> findMatchingFilelessBook(file, filelessBooks);
         };
         if (filelessMatch != null) {
             return filelessMatch;
@@ -163,7 +171,7 @@ public class BookGroupingService {
         }
 
         Long libraryPathId = file.getLibraryPathEntity().getId();
-        List<BookEntity> booksInDirectory = bookRepository.findAllByLibraryPathIdAndFileSubPath(libraryPathId, fileSubPath);
+        List<BookEntity> booksInDirectory = lookups.booksInDirectory(libraryPathId, fileSubPath);
 
         List<BookEntity> activeBooksInDirectory = booksInDirectory.stream()
                 .filter(book -> book.getDeleted() == null || !book.getDeleted())
@@ -171,7 +179,7 @@ public class BookGroupingService {
 
         if (activeBooksInDirectory.isEmpty()) {
             if (mode == LibraryOrganizationMode.BOOK_PER_FOLDER && file.getBookFileType() == BookFileType.AUDIOBOOK) {
-                return findNearestAncestorBookWithEbook(libraryPathId, fileSubPath);
+                return findNearestAncestorBookWithEbook(libraryPathId, fileSubPath, lookups);
             }
             return null;
         }
@@ -183,8 +191,7 @@ public class BookGroupingService {
         };
     }
 
-    private BookEntity findExactFilelessMatch(LibraryFile file, LibraryEntity library) {
-        List<BookEntity> filelessBooks = bookRepository.findFilelessBooksByLibraryId(library.getId());
+    private BookEntity findExactFilelessMatch(LibraryFile file, List<BookEntity> filelessBooks) {
         if (filelessBooks.isEmpty()) {
             return null;
         }
@@ -209,8 +216,7 @@ public class BookGroupingService {
         return null;
     }
 
-    private BookEntity findMatchingFilelessBook(LibraryFile file, LibraryEntity library) {
-        List<BookEntity> filelessBooks = bookRepository.findFilelessBooksByLibraryId(library.getId());
+    private BookEntity findMatchingFilelessBook(LibraryFile file, List<BookEntity> filelessBooks) {
         if (filelessBooks.isEmpty()) {
             return null;
         }
@@ -254,7 +260,7 @@ public class BookGroupingService {
                 .orElse(null);
     }
 
-    private BookEntity findNearestAncestorBookWithEbook(Long libraryPathId, String subPath) {
+    private BookEntity findNearestAncestorBookWithEbook(Long libraryPathId, String subPath, RescanLookups lookups) {
         String current = subPath;
         while (true) {
             int lastSep = current.lastIndexOf('/');
@@ -266,7 +272,7 @@ public class BookGroupingService {
             }
             current = current.substring(0, lastSep);
 
-            List<BookEntity> booksAtLevel = bookRepository.findAllByLibraryPathIdAndFileSubPath(libraryPathId, current);
+            List<BookEntity> booksAtLevel = lookups.booksInDirectory(libraryPathId, current);
             for (BookEntity book : booksAtLevel) {
                 if (book.getDeleted() != null && book.getDeleted()) {
                     continue;
@@ -348,4 +354,26 @@ public class BookGroupingService {
         LibraryOrganizationMode mode = library.getOrganizationMode();
         return mode != null ? mode : LibraryOrganizationMode.AUTO_DETECT;
     }
+
+    /**
+     * Database lookups for one groupForRescan call. Grouping writes nothing, so a library's
+     * fileless books and a directory's books cannot change between files: each is queried
+     * at most once instead of once per new file (and per ancestor directory).
+     */
+    private final class RescanLookups {
+
+        private final Map<Long, List<BookEntity>> filelessBooksByLibrary = new HashMap<>();
+        private final Map<DirectoryKey, List<BookEntity>> booksByDirectory = new HashMap<>();
+
+        List<BookEntity> filelessBooks(Long libraryId) {
+            return filelessBooksByLibrary.computeIfAbsent(libraryId, bookRepository::findFilelessBooksWithMetadataByLibraryId);
+        }
+
+        List<BookEntity> booksInDirectory(Long libraryPathId, String fileSubPath) {
+            return booksByDirectory.computeIfAbsent(new DirectoryKey(libraryPathId, fileSubPath),
+                    key -> bookRepository.findAllWithFilesByLibraryPathIdAndFileSubPath(key.libraryPathId(), key.fileSubPath()));
+        }
+    }
+
+    private record DirectoryKey(Long libraryPathId, String fileSubPath) {}
 }

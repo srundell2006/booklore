@@ -5,11 +5,15 @@ import org.booklore.model.dto.settings.AppSettings;
 import org.booklore.model.dto.settings.CoverCroppingSettings;
 import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.service.appsettings.AppSettingService;
+import org.booklore.util.cover.CoverKind;
+import org.booklore.util.cover.CropPolicy;
+import org.booklore.util.cover.RenderedCover;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.Arguments;
+import org.junit.jupiter.params.provider.CsvSource;
 import org.junit.jupiter.params.provider.MethodSource;
 import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.ArgumentCaptor;
@@ -25,13 +29,17 @@ import org.springframework.web.client.RestTemplate;
 import javax.imageio.ImageIO;
 import java.awt.*;
 import java.awt.image.BufferedImage;
+import java.awt.image.DataBufferInt;
+import java.awt.image.IndexColorModel;
 import java.io.ByteArrayOutputStream;
 import java.io.File;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
+import java.util.Random;
 import java.util.Set;
+import java.util.stream.Collectors;
 import java.util.stream.Stream;
 
 import static org.junit.jupiter.api.Assertions.*;
@@ -388,6 +396,15 @@ class FileServiceTest {
         @DisplayName("resizeImage")
         class ResizeImageTests {
 
+            // Mean absolute difference from the old getScaledInstance output on naturalImage. The worst downscale
+            // below measures 1.89 (odd sizes). For scale, on the same images a nearest-neighbour resize scores 3.1
+            // to 5.1, a single bilinear step without the halving up to 4.0, and the JPEG encode every cover and
+            // thumbnail goes through adds 1.8 to 2.8 on its own.
+            private static final double DOWNSCALE_TOLERANCE = 2.0;
+            // SCALE_SMOOTH upscales by area-weighted pixel replication, so the smoother bicubic output is meant
+            // to differ; this bound only catches gross errors such as shifted or swapped axes.
+            private static final double UPSCALE_TOLERANCE = 3.0;
+
             @Test
             void shrinks_imageProperly() {
                 BufferedImage original = createTestImage(100, 100);
@@ -456,6 +473,312 @@ class FileServiceTest {
                         () -> assertEquals(1, resized.getWidth()),
                         () -> assertEquals(1, resized.getHeight())
                 );
+            }
+
+            @ParameterizedTest(name = "{0}x{1} -> {2}x{3}")
+            @CsvSource({
+                    "2400, 3600, 1000, 1500",
+                    "2000, 3000, 1000, 1500",
+                    "1600, 2400, 1000, 1500",
+                    "801, 1203, 250, 350",
+                    "200, 300, 250, 350",
+                    "100, 1000, 200, 50",
+                    "1000, 100, 50, 200",
+                    "1000, 1000, 1000, 10",
+                    "500, 500, 1, 1",
+                    "3, 3000, 1, 1",
+                    "500, 500, 1, 300",
+                    "1, 1, 7, 5"
+            })
+            void returnsExactSizeAsRgb(int sourceWidth, int sourceHeight, int width, int height) {
+                BufferedImage original = createTestImage(sourceWidth, sourceHeight);
+
+                BufferedImage resized = FileService.resizeImage(original, width, height);
+
+                assertAll(
+                        () -> assertEquals(width, resized.getWidth()),
+                        () -> assertEquals(height, resized.getHeight()),
+                        () -> assertEquals(BufferedImage.TYPE_INT_RGB, resized.getType())
+                );
+            }
+
+            @ParameterizedTest
+            @ValueSource(ints = {
+                    BufferedImage.TYPE_INT_ARGB, BufferedImage.TYPE_INT_ARGB_PRE, BufferedImage.TYPE_4BYTE_ABGR,
+                    BufferedImage.TYPE_3BYTE_BGR, BufferedImage.TYPE_BYTE_GRAY, BufferedImage.TYPE_USHORT_GRAY,
+                    BufferedImage.TYPE_BYTE_INDEXED, BufferedImage.TYPE_BYTE_BINARY
+            })
+            void anySourceType_returnsRgb(int sourceType) {
+                BufferedImage original = new BufferedImage(300, 450, sourceType);
+
+                BufferedImage downscaled = FileService.resizeImage(original, 100, 140);
+                BufferedImage upscaled = FileService.resizeImage(original, 400, 500);
+
+                assertAll(
+                        () -> assertEquals(BufferedImage.TYPE_INT_RGB, downscaled.getType()),
+                        () -> assertEquals(100, downscaled.getWidth()),
+                        () -> assertEquals(140, downscaled.getHeight()),
+                        () -> assertEquals(BufferedImage.TYPE_INT_RGB, upscaled.getType()),
+                        () -> assertEquals(400, upscaled.getWidth()),
+                        () -> assertEquals(500, upscaled.getHeight())
+                );
+            }
+
+            @ParameterizedTest
+            @CsvSource({"0, 10", "10, 0", "-1, 10", "10, -5"})
+            void nonPositiveTarget_throws(int width, int height) {
+                BufferedImage original = createTestImage(100, 100);
+
+                assertThrows(IllegalArgumentException.class, () -> FileService.resizeImage(original, width, height));
+            }
+
+            @ParameterizedTest(name = "{0}x{1} -> {2}x{3}")
+            @CsvSource({
+                    "2400, 3600, 1000, 1500",
+                    "1000, 1500, 250, 350",
+                    "2400, 3600, 250, 350",
+                    "1600, 2400, 1000, 1500",
+                    "3000, 3000, 1000, 1000",
+                    "1000, 1000, 250, 250",
+                    "801, 1203, 250, 350"
+            })
+            void downscale_staysCloseToScaleSmooth(int sourceWidth, int sourceHeight, int width, int height) {
+                BufferedImage original = naturalImage(sourceWidth, sourceHeight);
+
+                double difference = meanAbsoluteDifference(
+                        legacyResize(original, width, height), FileService.resizeImage(original, width, height));
+
+                assertTrue(difference <= DOWNSCALE_TOLERANCE, "mean absolute difference was " + difference);
+            }
+
+            @Test
+            void downscaleTolerance_rejectsUnfilteredResize() {
+                BufferedImage original = naturalImage(1000, 1500);
+                BufferedImage legacy = legacyResize(original, 250, 350);
+
+                double nearestNeighbour = meanAbsoluteDifference(legacy,
+                        scaleOnce(original, 250, 350, RenderingHints.VALUE_INTERPOLATION_NEAREST_NEIGHBOR));
+                double singleBilinearStep = meanAbsoluteDifference(legacy,
+                        scaleOnce(original, 250, 350, RenderingHints.VALUE_INTERPOLATION_BILINEAR));
+
+                assertAll(
+                        () -> assertTrue(nearestNeighbour > DOWNSCALE_TOLERANCE, "nearest neighbour was " + nearestNeighbour),
+                        () -> assertTrue(singleBilinearStep > DOWNSCALE_TOLERANCE, "single bilinear step was " + singleBilinearStep)
+                );
+            }
+
+            @ParameterizedTest(name = "{0}x{1} -> {2}x{3}")
+            @CsvSource({
+                    "200, 300, 250, 350",
+                    "300, 1200, 400, 100",
+                    "1200, 300, 100, 400"
+            })
+            void upscale_staysCloseToScaleSmooth(int sourceWidth, int sourceHeight, int width, int height) {
+                BufferedImage original = naturalImage(sourceWidth, sourceHeight);
+
+                double difference = meanAbsoluteDifference(
+                        legacyResize(original, width, height), FileService.resizeImage(original, width, height));
+
+                assertTrue(difference <= UPSCALE_TOLERANCE, "mean absolute difference was " + difference);
+            }
+
+            @ParameterizedTest(name = "{0}x{1}")
+            @CsvSource({"100, 100", "300, 250", "600, 600", "1, 1", "40, 900"})
+            void alphaSource_getsSameBlackBackgroundAsBefore(int width, int height) {
+                // Left third fully transparent, middle third half-transparent red, right third an alpha ramp over green
+                BufferedImage original = new BufferedImage(600, 600, BufferedImage.TYPE_INT_ARGB);
+                for (int y = 0; y < 600; y++) {
+                    for (int x = 0; x < 600; x++) {
+                        int argb = x < 200 ? 0x00FFFFFF : x < 400 ? 0x80FF0000 : (y * 255 / 599) << 24 | 0x00FF00;
+                        original.setRGB(x, y, argb);
+                    }
+                }
+
+                BufferedImage legacy = legacyResize(original, width, height);
+                BufferedImage resized = FileService.resizeImage(original, width, height);
+
+                // Only the borders between the regions blur slightly differently, measured at most 0.66
+                double difference = meanAbsoluteDifference(legacy, resized);
+                assertTrue(difference <= 1.0, "mean absolute difference was " + difference);
+                if (width >= 3) {
+                    int transparent = resized.getRGB(0, height / 2) & 0xFFFFFF;
+                    int halfRed = resized.getRGB(width / 2, height / 2) & 0xFFFFFF;
+                    assertAll(
+                            () -> assertEquals(legacy.getRGB(0, height / 2) & 0xFFFFFF, transparent),
+                            () -> assertEquals(0x000000, transparent),
+                            () -> assertEquals(legacy.getRGB(width / 2, height / 2) & 0xFFFFFF, halfRed),
+                            () -> assertEquals(0x800000, halfRed)
+                    );
+                }
+            }
+
+            @Test
+            void indexedSourceWithTransparency_matchesBefore() {
+                byte[] reds = {(byte) 255, 0, 0};
+                byte[] greens = {0, (byte) 255, 0};
+                byte[] blues = {0, 0, (byte) 255};
+                IndexColorModel colorModel = new IndexColorModel(8, 3, reds, greens, blues, 2);
+                BufferedImage original = new BufferedImage(600, 600, BufferedImage.TYPE_BYTE_INDEXED, colorModel);
+                for (int y = 0; y < 600; y++) {
+                    for (int x = 0; x < 600; x++) {
+                        original.getRaster().setSample(x, y, 0, x / 200);
+                    }
+                }
+
+                BufferedImage legacy = legacyResize(original, 150, 120);
+                BufferedImage resized = FileService.resizeImage(original, 150, 120);
+
+                assertAll(
+                        () -> assertEquals(0xFF0000, resized.getRGB(25, 60) & 0xFFFFFF),
+                        () -> assertEquals(0x00FF00, resized.getRGB(75, 60) & 0xFFFFFF),
+                        () -> assertEquals(0x000000, resized.getRGB(125, 60) & 0xFFFFFF),
+                        () -> assertTrue(meanAbsoluteDifference(legacy, resized) <= DOWNSCALE_TOLERANCE)
+                );
+            }
+
+            @Test
+            void graySource_keepsGrayLevelsLikeCoverFlattening() {
+                BufferedImage original = new BufferedImage(400, 600, BufferedImage.TYPE_BYTE_GRAY);
+                for (int y = 0; y < 600; y++) {
+                    for (int x = 0; x < 400; x++) {
+                        original.getRaster().setSample(x, y, 0, x < 200 ? 64 : 192);
+                    }
+                }
+                // saveCoverImages flattens like this before resizing
+                BufferedImage flattened = new BufferedImage(400, 600, BufferedImage.TYPE_INT_RGB);
+                Graphics2D g = flattened.createGraphics();
+                g.drawImage(original, 0, 0, Color.WHITE, null);
+                g.dispose();
+
+                BufferedImage resized = FileService.resizeImage(original, 100, 140);
+
+                assertAll(
+                        () -> assertEquals(0x404040, resized.getRGB(10, 70) & 0xFFFFFF),
+                        () -> assertEquals(0xC0C0C0, resized.getRGB(90, 70) & 0xFFFFFF),
+                        () -> assertEquals(0.0, meanAbsoluteDifference(FileService.resizeImage(flattened, 100, 140), resized))
+                );
+            }
+
+            @ParameterizedTest(name = "{0}x{1}")
+            @CsvSource({"37, 23", "200, 200", "333, 450", "1, 1", "13, 400"})
+            void subimage_doesNotSampleOutsideItsBounds(int width, int height) {
+                BufferedImage parent = new BufferedImage(400, 400, BufferedImage.TYPE_INT_RGB);
+                Graphics2D g = parent.createGraphics();
+                g.setColor(Color.RED);
+                g.fillRect(0, 0, 400, 400);
+                g.setColor(Color.WHITE);
+                g.fillRect(100, 100, 200, 200);
+                g.dispose();
+
+                BufferedImage resized = FileService.resizeImage(parent.getSubimage(100, 100, 200, 200), width, height);
+
+                int[] pixels = resized.getRGB(0, 0, width, height, null, 0, width);
+                for (int pixel : pixels) {
+                    assertEquals(0xFFFFFF, pixel & 0xFFFFFF);
+                }
+            }
+
+            @Test
+            void nonUniformScale_keepsOrientation() {
+                // Red top-left, green top-right, blue bottom-left, white bottom-right
+                BufferedImage original = new BufferedImage(1000, 100, BufferedImage.TYPE_INT_RGB);
+                Graphics2D g = original.createGraphics();
+                g.setColor(Color.RED);
+                g.fillRect(0, 0, 500, 50);
+                g.setColor(Color.GREEN);
+                g.fillRect(500, 0, 500, 50);
+                g.setColor(Color.BLUE);
+                g.fillRect(0, 50, 500, 50);
+                g.setColor(Color.WHITE);
+                g.fillRect(500, 50, 500, 50);
+                g.dispose();
+
+                BufferedImage resized = FileService.resizeImage(original, 40, 300);
+
+                assertAll(
+                        () -> assertEquals(0xFF0000, resized.getRGB(5, 20) & 0xFFFFFF),
+                        () -> assertEquals(0x00FF00, resized.getRGB(34, 20) & 0xFFFFFF),
+                        () -> assertEquals(0x0000FF, resized.getRGB(5, 280) & 0xFFFFFF),
+                        () -> assertEquals(0xFFFFFF, resized.getRGB(34, 280) & 0xFFFFFF)
+                );
+            }
+
+            /**
+             * The getScaledInstance(SCALE_SMOOTH) implementation resizeImage used to have, kept as the quality reference.
+             */
+            private static BufferedImage legacyResize(BufferedImage source, int width, int height) {
+                Image scaled = source.getScaledInstance(width, height, Image.SCALE_SMOOTH);
+                BufferedImage result = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+                Graphics2D g2d = result.createGraphics();
+                g2d.drawImage(scaled, 0, 0, null);
+                g2d.dispose();
+                return result;
+            }
+
+            private static BufferedImage scaleOnce(BufferedImage source, int width, int height, Object interpolation) {
+                BufferedImage result = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+                Graphics2D g2d = result.createGraphics();
+                g2d.setRenderingHint(RenderingHints.KEY_INTERPOLATION, interpolation);
+                g2d.drawImage(source, 0, 0, width, height, null);
+                g2d.dispose();
+                return result;
+            }
+
+            /**
+             * Smooth colour gradients with photographic grain, plus a title band of thin text-like strokes, a disc and
+             * a diagonal line, so both soft areas and hard edges at several angles are covered. Seeded, so deterministic.
+             */
+            private static BufferedImage naturalImage(int width, int height) {
+                BufferedImage image = new BufferedImage(width, height, BufferedImage.TYPE_INT_RGB);
+                int[] pixels = ((DataBufferInt) image.getRaster().getDataBuffer()).getData();
+                Random random = new Random(42);
+                for (int y = 0; y < height; y++) {
+                    for (int x = 0; x < width; x++) {
+                        double fx = (double) x / width;
+                        double fy = (double) y / height;
+                        int grain = (int) (random.nextGaussian() * 6);
+                        int r = (int) (128 + 100 * Math.sin(fx * 3.1 + fy * 1.7)) + grain;
+                        int g = (int) (128 + 90 * Math.cos(fx * 2.3 - fy * 2.9)) + grain;
+                        int b = (int) (60 + 150 * fy) + grain;
+                        pixels[y * width + x] = clampChannel(r) << 16 | clampChannel(g) << 8 | clampChannel(b);
+                    }
+                }
+                Graphics2D g = image.createGraphics();
+                g.setColor(new Color(240, 230, 210));
+                g.fillRect(width / 10, height / 8, width * 8 / 10, height / 6);
+                g.setColor(new Color(30, 30, 60));
+                int stroke = Math.max(1, width / 200);
+                for (int x = width / 7; x < width * 6 / 7; x += 3 * stroke) {
+                    g.fillRect(x, height / 6, stroke, height / 12);
+                }
+                g.setColor(new Color(150, 20, 20));
+                g.fillOval(width / 4, height / 2, width / 2, width / 2);
+                g.setColor(Color.BLACK);
+                g.setStroke(new BasicStroke(Math.max(1, width / 300f)));
+                g.drawLine(0, height - 1, width - 1, height / 3);
+                g.dispose();
+                return image;
+            }
+
+            private static int clampChannel(int value) {
+                return Math.max(0, Math.min(255, value));
+            }
+
+            /**
+             * Mean absolute difference per RGB channel, on the 0-255 scale.
+             */
+            private static double meanAbsoluteDifference(BufferedImage expected, BufferedImage actual) {
+                int width = expected.getWidth();
+                int height = expected.getHeight();
+                int[] a = expected.getRGB(0, 0, width, height, null, 0, width);
+                int[] b = actual.getRGB(0, 0, width, height, null, 0, width);
+                long sum = 0;
+                for (int i = 0; i < a.length; i++) {
+                    for (int shift = 0; shift <= 16; shift += 8) {
+                        sum += Math.abs((a[i] >> shift & 0xFF) - (b[i] >> shift & 0xFF));
+                    }
+                }
+                return (double) sum / (3L * a.length);
             }
         }
 
@@ -675,6 +998,73 @@ class FileServiceTest {
                         "Small image width should be preserved");
                 assertEquals(smallHeight, savedCover.getHeight(),
                         "Small image height should be preserved");
+            }
+        }
+
+        @Nested
+        @DisplayName("writeRenderedCover")
+        class WriteRenderedCoverTests {
+
+            private final byte[] cover = {1, 2, 3};
+            private final byte[] thumbnail = {4, 5};
+
+            @Test
+            void bookCoverIsWrittenAsCoverAndThumbnail() throws IOException {
+                assertTrue(fileService.writeRenderedCover(10L, new RenderedCover(CoverKind.BOOK, cover, thumbnail)));
+
+                assertArrayEquals(cover, Files.readAllBytes(Path.of(fileService.getCoverFile(10L))));
+                assertArrayEquals(thumbnail, Files.readAllBytes(Path.of(fileService.getThumbnailFile(10L))));
+                assertFalse(Files.exists(Path.of(fileService.getAudiobookCoverFile(10L))));
+            }
+
+            @Test
+            void audiobookCoverIsWrittenAsAudiobookCoverAndThumbnail() throws IOException {
+                assertTrue(fileService.writeRenderedCover(11L, new RenderedCover(CoverKind.AUDIOBOOK, cover, thumbnail)));
+
+                assertArrayEquals(cover, Files.readAllBytes(Path.of(fileService.getAudiobookCoverFile(11L))));
+                assertArrayEquals(thumbnail, Files.readAllBytes(Path.of(fileService.getAudiobookThumbnailFile(11L))));
+                assertFalse(Files.exists(Path.of(fileService.getCoverFile(11L))));
+            }
+
+            @Test
+            void replacesAnOldCoverAndLeavesNoTemporaryFiles() throws IOException {
+                fileService.writeRenderedCover(12L, new RenderedCover(CoverKind.BOOK, cover, thumbnail));
+                byte[] newCover = {9, 9, 9, 9};
+                byte[] newThumbnail = {8};
+
+                fileService.writeRenderedCover(12L, new RenderedCover(CoverKind.BOOK, newCover, newThumbnail));
+
+                assertArrayEquals(newCover, Files.readAllBytes(Path.of(fileService.getCoverFile(12L))));
+                assertArrayEquals(newThumbnail, Files.readAllBytes(Path.of(fileService.getThumbnailFile(12L))));
+                try (Stream<Path> files = Files.list(Path.of(fileService.getImagesFolder(12L)))) {
+                    assertEquals(Set.of("cover.jpg", "thumbnail.jpg"),
+                            files.map(file -> file.getFileName().toString()).collect(Collectors.toSet()));
+                }
+            }
+
+            @Test
+            void nullCoverWritesNothing() throws IOException {
+                assertFalse(fileService.writeRenderedCover(13L, null));
+
+                assertFalse(Files.exists(Path.of(fileService.getImagesFolder(13L))));
+            }
+
+            @Test
+            void folderThatCannotBeCreatedIsAnIoException() throws IOException {
+                // A file where the images directory should be stops mkdirs
+                Files.writeString(tempDir.resolve("images"), "not a directory");
+
+                IOException e = assertThrows(IOException.class,
+                        () -> fileService.writeRenderedCover(14L, new RenderedCover(CoverKind.BOOK, cover, thumbnail)));
+                assertTrue(e.getMessage().startsWith("Failed to create directory: "), e.getMessage());
+            }
+
+            @Test
+            void cropPolicyComesFromTheAppSettings() {
+                assertEquals(new CropPolicy(true, true, 2.5, true), fileService.currentCropPolicy());
+
+                when(appSettingService.getAppSettings()).thenReturn(AppSettings.builder().build());
+                assertEquals(CropPolicy.NONE, fileService.currentCropPolicy());
             }
         }
 
