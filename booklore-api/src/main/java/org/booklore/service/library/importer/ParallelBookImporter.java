@@ -3,6 +3,9 @@ package org.booklore.service.library.importer;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.commons.lang3.exception.ExceptionUtils;
+import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.io.RandomAccessReadBufferedFile;
+import org.apache.pdfbox.pdmodel.PDDocument;
 import org.booklore.exception.ApiError;
 import org.booklore.model.FileProcessResult;
 import org.booklore.model.dto.Book;
@@ -35,6 +38,7 @@ import org.booklore.service.library.importer.Outcome.SkipReason;
 import org.booklore.service.metadata.extractor.AudiobookMetadataExtractor;
 import org.booklore.service.metadata.extractor.FileMetadataExtractor;
 import org.booklore.service.metadata.extractor.MetadataExtractorFactory;
+import org.booklore.service.metadata.extractor.PdfMetadataExtractor;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
 import org.booklore.util.BookCoverUtils;
 import org.booklore.util.FileService;
@@ -98,7 +102,10 @@ public class ParallelBookImporter {
     private static final long POLL_SECONDS = 1;
     private static final long PROGRESS_INTERVAL_NANOS = TimeUnit.SECONDS.toNanos(30);
     private static final int MAX_CONSECUTIVE_SAVE_FAILURES = 20;
-    /** Heap reserved around extractCover of formats whose extractor renders or decodes the cover itself. */
+    /**
+     * Heap reserved around extractCover of formats whose extractor renders or decodes the cover itself; a PDF reserves
+     * heap for decoding the images on its page on top of it.
+     */
     private static final long EXTRACTOR_COVER_BYTES = 128L * 1024 * 1024;
 
     private final ImportExecutor executor;
@@ -540,8 +547,10 @@ public class ParallelBookImporter {
         }
         File file = request.path().toFile();
         byte[] coverData;
-        if (request.type() == BookFileType.PDF || request.type() == BookFileType.CBX) {
-            // Their extractors render or decode an image to find the cover
+        if (extractor instanceof PdfMetadataExtractor pdfExtractor) {
+            coverData = pdfCover(pdfExtractor, file, ctx);
+        } else if (request.type() == BookFileType.CBX) {
+            // Its extractor decodes an image to find the cover
             try (HeapReservation ignored = ctx.reserveHeap(EXTRACTOR_COVER_BYTES)) {
                 coverData = extractor.extractCover(file);
             }
@@ -558,6 +567,20 @@ public class ParallelBookImporter {
             log.warn("Failed to decode cover image for ebook '{}'", request.fileName());
         }
         return cover;
+    }
+
+    /**
+     * The cover {@link PdfMetadataExtractor#extractCover(File)} makes, rendered under heap for the page's images as well:
+     * PDFBox decodes each at its full size, which for a scanned page is many times the fixed reservation.
+     */
+    private static byte[] pdfCover(PdfMetadataExtractor extractor, File file, PrepareContext ctx) throws IOException {
+        try (RandomAccessReadBufferedFile randomAccessRead = new RandomAccessReadBufferedFile(file);
+             PDDocument pdf = Loader.loadPDF(randomAccessRead)) {
+            long bytes = EXTRACTOR_COVER_BYTES + PdfMetadataExtractor.imageDecodeBytes(pdf.getPage(0));
+            try (HeapReservation ignored = ctx.reserveHeap(bytes)) {
+                return extractor.extractCover(pdf);
+            }
+        }
     }
 
     /**

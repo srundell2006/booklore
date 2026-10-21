@@ -1,16 +1,26 @@
 package org.booklore.service.metadata.extractor;
 
 import org.apache.pdfbox.Loader;
+import org.apache.pdfbox.cos.COSArray;
 import org.apache.pdfbox.cos.COSDictionary;
 import org.apache.pdfbox.cos.COSName;
 import org.apache.pdfbox.cos.COSString;
 import org.apache.pdfbox.pdmodel.PDDocument;
 import org.apache.pdfbox.pdmodel.PDDocumentCatalog;
 import org.apache.pdfbox.pdmodel.PDDocumentInformation;
+import org.apache.pdfbox.pdmodel.PDFormContentStream;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
+import org.apache.pdfbox.pdmodel.PDResources;
 import org.apache.pdfbox.pdmodel.common.PDMetadata;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.common.PDStream;
+import org.apache.pdfbox.pdmodel.graphics.color.PDColorSpace;
+import org.apache.pdfbox.pdmodel.graphics.color.PDDeviceCMYK;
+import org.apache.pdfbox.pdmodel.graphics.color.PDDeviceGray;
+import org.apache.pdfbox.pdmodel.graphics.color.PDDeviceRGB;
+import org.apache.pdfbox.pdmodel.graphics.form.PDFormXObject;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.booklore.model.dto.BookMetadata;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -1007,6 +1017,190 @@ class PdfMetadataExtractorTest {
                 assertThat(image.getHeight()).isEqualTo(expectedHeight);
                 assertThat(PdfMetadataExtractor.coverPixels(page, maxDpi)).isEqualTo((long) expectedWidth * expectedHeight);
             }
+        }
+    }
+
+    // --- Heap for the images a cover render decodes ---
+
+    @Nested
+    class ImageDecodeSizeTests {
+
+        @Test
+        void aScannedPage_needsHeapForItsImageAtFullSize_howeverSmallItIsDrawn() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                // An A4 page scanned at 600 dpi, drawn over the page and drawn as a thumbnail
+                PDPage page = pageDrawing(doc, image(doc, COSName.DCT_DECODE, 4960, 7016, 8, PDDeviceRGB.INSTANCE), 595, 842);
+                PDPage thumbnail = pageDrawing(doc, image(doc, COSName.DCT_DECODE, 4960, 7016, 8, PDDeviceRGB.INSTANCE), 10, 14);
+
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(page)).isEqualTo(12L * 4960 * 7016);
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(thumbnail)).isEqualTo(12L * 4960 * 7016);
+            }
+        }
+
+        @Test
+        void aPageWithoutImages_needsNone() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDPage page = new PDPage(PDRectangle.A4);
+                doc.addPage(page);
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    cs.addRect(10, 10, 100, 100);
+                    cs.fill();
+                }
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(page)).isZero();
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(new PDPage())).isZero();
+            }
+        }
+
+        @Test
+        void eachKindOfImage_needsWhatPdfBoxTakesToDecodeIt() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDImageXObject mask = image(doc, COSName.FLATE_DECODE, 3000, 4000, 1, PDDeviceGray.INSTANCE);
+                mask.getCOSObject().setBoolean(COSName.IMAGE_MASK, true);
+                mask.getCOSObject().removeItem(COSName.COLORSPACE);
+                mask.getCOSObject().removeItem(COSName.BITS_PER_COMPONENT);
+
+                assertImageNeeds(doc, image(doc, COSName.JPX_DECODE, 3000, 4500, 8, PDDeviceRGB.INSTANCE), 24L * 3000 * 4500);
+                assertImageNeeds(doc, image(doc, COSName.CCITTFAX_DECODE, 3000, 4000, 1, PDDeviceGray.INSTANCE), 4L * 3000 * 4000);
+                assertImageNeeds(doc, mask, 4L * 3000 * 4000);
+                assertImageNeeds(doc, image(doc, COSName.FLATE_DECODE, 3000, 4000, 16, PDDeviceRGB.INSTANCE), 24L * 3000 * 4000);
+                assertImageNeeds(doc, image(doc, COSName.FLATE_DECODE, 3000, 4000, 4, PDDeviceGray.INSTANCE), 12L * 3000 * 4000);
+                assertImageNeeds(doc, image(doc, COSName.DCT_DECODE, 3000, 4000, 8, PDDeviceCMYK.INSTANCE), 12L * 3000 * 4000);
+            }
+        }
+
+        @Test
+        void filtersInAChainAreAllLookedAt() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDImageXObject jpx = image(doc, COSName.JPX_DECODE, 3000, 4500, 8, PDDeviceRGB.INSTANCE);
+                COSArray filters = new COSArray();
+                filters.add(COSName.FLATE_DECODE);
+                filters.add(COSName.JPX_DECODE);
+                jpx.getCOSObject().setItem(COSName.FILTER, filters);
+
+                assertImageNeeds(doc, jpx, 24L * 3000 * 4500);
+            }
+        }
+
+        @Test
+        void imagesAreDecodedOneAtATime_soTheLargestCounts() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDPage page = new PDPage(PDRectangle.A4);
+                doc.addPage(page);
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    cs.drawImage(image(doc, COSName.DCT_DECODE, 1000, 1000, 8, PDDeviceRGB.INSTANCE), 0, 0, 100, 100);
+                    cs.drawImage(image(doc, COSName.DCT_DECODE, 2000, 3000, 8, PDDeviceRGB.INSTANCE), 0, 100, 100, 150);
+                    cs.drawImage(image(doc, COSName.DCT_DECODE, 1500, 1500, 8, PDDeviceRGB.INSTANCE), 0, 250, 100, 100);
+                }
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(page)).isEqualTo(12L * 2000 * 3000);
+            }
+        }
+
+        @Test
+        void anImageThePageListsButDoesNotDraw_isNotCounted() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                // As in a document whose pages share one resource dictionary listing every page's scan
+                PDPage page = pageDrawing(doc, image(doc, COSName.DCT_DECODE, 1000, 1500, 8, PDDeviceRGB.INSTANCE), 595, 842);
+                page.getResources().add(image(doc, COSName.DCT_DECODE, 4960, 7016, 8, PDDeviceRGB.INSTANCE));
+
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(page)).isEqualTo(12L * 1000 * 1500);
+            }
+        }
+
+        @Test
+        void imagesDrawnInsideForms_count() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDFormXObject inner = form(doc, image(doc, COSName.DCT_DECODE, 2480, 3508, 8, PDDeviceRGB.INSTANCE));
+                PDFormXObject outer = new PDFormXObject(doc);
+                outer.setBBox(new PDRectangle(595, 842));
+                outer.setResources(new PDResources());
+                try (PDFormContentStream cs = new PDFormContentStream(outer)) {
+                    cs.drawForm(inner);
+                }
+                PDPage page = new PDPage(PDRectangle.A4);
+                doc.addPage(page);
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    cs.drawForm(outer);
+                }
+
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(page)).isEqualTo(12L * 2480 * 3508);
+            }
+        }
+
+        @Test
+        void aFormThatDrawsItself_isLookedIntoOnce() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDFormXObject form = new PDFormXObject(doc);
+                form.setBBox(new PDRectangle(595, 842));
+                form.setResources(new PDResources());
+                try (PDFormContentStream cs = new PDFormContentStream(form)) {
+                    cs.drawImage(image(doc, COSName.DCT_DECODE, 1000, 1500, 8, PDDeviceRGB.INSTANCE), 0, 0, 595, 842);
+                    cs.drawForm(form);
+                }
+                PDPage page = new PDPage(PDRectangle.A4);
+                doc.addPage(page);
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                    cs.drawForm(form);
+                }
+
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(page)).isEqualTo(12L * 1000 * 1500);
+            }
+        }
+
+        @Test
+        void inlineImages_count() throws Exception {
+            try (PDDocument doc = new PDDocument()) {
+                PDPage page = new PDPage(PDRectangle.A4);
+                doc.addPage(page);
+                String content = "q 595 0 0 842 0 0 cm BI /W 3000 /H 4000 /BPC 8 /CS /RGB /F /DCT ID \u0000\u0000 EI Q";
+                page.setContents(new PDStream(doc, new ByteArrayInputStream(content.getBytes(StandardCharsets.ISO_8859_1))));
+
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(page)).isEqualTo(12L * 3000 * 4000);
+            }
+        }
+
+        @Test
+        void readsTheImagesOfASavedDocument_withoutDecodingThem() throws Exception {
+            // The image data is not a JPEG at all: only its dictionary is read
+            File pdf = createPdf(doc -> {
+                PDPage page = doc.getPage(0);
+                try (PDPageContentStream cs = new PDPageContentStream(doc, page, PDPageContentStream.AppendMode.APPEND, true)) {
+                    cs.drawImage(image(doc, COSName.DCT_DECODE, 4000, 6000, 8, PDDeviceRGB.INSTANCE), 0, 0, 612, 792);
+                }
+            });
+            try (PDDocument doc = Loader.loadPDF(pdf)) {
+                assertThat(PdfMetadataExtractor.imageDecodeBytes(doc.getPage(0))).isEqualTo(12L * 4000 * 6000);
+            }
+        }
+
+        private void assertImageNeeds(PDDocument doc, PDImageXObject image, long bytes) throws Exception {
+            assertThat(PdfMetadataExtractor.imageDecodeBytes(pageDrawing(doc, image, 595, 842)))
+                    .as("%s", image.getCOSObject())
+                    .isEqualTo(bytes);
+        }
+
+        private static PDPage pageDrawing(PDDocument doc, PDImageXObject image, float width, float height) throws Exception {
+            PDPage page = new PDPage(PDRectangle.A4);
+            doc.addPage(page);
+            try (PDPageContentStream cs = new PDPageContentStream(doc, page)) {
+                cs.drawImage(image, 0, 0, width, height);
+            }
+            return page;
+        }
+
+        private static PDFormXObject form(PDDocument doc, PDImageXObject image) throws Exception {
+            PDFormXObject form = new PDFormXObject(doc);
+            form.setBBox(new PDRectangle(595, 842));
+            form.setResources(new PDResources());
+            try (PDFormContentStream cs = new PDFormContentStream(form)) {
+                cs.drawImage(image, 0, 0, 595, 842);
+            }
+            return form;
+        }
+
+        /** An image of the given dictionary whose data is one byte: nothing here decodes it. */
+        private static PDImageXObject image(PDDocument doc, COSName filter, int width, int height, int bitsPerComponent,
+                                            PDColorSpace colorSpace) throws Exception {
+            return new PDImageXObject(doc, new ByteArrayInputStream(new byte[]{0}), filter, width, height, bitsPerComponent, colorSpace);
         }
     }
 

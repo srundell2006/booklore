@@ -7,6 +7,8 @@ import org.apache.pdfbox.pdmodel.PDDocumentInformation;
 import org.apache.pdfbox.pdmodel.PDPage;
 import org.apache.pdfbox.pdmodel.PDPageContentStream;
 import org.apache.pdfbox.pdmodel.common.PDRectangle;
+import org.apache.pdfbox.pdmodel.graphics.image.JPEGFactory;
+import org.apache.pdfbox.pdmodel.graphics.image.PDImageXObject;
 import org.apache.pdfbox.rendering.ImageType;
 import org.apache.pdfbox.rendering.PDFRenderer;
 import org.booklore.config.AppProperties;
@@ -25,10 +27,16 @@ import org.booklore.repository.BookRepository;
 import org.booklore.service.appsettings.AppSettingService;
 import org.booklore.service.book.BookCreatorService;
 import org.booklore.service.fileprocessor.prepare.FileFacts;
+import org.booklore.service.fileprocessor.prepare.HeapReservation;
+import org.booklore.service.fileprocessor.prepare.IoCallable;
+import org.booklore.service.fileprocessor.prepare.PrepareContext;
+import org.booklore.service.fileprocessor.prepare.PrepareRequest;
+import org.booklore.service.fileprocessor.prepare.PreparedBookFile;
 import org.booklore.service.metadata.MetadataMatchService;
 import org.booklore.service.metadata.extractor.PdfMetadataExtractor;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
 import org.booklore.util.FileService;
+import org.booklore.util.cover.CropPolicy;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
@@ -51,6 +59,7 @@ import java.awt.image.BufferedImage;
 import java.io.File;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.ArrayList;
 import java.util.List;
 import java.util.stream.Stream;
 
@@ -203,6 +212,55 @@ class PdfProcessorTest {
             assertThat(book.getMetadata().getTitle()).isEqualTo("Shell Title");
             assertThat(book.getBookCoverHash()).isNull();
             verify(pdfMetadataExtractor, never()).extractMetadata(any(PDDocument.class), any(File.class));
+        }
+    }
+
+    @Nested
+    class PrepareTests {
+
+        @Test
+        void aScannedPage_reservesHeapForDecodingItsImageAtFullSize() throws Exception {
+            // PDFBox decodes all of the scan to draw the 1000x1414 cover from it
+            Path scan = writePdf("scan.pdf", PDRectangle.A4, 0, doc -> {
+                PDImageXObject image = JPEGFactory.createFromImage(doc, new BufferedImage(1240, 1754, BufferedImage.TYPE_INT_RGB));
+                try (PDPageContentStream cs = new PDPageContentStream(doc, doc.getPage(0))) {
+                    cs.drawImage(image, 0, 0, PDRectangle.A4.getWidth(), PDRectangle.A4.getHeight());
+                }
+            });
+            Path blank = writePdf("blank.pdf", PDRectangle.A4, 0, _ -> {});
+
+            assertThat(heapReservedToPrepare(scan) - heapReservedToPrepare(blank)).isEqualTo(12L * 1240 * 1754);
+        }
+
+        private long heapReservedToPrepare(Path pdf) throws Exception {
+            List<Long> reservations = new ArrayList<>();
+            PrepareContext ctx = new PrepareContext() {
+                @Override
+                public void checkpoint() {
+                }
+
+                @Override
+                public <T> T render(long estimatedBytes, IoCallable<T> work) throws Exception {
+                    throw new AssertionError("A PDF page render takes no render permit");
+                }
+
+                @Override
+                public HeapReservation reserveHeap(long bytes) {
+                    reservations.add(bytes);
+                    return () -> {
+                    };
+                }
+
+                @Override
+                public void registerProcess(Process process) {
+                }
+            };
+
+            PreparedBookFile prepared = pdfProcessor.prepare(PrepareRequest.of(libraryFileFor(pdf), CropPolicy.NONE), ctx);
+
+            assertThat(prepared.cover()).isNotNull();
+            assertThat(reservations).hasSize(1);
+            return reservations.getFirst();
         }
     }
 
