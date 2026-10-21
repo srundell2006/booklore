@@ -32,6 +32,7 @@ public abstract class MobiBaseMetadataExtractor implements FileMetadataExtractor
     private static final Pattern DATE_DASH_FORMAT_PATTERN = Pattern.compile("\\d{4}-\\d{2}-\\d{2}");
     private static final Pattern CATEGORY_SEPARATOR_PATTERN = Pattern.compile("[;,]");
     private static final Pattern ISBN_INVALID_CHARS_PATTERN = Pattern.compile("[^0-9Xx]");
+    private static final Charset WINDOWS_1252 = Charset.forName("windows-1252");
 
     protected abstract String getFormatName();
 
@@ -307,8 +308,13 @@ public abstract class MobiBaseMetadataExtractor implements FileMetadataExtractor
         // Process format-specific logic
         processFormatSpecificHeader(raf, record0, header, headerLength);
 
-        // Determine charset
-        Charset charset = textEncoding == 65001 ? StandardCharsets.UTF_8 : StandardCharsets.ISO_8859_1;
+        // Determine charset: 1252 is Windows Latin-1, whose 0x80-0x9F are curly quotes and dashes ("It’s"),
+        // where ISO-8859-1 has invisible control characters
+        Charset charset = switch (textEncoding) {
+            case 65001 -> StandardCharsets.UTF_8;
+            case 1252 -> WINDOWS_1252;
+            default -> StandardCharsets.ISO_8859_1;
+        };
         header.charset = charset;
 
         // Skip to full name offset/length
