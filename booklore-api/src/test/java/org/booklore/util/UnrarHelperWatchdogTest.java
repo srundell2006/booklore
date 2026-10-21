@@ -15,6 +15,8 @@ import java.nio.file.attribute.PosixFilePermissions;
 import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -140,6 +142,37 @@ class UnrarHelperWatchdogTest {
         assertThat(available).isTrue();
         assertThat(stillInterrupted).isTrue();
         // What is kept for good is the binary's answer
+        assertThat(UnrarHelper.isAvailable()).isTrue();
+    }
+
+    @Test
+    void availabilityCheckInterruptedWhileItWaitsForUnrarToExitIsStillTheBinarysOwn() throws Exception {
+        Path script = tempDir.resolve("slow-exiting-unrar");
+        // Closes its output at once but exits only a second later, so the check is waiting for the exit when the
+        // interrupt of an import given up on meanwhile comes
+        Files.writeString(script, "#!/bin/sh\necho 'UNRAR 7.01 freeware'\nexec >&- 2>&-\nsleep 1\n");
+        Files.setPosixFilePermissions(script, PosixFilePermissions.fromString("rwx------"));
+        UnrarHelper.unrarBinOverride = script.toString();
+        UnrarHelper.cachedAvailability = null;
+        AtomicBoolean available = new AtomicBoolean();
+        AtomicBoolean stillInterrupted = new AtomicBoolean();
+        Thread checker = Thread.ofPlatform().start(() -> {
+            available.set(UnrarHelper.isAvailable());
+            stillInterrupted.set(Thread.interrupted());
+        });
+        long deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5);
+        while (checker.getState() != Thread.State.TIMED_WAITING && checker.isAlive()) {
+            assertThat(System.nanoTime()).as("the check to wait for unrar to exit").isLessThan(deadline);
+            Thread.sleep(5);
+        }
+
+        checker.interrupt();
+        checker.join(10_000);
+
+        assertThat(checker.isAlive()).isFalse();
+        assertThat(available).isTrue();
+        // The interrupt is kept for the import to see
+        assertThat(stillInterrupted).isTrue();
         assertThat(UnrarHelper.isAvailable()).isTrue();
     }
 }

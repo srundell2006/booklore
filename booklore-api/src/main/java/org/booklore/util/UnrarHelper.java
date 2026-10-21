@@ -36,7 +36,8 @@ public class UnrarHelper {
                 return cachedAvailability;
             }
             // The answer is kept for good, so it must not depend on who asks first: an import thread that was given up
-            // on is still interrupted, and the processes of the file it was reading are killed
+            // on is interrupted, before the check or during it, and the processes of the file it was reading are
+            // killed. Its interrupt is given back once the check is done
             boolean interrupted = Thread.interrupted();
             try {
                 Process process = new ProcessBuilder(getUnrarBin())
@@ -46,7 +47,16 @@ public class UnrarHelper {
                     try (InputStream is = process.getInputStream()) {
                         is.readAllBytes();
                     }
-                    boolean finished = process.waitFor(AVAILABILITY_TIMEOUT.toMillis(), TimeUnit.MILLISECONDS);
+                    long deadline = System.nanoTime() + AVAILABILITY_TIMEOUT.toNanos();
+                    boolean finished;
+                    while (true) {
+                        try {
+                            finished = process.waitFor(deadline - System.nanoTime(), TimeUnit.NANOSECONDS);
+                            break;
+                        } catch (InterruptedException e) {
+                            interrupted = true;
+                        }
+                    }
                     cachedAvailability = finished && !watched.killed();
                 }
             } catch (Exception e) {
