@@ -45,13 +45,11 @@ public class LibraryFileHelper {
      * the files found and any paths the walk could not read.
      */
     public LibraryScanResult scanAllLibraryFiles(LibraryEntity libraryEntity) throws IOException {
-        Set<Path> incompletePaths = new HashSet<>();
-        List<LibraryFile> files = walk(libraryEntity, this::findLibraryFiles, incompletePaths);
-        return new LibraryScanResult(files, incompletePaths);
+        return walk(libraryEntity, this::findLibraryFiles);
     }
 
     public List<LibraryFile> getAllLibraryFiles(LibraryEntity libraryEntity) throws IOException {
-        return walk(libraryEntity, this::findLibraryFiles, new HashSet<>());
+        return walk(libraryEntity, this::findLibraryFiles).files();
     }
 
     public List<LibraryFile> getLibraryFiles(LibraryEntity libraryEntity) throws IOException {
@@ -66,7 +64,7 @@ public class LibraryFileHelper {
     }
 
     public List<LibraryFile> getAllLibraryFilesFlat(LibraryEntity libraryEntity) throws IOException {
-        return walk(libraryEntity, this::findLibraryFilesFlat, new HashSet<>());
+        return walk(libraryEntity, this::findLibraryFilesFlat).files();
     }
 
     /** Builds the library files of one walked library path. */
@@ -85,24 +83,31 @@ public class LibraryFileHelper {
     }
 
     /**
-     * Walks all of the library's paths together, then collects each path's files in turn.
-     * Whatever the walk could not read is added to {@code incompletePaths}.
+     * Walks all of the library's paths together, then collects each path's files in turn,
+     * along with whatever the walk could not read.
      */
-    private List<LibraryFile> walk(LibraryEntity libraryEntity, TreeCollector collector, Set<Path> incompletePaths) throws IOException {
+    private LibraryScanResult walk(LibraryEntity libraryEntity, TreeCollector collector) throws IOException {
         List<LibraryPathEntity> pathEntities = libraryEntity.getLibraryPaths();
         List<WalkedPath> walkedPaths = directoryWalker.walk(pathEntities.stream()
                 .map(pathEntity -> Path.of(pathEntity.getPath()))
                 .toList());
 
         List<LibraryFile> allFiles = new ArrayList<>();
+        Set<Path> incompletePaths = new HashSet<>();
+        Set<Path> emptyLibraryPaths = new HashSet<>();
+        boolean timedOut = false;
         for (int i = 0; i < pathEntities.size(); i++) {
             WalkedPath walked = walkedPaths.get(i);
             incompletePaths.addAll(walked.incompletePaths());
+            timedOut |= walked.timedOut();
+            if (walked.empty()) {
+                emptyLibraryPaths.add(walked.path());
+            }
             if (walked.root() != null) {
                 allFiles.addAll(collector.collect(pathEntities.get(i), libraryEntity, walked.root()));
             }
         }
-        return allFiles;
+        return new LibraryScanResult(allFiles, incompletePaths, timedOut, emptyLibraryPaths);
     }
 
     /**

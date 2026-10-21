@@ -288,11 +288,126 @@ class LibraryProcessingServiceTest {
 
         assertThatThrownBy(() -> libraryProcessingService.rescanLibrary(context))
                 .isInstanceOf(APIException.class)
-                .hasMessageContaining("not accessible");
+                .hasMessage("Library 'Test Library' was not rescanned: no book files were found in " + pathEntity.getPath()
+                        + ", which may not be mounted; no books were removed.");
 
         verifyNoInteractions(bookDeletionService, bookRestorationService, bookGroupingService);
         // Only the read from before the walk; nothing is judged on an empty walk.
         verify(bookAdditionalFileRepository, times(1)).findScanRowsByLibraryId(LIBRARY_ID);
+    }
+
+    @Test
+    void rescanLibrary_whenTheWalkTimedOutAndFoundNothing_saysWhatCouldNotBeReadAndRemovesNothing() throws IOException {
+        // What a library path whose listing stalled looks like: nothing found, the path itself incomplete.
+        Path root = Path.of(pathEntity.getPath());
+        givenLibrary();
+        givenScan(new LibraryScanResult(List.of(), Set.of(root), true, Set.of()));
+        when(bookRepository.countIncludingDeletedByLibraryId(LIBRARY_ID)).thenReturn(5L);
+
+        assertThatThrownBy(this::rescan)
+                .isInstanceOf(APIException.class)
+                .hasMessage("Library 'Test Library' was not rescanned: " + root
+                        + " could not be read in time; no books were removed.");
+
+        verifyNoInteractions(bookDeletionService, bookRestorationService, bookGroupingService);
+        verify(bookAdditionalFileRepository, times(1)).findScanRowsByLibraryId(LIBRARY_ID);
+    }
+
+    @Test
+    void rescanLibrary_whenSeveralPathsCouldNotBeReadAndNothingWasFound_namesTheFirstAndCountsTheRest() throws IOException {
+        Path root = Path.of(pathEntity.getPath());
+        givenLibrary();
+        givenScan(new LibraryScanResult(List.of(), Set.of(root.resolve("b"), root.resolve("a"), root.resolve("c"))));
+        when(bookRepository.countIncludingDeletedByLibraryId(LIBRARY_ID)).thenReturn(5L);
+
+        // Failing outright rather than timing out, it is not said to have been slow.
+        assertThatThrownBy(this::rescan)
+                .isInstanceOf(APIException.class)
+                .hasMessage("Library 'Test Library' was not rescanned: " + root.resolve("a")
+                        + " and 2 other paths could not be read; no books were removed.");
+
+        verifyNoInteractions(bookDeletionService, bookRestorationService, bookGroupingService);
+    }
+
+    @Test
+    void rescanLibrary_whenSomePathsCouldNotBeRead_refreshesTheRestAndWarnsTheUser() throws IOException {
+        Path stuck = Path.of(pathEntity.getPath(), "Author 2");
+        givenLibrary();
+        givenScan(new LibraryScanResult(List.of(libraryFile("Author 1", "a.epub")), Set.of(stuck), true, Set.of()));
+        givenRows(row(1, 11, "Author 1", "a.epub"), row(2, 12, "Author 2", "b.epub"));
+        givenNothingToGroup();
+
+        rescan();
+
+        verify(bookDeletionService, never()).processDeletedLibraryFiles(any());
+        assertThat(problemsNotified()).containsExactly("WARN Refreshed library 'Test Library', but " + stuck
+                + " could not be read in time; no books there were removed.");
+    }
+
+    /** The library's paths are walked for real, as they are on disk. */
+    private void givenRealWalk() throws IOException {
+        LibraryFileHelper helper = new LibraryFileHelper(
+                new LibraryDirectoryWalker(4, Duration.ofSeconds(30), new LibraryDirectoryWalker.FileAccess()));
+        when(libraryFileHelper.scanAllLibraryFiles(libraryEntity)).thenAnswer(invocation -> helper.scanAllLibraryFiles(libraryEntity));
+        when(libraryFileHelper.filterByAllowedFormats(anyList(), any())).thenAnswer(inv -> inv.getArgument(0));
+    }
+
+    private LibraryPathEntity addLibraryPath(long id, String directory) throws IOException {
+        LibraryPathEntity added = new LibraryPathEntity();
+        added.setId(id);
+        added.setPath(Files.createDirectory(tempDir.resolve(directory)).toString());
+        List<LibraryPathEntity> paths = new ArrayList<>(libraryEntity.getLibraryPaths());
+        paths.add(added);
+        libraryEntity.setLibraryPaths(paths);
+        return added;
+    }
+
+    @Test
+    void rescanLibrary_whenTheLibraryPathIsEmpty_saysNoBookFilesWereFoundThereRatherThanThatItCouldNotBeRead() throws IOException {
+        // What a share that is not mounted leaves behind: its mount point, empty.
+        givenLibrary();
+        givenRealWalk();
+        when(bookRepository.countIncludingDeletedByLibraryId(LIBRARY_ID)).thenReturn(5L);
+
+        assertThatThrownBy(this::rescan)
+                .isInstanceOf(APIException.class)
+                .hasMessage("Library 'Test Library' was not rescanned: no book files were found in " + pathEntity.getPath()
+                        + ", which may not be mounted; no books were removed.");
+
+        verifyNoInteractions(bookDeletionService, bookRestorationService, bookGroupingService);
+    }
+
+    @Test
+    void rescanLibrary_ofALibraryWithNoBooksYet_doesNotWarnAboutItsEmptyPath() throws IOException {
+        givenLibrary();
+        givenRealWalk();
+        when(bookRepository.countIncludingDeletedByLibraryId(LIBRARY_ID)).thenReturn(0L);
+        givenRows();
+        givenNothingToGroup();
+
+        rescan();
+
+        assertThat(problemsNotified()).isEmpty();
+    }
+
+    @Test
+    void rescanLibrary_whenAPathThatHadBooksIsEmpty_keepsThemAndSaysItMayNotBeMounted() throws IOException {
+        Files.write(Path.of(pathEntity.getPath(), "a.epub"), new byte[]{1});
+        LibraryPathEntity unmounted = addLibraryPath(20L, "unmounted");
+        // Empty too, but no book was ever found there, so there is nothing to warn about.
+        addLibraryPath(30L, "fresh");
+        givenLibrary();
+        givenRealWalk();
+        givenRows(row(1, 11, "", "a.epub"),
+                new BookFileScanRow(2L, 12L, unmounted.getId(), unmounted.getPath(), "", "b.epub", true, BookFileType.EPUB, false));
+        givenNothingToGroup();
+
+        rescan();
+
+        verify(bookDeletionService, never()).processDeletedLibraryFiles(any());
+        verify(bookDeletionService, never()).deleteRemovedAdditionalFiles(any());
+        assertThat(problemsNotified()).containsExactly("WARN Refreshed library 'Test Library', but no book files were found in "
+                + unmounted.getPath() + ", which may not be mounted; no books there were removed.");
     }
 
     @Test

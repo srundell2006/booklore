@@ -4,6 +4,7 @@ import jakarta.transaction.Transactional;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.booklore.config.security.service.AuthenticationService;
+import org.booklore.exception.APIException;
 import org.booklore.exception.ApiError;
 import org.booklore.mapper.BookMapper;
 import org.booklore.mapper.LibraryMapper;
@@ -18,6 +19,7 @@ import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.AuditAction;
 import org.booklore.model.enums.BookFileType;
+import org.booklore.model.websocket.LogNotification;
 import org.booklore.model.websocket.Topic;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryPathRepository;
@@ -148,20 +150,7 @@ public class LibraryService {
         }
 
         if (!newPaths.isEmpty()) {
-            SecurityContextThreads.start("library-scan-" + libraryId, () -> {
-                if (!scanningLibraries.add(libraryId)) {
-                    log.warn("Library {} is already being scanned, skipping duplicate process request", libraryId);
-                    return;
-                }
-                try {
-                    libraryProcessingService.processLibrary(libraryId);
-                } catch (InvalidDataAccessApiUsageException e) {
-                    log.debug("InvalidDataAccessApiUsageException - Library id: {}", libraryId);
-                } finally {
-                    scanningLibraries.remove(libraryId);
-                }
-                log.info("Parsing task completed!");
-            });
+            startScan(libraryId, library.getName(), false, () -> libraryProcessingService.processLibrary(libraryId));
         }
 
         auditService.log(AuditAction.LIBRARY_UPDATED, "Library", libraryId, "Updated library: " + library.getName());
@@ -201,20 +190,7 @@ public class LibraryService {
             }
         }
 
-        SecurityContextThreads.start("library-scan-" + libraryId, () -> {
-            if (!scanningLibraries.add(libraryId)) {
-                log.warn("Library {} is already being scanned, skipping duplicate process request", libraryId);
-                return;
-            }
-            try {
-                libraryProcessingService.processLibrary(libraryId);
-            } catch (InvalidDataAccessApiUsageException e) {
-                log.debug("InvalidDataAccessApiUsageException - Library id: {}", libraryId);
-            } finally {
-                scanningLibraries.remove(libraryId);
-            }
-            log.info("Parsing task completed!");
-        });
+        startScan(libraryId, libraryEntity.getName(), false, () -> libraryProcessingService.processLibrary(libraryId));
 
         auditService.log(AuditAction.LIBRARY_CREATED, "Library", libraryEntity.getId(), "Created library: " + libraryEntity.getName());
         return libraryMapper.toLibrary(libraryEntity);
@@ -224,20 +200,41 @@ public class LibraryService {
         LibraryEntity lib = libraryRepository.findById(libraryId).orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(libraryId));
         auditService.log(AuditAction.LIBRARY_SCANNED, "Library", libraryId, "Scanned library: " + lib.getName());
 
-        SecurityContextThreads.start("library-rescan-" + libraryId, () -> {
+        startScan(libraryId, lib.getName(), true, () -> libraryProcessingService.rescanLibrary(RescanLibraryContext.builder()
+                .libraryId(libraryId)
+                .build()));
+    }
+
+    /** An initial scan or a rescan of one library. */
+    @FunctionalInterface
+    private interface LibraryScan {
+        void run() throws IOException;
+    }
+
+    /**
+     * Runs a scan of the library on a thread of its own, unless the library is being scanned
+     * already. However the scan ends, the thread reports it and ends normally: a scan stopped on
+     * purpose (an {@link APIException}, such as a rescan that could not read the library and so
+     * changed nothing) in one log line, and a failure with its stack trace, each also told to the
+     * user.
+     */
+    private void startScan(long libraryId, String libraryName, boolean rescan, LibraryScan scan) {
+        SecurityContextThreads.start((rescan ? "library-rescan-" : "library-scan-") + libraryId, () -> {
             if (!scanningLibraries.add(libraryId)) {
-                log.warn("Library {} is already being scanned, skipping duplicate rescan request", libraryId);
+                log.warn("Library {} is already being scanned, skipping duplicate {} request", libraryId, rescan ? "rescan" : "process");
                 return;
             }
             try {
-                RescanLibraryContext context = RescanLibraryContext.builder()
-                        .libraryId(libraryId)
-                        .build();
-                libraryProcessingService.rescanLibrary(context);
+                scan.run();
             } catch (InvalidDataAccessApiUsageException e) {
                 log.debug("InvalidDataAccessApiUsageException - Library id: {}", libraryId);
-            } catch (IOException e) {
-                log.error("Error while parsing library books", e);
+            } catch (APIException e) {
+                log.error("{}", e.getMessage());
+                notificationService.sendMessage(Topic.LOG, LogNotification.error(e.getMessage()));
+            } catch (IOException | RuntimeException e) {
+                String failure = (rescan ? "Failed to refresh library: " : "Failed to process library: ") + libraryName + " - " + e.getMessage();
+                log.error("{}", failure, e);
+                notificationService.sendMessage(Topic.LOG, LogNotification.error(failure));
             } finally {
                 scanningLibraries.remove(libraryId);
             }

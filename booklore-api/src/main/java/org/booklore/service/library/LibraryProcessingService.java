@@ -1,5 +1,6 @@
 package org.booklore.service.library;
 
+import org.booklore.exception.APIException;
 import org.booklore.exception.ApiError;
 import org.booklore.model.dto.settings.LibraryFile;
 import org.booklore.model.entity.BookEntity;
@@ -24,7 +25,6 @@ import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.IOException;
-import java.io.UncheckedIOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
@@ -72,25 +72,25 @@ public class LibraryProcessingService {
      */
     record RemovalCandidates(List<Long> ids, int underUnreadPaths, int changedDuringWalk) {}
 
-    public void processLibrary(long libraryId) {
+    /** An initial scan. A failure is left to the caller to report, as for {@link #rescanLibrary}. */
+    public void processLibrary(long libraryId) throws IOException {
         LibraryEntity libraryEntity = loadLibrary(libraryId);
         notificationService.sendMessage(Topic.LOG, LogNotification.info("Started processing library: " + libraryEntity.getName()));
-        try {
-            List<LibraryFile> libraryFiles = libraryFileHelper.getLibraryFiles(libraryEntity);
-            List<LibraryFile> newFiles = detectNewBookPaths(libraryFiles, loadBookFiles(libraryEntity));
+        List<LibraryFile> libraryFiles = libraryFileHelper.getLibraryFiles(libraryEntity);
+        List<LibraryFile> newFiles = detectNewBookPaths(libraryFiles, loadBookFiles(libraryEntity));
 
-            // Use BookGroupingService for consistent grouping based on organization mode
-            Map<String, List<LibraryFile>> groups = bookGroupingService.groupForInitialScan(newFiles, libraryEntity);
-            notifySkipped(libraryEntity, fileAsBookProcessor.processLibraryFilesGrouped(groups, libraryEntity));
+        // Use BookGroupingService for consistent grouping based on organization mode
+        Map<String, List<LibraryFile>> groups = bookGroupingService.groupForInitialScan(newFiles, libraryEntity);
+        notifySkipped(libraryEntity, fileAsBookProcessor.processLibraryFilesGrouped(groups, libraryEntity));
 
-            notificationService.sendMessage(Topic.LOG, LogNotification.info("Finished processing library: " + libraryEntity.getName()));
-        } catch (IOException e) {
-            log.error("Failed to process library {}: {}", libraryEntity.getName(), e.getMessage(), e);
-            notificationService.sendMessage(Topic.LOG, LogNotification.error("Failed to process library: " + libraryEntity.getName() + " - " + e.getMessage()));
-            throw new UncheckedIOException("Library processing failed", e);
-        }
+        notificationService.sendMessage(Topic.LOG, LogNotification.info("Finished processing library: " + libraryEntity.getName()));
     }
 
+    /**
+     * A rescan. One that cannot vouch for the library's files (a library path it cannot read, or
+     * a walk that finds none of the library's books) stops before changing anything, with an
+     * {@link APIException} whose message says why, for the caller to report.
+     */
     public void rescanLibrary(RescanLibraryContext context) throws IOException {
         // Detached: only its own columns and the eagerly loaded library paths are used.
         LibraryEntity libraryEntity = loadLibrary(context.getLibraryId());
@@ -113,12 +113,16 @@ public class LibraryProcessingService {
         if (allLibraryFiles.isEmpty()) {
             long existingBookCount = bookRepository.countIncludingDeletedByLibraryId(libraryEntity.getId());
             if (existingBookCount > 0) {
+                // More likely a share that is down, or that the walk could not read, than every book deleted.
+                List<Path> unread = scanResult.unreadPaths();
+                if (!unread.isEmpty()) {
+                    throw rescanStopped(libraryEntity, couldNotBeRead(unread, scanResult.timedOut()));
+                }
+                // The paths were read and hold no books: an empty mount point, most likely.
                 String paths = libraryEntity.getLibraryPaths().stream()
                         .map(LibraryPathEntity::getPath)
                         .collect(Collectors.joining(", "));
-                log.error("Library '{}' has {} existing books but scan found 0 files. Paths may be offline: {}",
-                        libraryEntity.getName(), existingBookCount, paths);
-                throw ApiError.LIBRARY_PATH_NOT_ACCESSIBLE.createException(paths);
+                throw rescanStopped(libraryEntity, "no book files were found in " + paths + ", which may not be mounted");
             }
         }
 
@@ -173,7 +177,49 @@ public class LibraryProcessingService {
         // Process new book groups
         notifySkipped(libraryEntity, fileAsBookProcessor.processLibraryFilesGrouped(groupingResult.newBookGroups(), libraryEntity));
 
+        notifyIncomplete(libraryEntity, scanResult, rowsBeforeWalk);
         notificationService.sendMessage(Topic.LOG, LogNotification.info("Finished refreshing library: " + libraryEntity.getName()));
+    }
+
+    /**
+     * Tells the user what a rescan that went ahead left alone because the walk could not vouch for
+     * it: paths it could not read, and library paths found empty that held books, which may be
+     * shares that are not mounted. An empty library path that held none (a new library, say) is
+     * not worth a warning.
+     */
+    private void notifyIncomplete(LibraryEntity libraryEntity, LibraryScanResult scanResult, Set<BookFileScanRow> rowsBeforeWalk) {
+        List<Path> unread = scanResult.unreadPaths();
+        if (!unread.isEmpty()) {
+            notificationService.sendMessage(Topic.LOG, LogNotification.warn("Refreshed library '" + libraryEntity.getName()
+                    + "', but " + couldNotBeRead(unread, scanResult.timedOut()) + "; no books there were removed."));
+        }
+        List<String> emptiedOfBooks = scanResult.emptyLibraryPaths().stream()
+                .filter(path -> rowsBeforeWalk.stream().anyMatch(row -> isUnder(row.fullPath(), path)))
+                .map(Path::toString)
+                .sorted()
+                .toList();
+        if (!emptiedOfBooks.isEmpty()) {
+            notificationService.sendMessage(Topic.LOG, LogNotification.warn("Refreshed library '" + libraryEntity.getName()
+                    + "', but no book files were found in " + String.join(", ", emptiedOfBooks)
+                    + ", which may not be mounted; no books there were removed."));
+        }
+    }
+
+    private static boolean isUnder(Path file, Path directory) {
+        return file != null && file.toAbsolutePath().normalize().startsWith(directory);
+    }
+
+    private static APIException rescanStopped(LibraryEntity libraryEntity, String reason) {
+        return new APIException("Library '" + libraryEntity.getName() + "' was not rescanned: " + reason
+                + "; no books were removed.", ApiError.LIBRARY_PATH_NOT_ACCESSIBLE.getStatus());
+    }
+
+    /** E.g. "/books/A and 2 other paths could not be read in time", for at least one path. */
+    private static String couldNotBeRead(List<Path> paths, boolean timedOut) {
+        int others = paths.size() - 1;
+        return paths.getFirst()
+                + (others == 0 ? "" : " and " + others + (others == 1 ? " other path" : " other paths"))
+                + " could not be read" + (timedOut ? " in time" : "");
     }
 
     private LibraryEntity loadLibrary(Long libraryId) {
@@ -217,8 +263,7 @@ public class LibraryProcessingService {
         for (var pathEntity : libraryEntity.getLibraryPaths()) {
             Path path = Path.of(pathEntity.getPath());
             if (!Files.exists(path) || !Files.isDirectory(path) || !Files.isReadable(path)) {
-                log.error("Library path not accessible: {}", path);
-                throw ApiError.LIBRARY_PATH_NOT_ACCESSIBLE.createException(path.toString());
+                throw rescanStopped(libraryEntity, path + " is not accessible");
             }
         }
     }

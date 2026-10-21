@@ -39,6 +39,12 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
     final Set<Path> listingsFailingAfterFirstEntry = ConcurrentHashMap.newKeySet();
     /** Listings that block, ignoring interrupts, until {@link #release()}: a CIFS call on a dead share. */
     final Set<Path> stuckListings = ConcurrentHashMap.newKeySet();
+    /** Listings that return their first entry, then block reading the next one until {@link #release()}. */
+    final Set<Path> listingsStuckAfterFirstEntry = ConcurrentHashMap.newKeySet();
+    /** Attribute reads that block until {@link #release()}: a file whose oplock break never completes. */
+    final Set<Path> stuckAttributeReads = ConcurrentHashMap.newKeySet();
+    /** Readability checks that block until {@link #release()}. */
+    final Set<Path> stuckReadabilityChecks = ConcurrentHashMap.newKeySet();
     final Map<Path, Duration> listingDelays = new ConcurrentHashMap<>();
     final Map<Path, CyclicBarrier> listingBarriers = new ConcurrentHashMap<>();
     /** Thrown for every attribute read of the path, with or without following links. */
@@ -48,6 +54,8 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
     /** Delay for reading the attributes of each entry of the given directory. */
     final Map<Path, Duration> entryAttributeDelays = new ConcurrentHashMap<>();
     final Set<Path> unreadable = ConcurrentHashMap.newKeySet();
+    /** Entries left out of every listing of their directory but its first: a share unmounted meanwhile, say. */
+    final Set<Path> unlistedOnRelisting = ConcurrentHashMap.newKeySet();
     /** Lists entries in name order instead of the filesystem's. */
     volatile boolean listInNameOrder;
     /** Answers lookups as a filesystem that matches names regardless of case would. */
@@ -58,6 +66,7 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
     final Queue<Path> readabilityChecked = new ConcurrentLinkedQueue<>();
     final Queue<Path> existenceChecked = new ConcurrentLinkedQueue<>();
     final Queue<Call> calls = new ConcurrentLinkedQueue<>();
+    /** Calls that got stuck, of any kind. */
     final AtomicInteger stuckCount = new AtomicInteger();
     /** Listings in progress, not counting stuck ones. */
     final AtomicInteger activeListings = new AtomicInteger();
@@ -71,6 +80,7 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
 
     @Override
     DirectoryStream<Path> newDirectoryStream(Path dir) throws IOException {
+        boolean relisting = listed.contains(dir);
         listed.add(dir);
         if (stuckListings.contains(dir)) {
             stuckCount.incrementAndGet();
@@ -91,7 +101,8 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
             if (failure != null) {
                 throw failure;
             }
-            return recording(super.newDirectoryStream(dir), listingsFailingAfterFirstEntry.contains(dir));
+            return recording(super.newDirectoryStream(dir), relisting, listingsFailingAfterFirstEntry.contains(dir),
+                    listingsStuckAfterFirstEntry.contains(dir));
         } finally {
             activeListings.decrementAndGet();
         }
@@ -101,6 +112,10 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
     BasicFileAttributes readAttributes(Path path, LinkOption... options) throws IOException {
         attributesRead.add(path);
         calls.add(new Call("stat", path));
+        if (stuckAttributeReads.contains(path)) {
+            stuckCount.incrementAndGet();
+            blockUninterruptibly();
+        }
         if (path.getParent() != null) {
             sleep(entryAttributeDelays.get(path.getParent()));
         }
@@ -117,6 +132,10 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
     @Override
     boolean isReadable(Path file) {
         readabilityChecked.add(file);
+        if (stuckReadabilityChecks.contains(file)) {
+            stuckCount.incrementAndGet();
+            blockUninterruptibly();
+        }
         return !unreadable.contains(file) && super.isReadable(file);
     }
 
@@ -161,13 +180,23 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
         }
     }
 
-    /** Records each entry as the listing returns it, optionally sorted, optionally failing after the first. */
-    private DirectoryStream<Path> recording(DirectoryStream<Path> stream, boolean failAfterFirstEntry) {
+    /**
+     * Records each entry as the listing returns it, optionally sorted, optionally leaving out entries unlisted on
+     * relisting, optionally failing or stuck after the first.
+     */
+    private DirectoryStream<Path> recording(DirectoryStream<Path> stream, boolean relisting, boolean failAfterFirstEntry,
+                                            boolean stuckAfterFirstEntry) {
         Iterator<Path> source;
-        if (listInNameOrder) {
+        if (listInNameOrder || relisting) {
             List<Path> entries = new ArrayList<>();
-            stream.forEach(entries::add);
-            entries.sort((a, b) -> a.getFileName().toString().compareTo(b.getFileName().toString()));
+            stream.forEach(entry -> {
+                if (!relisting || !unlistedOnRelisting.contains(entry)) {
+                    entries.add(entry);
+                }
+            });
+            if (listInNameOrder) {
+                entries.sort((a, b) -> a.getFileName().toString().compareTo(b.getFileName().toString()));
+            }
             source = entries.iterator();
         } else {
             source = stream.iterator();
@@ -187,6 +216,10 @@ class ScriptedFileAccess extends LibraryDirectoryWalker.FileAccess {
                     public Path next() {
                         if (failAfterFirstEntry && !(first && source.hasNext())) {
                             throw new DirectoryIteratorException(new IOException("Connection reset by peer"));
+                        }
+                        if (stuckAfterFirstEntry && !first) {
+                            stuckCount.incrementAndGet();
+                            blockUninterruptibly();
                         }
                         first = false;
                         Path entry = source.next();
