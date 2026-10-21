@@ -77,7 +77,13 @@ import java.util.function.Consumer;
  *       be read, and a fresh listing carries on with the rest, keeping what the stuck
  *       one found. The stuck thread holds the open directory stream, so the fresh
  *       listing reads the directory again, skipping the entries already looked at,
- *       which keeps every entry looked at as the listing returns it.</li>
+ *       which keeps every entry looked at as the listing returns it. Should the fresh
+ *       listing get stuck again before it has looked at any other entry, or once
+ *       {@value #MAX_STUCK_ENTRIES_PER_DIRECTORY} entries of the directory have been
+ *       given up on, the directory seems stuck as a whole (a folder whose every file
+ *       another client holds): the rest of it is given up, and it is reported incomplete
+ *       with what was found in it kept. So a directory stuck as a whole costs two
+ *       timeouts, and no one directory can use up the timeouts of its library path.</li>
  *   <li>An abandoned thread cannot be reclaimed while it is stuck (it ignores
  *       interrupts while in IO), but it stops at its next filesystem call once the
  *       stuck one returns. So that stuck threads cannot pile up, after
@@ -100,6 +106,8 @@ public class LibraryDirectoryWalker {
 
     static final int MAX_PARALLELISM = 64;
     static final int MAX_TIMEOUTS_PER_PATH = 10;
+    /** Entries of one directory given up on one at a time at most; past that, the rest of the directory is. */
+    static final int MAX_STUCK_ENTRIES_PER_DIRECTORY = MAX_TIMEOUTS_PER_PATH / 2;
     /** Each stuck listing holds a platform thread until its filesystem call returns. */
     static final int MAX_STRANDED_LISTINGS = 64;
 
@@ -138,8 +146,11 @@ public class LibraryDirectoryWalker {
      *                        library path that turned out empty
      * @param timedOut        true when some of that was given up on because the filesystem
      *                        did not respond in time
+     * @param empty           true when the library path was listed and holds nothing at all,
+     *                        which may be a share that is not mounted; it is then among the
+     *                        incomplete paths too
      */
-    record WalkedPath(Path path, Directory root, Set<Path> incompletePaths, boolean timedOut) {
+    record WalkedPath(Path path, Directory root, Set<Path> incompletePaths, boolean timedOut, boolean empty) {
     }
 
     /**
@@ -196,6 +207,8 @@ public class LibraryDirectoryWalker {
         private int timeouts;
         /** Some of it was given up on because the filesystem did not respond in time. */
         private boolean timedOut;
+        /** The library path holds nothing at all. */
+        private boolean empty;
         private boolean stopped;
         private long finishedAt;
     }
@@ -222,7 +235,7 @@ public class LibraryDirectoryWalker {
      * fresh listing reads the directory again and inspects only the entries not looked at
      * yet. They belong to one listing at a time: the walking thread takes them from a
      * listing stuck on an entry (see {@link Listing#giveUpStuckEntry(long)}) and hands them to
-     * the next.
+     * the next, or attaches them to the tree itself when it gives up the rest of the directory.
      */
     private static final class Findings {
         private final boolean libraryPath;
@@ -237,6 +250,10 @@ public class LibraryDirectoryWalker {
         private final List<Path> unseenBookFiles = new ArrayList<>();
         /** Audio files among all the book files, seen or not. */
         private int audioFiles;
+        /** Entries given up on while they were being inspected. */
+        private int stuckEntries;
+        /** How many entries had been looked at when the last one was given up on. */
+        private int inspectedWhenLastStuck;
 
         Findings(Lineage directory) {
             this.libraryPath = directory == null;
@@ -272,6 +289,50 @@ public class LibraryDirectoryWalker {
                 // It may be a directory full of books, so it must not pass for absent.
                 incompletePaths.add(entry);
             }
+        }
+
+        /**
+         * Adds {@code entry}, given up on while it was being inspected, and returns whether a fresh
+         * listing is to carry on with the rest of the directory. Not when the listing that carried on
+         * after the last entry given up on got stuck before looking at any other, nor once
+         * {@value #MAX_STUCK_ENTRIES_PER_DIRECTORY} entries have been given up on: the directory itself
+         * then seems stuck, and each further listing would only strand another thread.
+         */
+        boolean stuckOn(Path entry) {
+            boolean stuckAgainAtOnce = stuckEntries > 0 && inspected.size() == inspectedWhenLastStuck;
+            record(entry, found -> found.couldNotInspect(entry));
+            stuckEntries++;
+            inspectedWhenLastStuck = inspected.size();
+            return !stuckAgainAtOnce && stuckEntries < MAX_STUCK_ENTRIES_PER_DIRECTORY;
+        }
+
+        /** What the listings found, once every entry of the directory at {@code path} has been looked at. */
+        Contents contents(Path path) {
+            if (!unseenBookFiles.isEmpty()) {
+                if (!libraryPath && audioFiles >= LibraryFileHelper.MIN_AUDIO_FILES_FOR_FOLDER_AUDIOBOOK) {
+                    // Whether the audio files here make one folder audiobook, a series or separate books depends on
+                    // every book file of the directory, so one that could not be seen puts all of its books in doubt.
+                    incompletePaths.add(path);
+                } else {
+                    // Each book file here is a book of its own, so only the unseen ones are in doubt.
+                    incompletePaths.addAll(unseenBookFiles);
+                }
+            }
+            return contents(incompletePaths);
+        }
+
+        /**
+         * What the listings found before the rest of the directory at {@code path} was given up on. The
+         * entries not looked at may be anything, so the whole directory is in doubt.
+         */
+        Contents givenUp(Path path) {
+            return contents(List.of(path));
+        }
+
+        private Contents contents(List<Path> incomplete) {
+            subdirectories.sort(Comparator.comparing(lineage -> lineage.path().getFileName().toString()));
+            bookFiles.sort(Comparator.naturalOrder());
+            return new Contents(List.copyOf(subdirectories), List.copyOf(bookFiles), List.copyOf(incomplete), false);
         }
     }
 
@@ -332,9 +393,12 @@ public class LibraryDirectoryWalker {
         }
     }
 
-    /** What one listing found, for the walking thread to attach to the tree. */
-    private record Contents(List<Lineage> subdirectories, List<String> bookFiles, List<Path> incompletePaths) {
-        static final Contents SKIPPED = new Contents(List.of(), List.of(), List.of());
+    /**
+     * What one listing found, for the walking thread to attach to the tree. {@code empty} is true for a
+     * library path that holds nothing at all.
+     */
+    private record Contents(List<Lineage> subdirectories, List<String> bookFiles, List<Path> incompletePaths, boolean empty) {
+        static final Contents SKIPPED = new Contents(List.of(), List.of(), List.of(), false);
     }
 
     /**
@@ -447,7 +511,7 @@ public class LibraryDirectoryWalker {
                     // queued too; a late return is not.
                     Pending pending = running.remove(done);
                     if (pending != null) {
-                        attach(pending, done, queue);
+                        collect(pending, done, queue);
                     }
                 }
             }
@@ -466,42 +530,53 @@ public class LibraryDirectoryWalker {
             log.info("Walked library path {}: {} directories listed, {} book files found, {} incomplete paths, {} ms",
                     walk.path, walk.directoriesListed, walk.bookFiles, walk.incompletePaths.size(),
                     TimeUnit.NANOSECONDS.toMillis(walk.finishedAt - startedAt));
-            results.add(new WalkedPath(walk.path, walk.root, Set.copyOf(walk.incompletePaths), walk.timedOut));
+            results.add(new WalkedPath(walk.path, walk.root, Set.copyOf(walk.incompletePaths), walk.timedOut, walk.empty));
         }
         return results;
     }
 
-    private void attach(Pending pending, ListingTask done, Deque<Pending> queue) throws InterruptedException {
+    /** Takes what a listing that ended found, or reports its directory incomplete when it failed. */
+    private static void collect(Pending pending, ListingTask done, Deque<Pending> queue) throws InterruptedException {
+        Contents contents;
+        try {
+            contents = done.get();
+        } catch (ExecutionException e) {
+            Path path = pending.directory().getPath();
+            Throwable cause = e.getCause();
+            pending.walk().incompletePaths.add(path);
+            if (cause instanceof IOException) {
+                log.warn("Could not list directory [{}], so nothing under it was scanned: {}", path, cause.toString());
+            } else {
+                log.warn("Could not list directory [{}], so nothing under it was scanned", path, cause);
+            }
+            finished(pending.walk());
+            return;
+        }
+        attach(pending, contents, queue);
+    }
+
+    /** Puts what the listings of a directory found into the tree, and queues its subdirectories. */
+    private static void attach(Pending pending, Contents contents, Deque<Pending> queue) {
         PathWalk walk = pending.walk();
         Directory directory = pending.directory();
-        try {
-            Contents contents = done.get();
-            List<Directory> subdirectories = new ArrayList<>(contents.subdirectories().size());
-            for (Lineage lineage : contents.subdirectories()) {
-                Directory subdirectory = new Directory(lineage.path());
-                subdirectories.add(subdirectory);
-                if (!walk.stopped) {
-                    walk.outstanding++;
-                    queue.add(new Pending(walk, subdirectory, lineage, null));
-                }
-            }
-            directory.subdirectories = List.copyOf(subdirectories);
-            directory.bookFiles = contents.bookFiles();
-            if (pending.lineage() == null) {
-                walk.root = directory;
-            }
-            walk.directoriesListed++;
-            walk.bookFiles += contents.bookFiles().size();
-            walk.incompletePaths.addAll(contents.incompletePaths());
-        } catch (ExecutionException e) {
-            Throwable cause = e.getCause();
-            walk.incompletePaths.add(directory.getPath());
-            if (cause instanceof IOException) {
-                log.warn("Could not list directory [{}], so nothing under it was scanned: {}", directory.getPath(), cause.toString());
-            } else {
-                log.warn("Could not list directory [{}], so nothing under it was scanned", directory.getPath(), cause);
+        List<Directory> subdirectories = new ArrayList<>(contents.subdirectories().size());
+        for (Lineage lineage : contents.subdirectories()) {
+            Directory subdirectory = new Directory(lineage.path());
+            subdirectories.add(subdirectory);
+            if (!walk.stopped) {
+                walk.outstanding++;
+                queue.add(new Pending(walk, subdirectory, lineage, null));
             }
         }
+        directory.subdirectories = List.copyOf(subdirectories);
+        directory.bookFiles = contents.bookFiles();
+        if (pending.lineage() == null) {
+            walk.root = directory;
+            walk.empty = contents.empty();
+        }
+        walk.directoriesListed++;
+        walk.bookFiles += contents.bookFiles().size();
+        walk.incompletePaths.addAll(contents.incompletePaths());
         finished(walk);
     }
 
@@ -521,11 +596,17 @@ public class LibraryDirectoryWalker {
                 task.abandon();
                 it.remove();
                 Findings findings = listing.findings;
-                findings.record(stuckEntry, found -> found.couldNotInspect(stuckEntry));
-                log.warn("Gave up inspecting [{}] after {} ms without filesystem progress, so it was not scanned; "
-                        + "carrying on with the rest of [{}]", stuckEntry, directoryTimeout.toMillis(), path);
-                // The directory is still outstanding: a fresh listing carries on, ahead of directories not listed yet.
-                queue.addFirst(new Pending(walk, pending.directory(), pending.lineage(), findings));
+                if (findings.stuckOn(stuckEntry)) {
+                    log.warn("Gave up inspecting [{}] after {} ms without filesystem progress, so it was not scanned; "
+                            + "carrying on with the rest of [{}]", stuckEntry, directoryTimeout.toMillis(), path);
+                    // The directory is still outstanding: a fresh listing carries on, ahead of directories not listed yet.
+                    queue.addFirst(new Pending(walk, pending.directory(), pending.lineage(), findings));
+                } else {
+                    log.warn("Gave up inspecting [{}] after {} ms without filesystem progress; [{}] seems stuck as a whole, "
+                                    + "so the rest of it was not scanned and nothing under it is treated as deleted",
+                            stuckEntry, directoryTimeout.toMillis(), path);
+                    attach(pending, findings.givenUp(path), queue);
+                }
             } else if (listing.stalled(timeout) && task.abandon()) {
                 // Stuck reading the directory itself. A listing that finished meanwhile is not abandoned: it waits
                 // in the completion queue for the next poll.
@@ -624,21 +705,9 @@ public class LibraryDirectoryWalker {
 
         if (findings.libraryPath && empty) {
             log.warn("Library path [{}] is empty; reporting it as not scanned in case it is a share that is not mounted", path);
-            findings.incompletePaths.add(path);
+            return new Contents(List.of(), List.of(), List.of(path), true);
         }
-        if (!findings.unseenBookFiles.isEmpty()) {
-            if (!findings.libraryPath && findings.audioFiles >= LibraryFileHelper.MIN_AUDIO_FILES_FOR_FOLDER_AUDIOBOOK) {
-                // Whether the audio files here make one folder audiobook, a series or separate books depends on
-                // every book file of the directory, so one that could not be seen puts all of its books in doubt.
-                findings.incompletePaths.add(path);
-            } else {
-                // Each book file here is a book of its own, so only the unseen ones are in doubt.
-                findings.incompletePaths.addAll(findings.unseenBookFiles);
-            }
-        }
-        findings.subdirectories.sort(Comparator.comparing(lineage -> lineage.path().getFileName().toString()));
-        findings.bookFiles.sort(Comparator.naturalOrder());
-        return new Contents(List.copyOf(findings.subdirectories), List.copyOf(findings.bookFiles), List.copyOf(findings.incompletePaths));
+        return findings.contents(path);
     }
 
     /**

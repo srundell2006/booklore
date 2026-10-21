@@ -94,16 +94,20 @@ public class LibraryFileHelper {
 
         List<LibraryFile> allFiles = new ArrayList<>();
         Set<Path> incompletePaths = new HashSet<>();
+        Set<Path> emptyLibraryPaths = new HashSet<>();
         boolean timedOut = false;
         for (int i = 0; i < pathEntities.size(); i++) {
             WalkedPath walked = walkedPaths.get(i);
             incompletePaths.addAll(walked.incompletePaths());
             timedOut |= walked.timedOut();
+            if (walked.empty()) {
+                emptyLibraryPaths.add(walked.path());
+            }
             if (walked.root() != null) {
                 allFiles.addAll(collector.collect(pathEntities.get(i), libraryEntity, walked.root()));
             }
         }
-        return new LibraryScanResult(allFiles, incompletePaths, timedOut);
+        return new LibraryScanResult(allFiles, incompletePaths, timedOut, emptyLibraryPaths);
     }
 
     /**

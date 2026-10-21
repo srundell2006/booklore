@@ -114,9 +114,11 @@ public class LibraryProcessingService {
             long existingBookCount = bookRepository.countIncludingDeletedByLibraryId(libraryEntity.getId());
             if (existingBookCount > 0) {
                 // More likely a share that is down, or that the walk could not read, than every book deleted.
-                if (!scanResult.isComplete()) {
-                    throw rescanStopped(libraryEntity, unreadPaths(scanResult));
+                List<Path> unread = scanResult.unreadPaths();
+                if (!unread.isEmpty()) {
+                    throw rescanStopped(libraryEntity, couldNotBeRead(unread, scanResult.timedOut()));
                 }
+                // The paths were read and hold no books: an empty mount point, most likely.
                 String paths = libraryEntity.getLibraryPaths().stream()
                         .map(LibraryPathEntity::getPath)
                         .collect(Collectors.joining(", "));
@@ -175,11 +177,36 @@ public class LibraryProcessingService {
         // Process new book groups
         notifySkipped(libraryEntity, fileAsBookProcessor.processLibraryFilesGrouped(groupingResult.newBookGroups(), libraryEntity));
 
-        if (!scanResult.isComplete()) {
-            notificationService.sendMessage(Topic.LOG, LogNotification.warn("Refreshed library '" + libraryEntity.getName()
-                    + "', but " + unreadPaths(scanResult) + "; no books there were removed."));
-        }
+        notifyIncomplete(libraryEntity, scanResult, rowsBeforeWalk);
         notificationService.sendMessage(Topic.LOG, LogNotification.info("Finished refreshing library: " + libraryEntity.getName()));
+    }
+
+    /**
+     * Tells the user what a rescan that went ahead left alone because the walk could not vouch for
+     * it: paths it could not read, and library paths found empty that held books, which may be
+     * shares that are not mounted. An empty library path that held none (a new library, say) is
+     * not worth a warning.
+     */
+    private void notifyIncomplete(LibraryEntity libraryEntity, LibraryScanResult scanResult, Set<BookFileScanRow> rowsBeforeWalk) {
+        List<Path> unread = scanResult.unreadPaths();
+        if (!unread.isEmpty()) {
+            notificationService.sendMessage(Topic.LOG, LogNotification.warn("Refreshed library '" + libraryEntity.getName()
+                    + "', but " + couldNotBeRead(unread, scanResult.timedOut()) + "; no books there were removed."));
+        }
+        List<String> emptiedOfBooks = scanResult.emptyLibraryPaths().stream()
+                .filter(path -> rowsBeforeWalk.stream().anyMatch(row -> isUnder(row.fullPath(), path)))
+                .map(Path::toString)
+                .sorted()
+                .toList();
+        if (!emptiedOfBooks.isEmpty()) {
+            notificationService.sendMessage(Topic.LOG, LogNotification.warn("Refreshed library '" + libraryEntity.getName()
+                    + "', but no book files were found in " + String.join(", ", emptiedOfBooks)
+                    + ", which may not be mounted; no books there were removed."));
+        }
+    }
+
+    private static boolean isUnder(Path file, Path directory) {
+        return file != null && file.toAbsolutePath().normalize().startsWith(directory);
     }
 
     private static APIException rescanStopped(LibraryEntity libraryEntity, String reason) {
@@ -187,16 +214,12 @@ public class LibraryProcessingService {
                 + "; no books were removed.", ApiError.LIBRARY_PATH_NOT_ACCESSIBLE.getStatus());
     }
 
-    /** E.g. "/books/A and 2 other paths could not be read in time". */
-    private static String unreadPaths(LibraryScanResult scanResult) {
-        List<String> paths = scanResult.incompletePaths().stream()
-                .map(Path::toString)
-                .sorted()
-                .toList();
+    /** E.g. "/books/A and 2 other paths could not be read in time", for at least one path. */
+    private static String couldNotBeRead(List<Path> paths, boolean timedOut) {
         int others = paths.size() - 1;
         return paths.getFirst()
                 + (others == 0 ? "" : " and " + others + (others == 1 ? " other path" : " other paths"))
-                + " could not be read" + (scanResult.timedOut() ? " in time" : "");
+                + " could not be read" + (timedOut ? " in time" : "");
     }
 
     private LibraryEntity loadLibrary(Long libraryId) {

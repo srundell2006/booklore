@@ -42,6 +42,16 @@ class LibraryScanResultTest {
     }
 
     @Test
+    void libraryPathsFoundEmptyAreIncompleteButNotUnread() {
+        LibraryScanResult result = new LibraryScanResult(List.of(),
+                Set.of(Path.of("/books/b"), Path.of("/books/a"), Path.of("/nas/./unmounted")), false, Set.of(Path.of("/nas/unmounted")));
+
+        assertThat(result.isUnderIncompletePath(Path.of("/nas/unmounted/a.epub"))).isTrue();
+        assertThat(result.emptyLibraryPaths()).containsExactly(Path.of("/nas/unmounted"));
+        assertThat(result.unreadPaths()).containsExactly(Path.of("/books/a"), Path.of("/books/b"));
+    }
+
+    @Test
     void completeResultCoversNothing() {
         LibraryScanResult result = new LibraryScanResult(List.of(), Set.of());
 
