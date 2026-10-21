@@ -24,6 +24,7 @@ import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
 
@@ -82,6 +83,22 @@ class LibraryFileEventProcessorTest {
     void tearDown() throws Exception {
         processor.shutdown();
         mocks.close();
+    }
+
+    @Test
+    void handlesEventsOnAPlatformDaemonThread() throws Exception {
+        CompletableFuture<Thread> handledOn = new CompletableFuture<>();
+        when(libraryRepository.findById(1L)).thenAnswer(inv -> {
+            handledOn.complete(Thread.currentThread());
+            return Optional.of(library);
+        });
+
+        processor.processEvent(StandardWatchEventKinds.ENTRY_DELETE, 1L, tempDir.resolve("notes.txt"), false);
+
+        Thread handler = handledOn.get(10, TimeUnit.SECONDS);
+        assertThat(handler.isVirtual()).isFalse();
+        assertThat(handler.isDaemon()).isTrue();
+        assertThat(handler.getName()).isEqualTo("library-file-events");
     }
 
     @Nested
