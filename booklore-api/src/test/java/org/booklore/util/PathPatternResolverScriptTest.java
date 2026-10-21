@@ -10,7 +10,10 @@ import org.junit.jupiter.params.provider.ValueSource;
 
 import java.text.Normalizer;
 import java.time.LocalDate;
+import java.util.Arrays;
 import java.util.List;
+import java.util.Random;
+import java.util.stream.IntStream;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -20,7 +23,9 @@ import static org.junit.jupiter.params.provider.Arguments.arguments;
  * sanitize() strips accents from Latin letters only, and keeps the letters, digits and marks of every script. It used
  * to drop every non-ASCII code point, which emptied titles and authors written in other scripts and produced names
  * like "01.  - Naguib Mahfouz (2000)". Punctuation, symbols and invisible characters are still dropped, so names in
- * Latin script come out as they did before, and books whose names were fine are not renamed.
+ * Latin script come out as they did before, and books whose names were fine are not renamed. Between two non-Latin
+ * words punctuation becomes a space, and letters and numbers that are only another form of ASCII ones (ﬁ, Ａ, 𝐁, Ⅷ, １)
+ * are written in ASCII; superscript and ordinal letters (ª º ᵉ) are dropped as they always were.
  */
 class PathPatternResolverScriptTest {
 
@@ -103,6 +108,7 @@ class PathPatternResolverScriptTest {
         return Stream.of(
                 arguments("Harry Potter and the Philosopher’s Stone", "Harry Potter and the Philosophers Stone"),
                 arguments("A – B", "A B"),
+                arguments("A\u2013B", "AB"),
                 arguments("Derrière", "Derriere"),
                 arguments("“Quoted” — and… more", "Quoted and more"),
                 arguments("¿Qué? ¡Sí!", "Que Si!"),
@@ -115,7 +121,22 @@ class PathPatternResolverScriptTest {
                 arguments("\uFEFFZero\u200Bwidth\u200C\u200Djoiners", "Zerowidthjoiners"),
                 arguments("Stray marks on e\u200B\u0301 and 1\u0301", "Stray marks on e and 1"),
                 arguments("Tab\tand bell\u0007", "Taband bell"),
-                arguments("C1\u0085 and \u0092 controls", "C1 and controls")
+                arguments("C1\u0085 and \u0092 controls", "C1 and controls"),
+                // Modifier letters of no script (U+02BC apostrophe, okina, stress mark) are dropped next to Latin letters
+                arguments("Winter\u02BCs Tale", "Winters Tale"),
+                arguments("Hawai\u02BBi and \u02C8stress", "Hawaii and stress"),
+                // Numbers that are not digits, symbols that spell letters and the letters that are emoji are dropped
+                arguments("E=mc\u00B2 \u00BD", "E=mc"),
+                arguments("Chapter \u2460", "Chapter"),
+                arguments("Roman \u2180", "Roman"),
+                arguments("Star Wars\u2122 \u2116 4", "Star Wars 4"),
+                arguments("Info \u2139\uFE0F and Metro \u24C2\uFE0F", "Info and Metro"),
+                arguments("Parenthesized \u249C\u249D", "Parenthesized"),
+                // Superscript and ordinal letters are dropped like superscript digits, rather than written in ASCII
+                arguments("N\u00BA 5 and 1\u00AA edici\u00F3n", "N 5 and 1 edicion"),
+                arguments("451\u00BA Fahrenheit", "451 Fahrenheit"),
+                arguments("XIX\u1D49 si\u00E8cle and M\u02E1\u02E1\u1D49 Dupont", "XIX siecle and M Dupont"),
+                arguments("2\u207F and x\u2090", "2 and x")
         );
     }
 
@@ -143,15 +164,62 @@ class PathPatternResolverScriptTest {
 
     @ParameterizedTest(name = "{0} -> {1}")
     @CsvSource(delimiter = '|', value = {
-            // Every letter is kept, so these differ from the names they used to get ("Signicance", "Winters Tale")
-            "The Signi\uFB01cance of \uFB02ow  | The Signi\uFB01cance of \uFB02ow",
-            "N\u00BA 5 and 1\u00AA edici\u00F3n | N\u00BA 5 and 1\u00AA edicion",
-            "XIX\u1D49 si\u00E8cle             | XIX\u1D49 siecle",
-            "Winter\u02BCs Tale                | Winter\u02BCs Tale",
-            "Winter\u2019s Tale                | Winters Tale",
+            // These letters used to vanish ("Signicance", "Henry"); they are now written as the ASCII they stand for
+            "The Signi\uFB01cance of \uFB02ow  | The Significance of flow",
+            "Henry \u2167 and Louis \u2169\u2163  | Henry VIII and Louis XIV",
+            "ドラゴンクエスト\u2162           | ドラゴンクエストIII",
+            "\uFF28\uFF41\uFF52\uFF52\uFF59 \uFF11         | Harry 1",
+            "\uD835\uDC01\uD835\uDC28\uD835\uDC25\uD835\uDC1D \uD835\uDFCF | Bold 1",
+            "\u24B6\u24D1\u24D2 \uD83C\uDD30BC        | Abc ABC",
+            "\u0132sselmeer                  | IJsselmeer",
+            "Wei\u017Fs and \u01C8ubljana        | Weiss and Ljubljana",
+            "\uD835\uDC00\u0301 and \uFF25\u0301        | A and E",
     })
-    void ligaturesOrdinalsAndModifierLetters_areKeptLikeAnyOtherLetter(String title, String expected) {
-        // Ligatures, ordinal indicators and modifier letters (the U+02BC apostrophe among them) are letters, \p{L}
+    void compatibilityLetters_areWrittenInAscii(String title, String expected) {
+        assertThat(sanitized(title)).isEqualTo(expected);
+    }
+
+    @Test
+    void compatibilityLetters_thatAreMoreThanAsciiLetters_areLeftAlone() {
+        // Ǆ is D + Ž, not plain ASCII, and stays the letter it is; the rest are not letters, or superscripts, or a
+        // Roman numeral that is more than ASCII letters (ↀ), and are dropped as before
+        assertThat(sanitized("\u01C4 \u00B2\u00BD\u2460\u2180\u2122\u2116\u249C \u00BA\u1D49\u2139\u24C2 x")).isEqualTo("\u01C4 x");
+    }
+
+    @Test
+    void romanNumerals_keepVolumesApart() {
+        // They used to vanish, so that volumes II and III of a title went to the same path
+        assertThat(sanitized("ドラゴンクエスト\u2161")).isNotEqualTo(sanitized("ドラゴンクエスト\u2162"));
+        // Dropped, the middle dot would run I and II into III, the name of the third volume
+        assertThat(sanitized("ドラゴンクエスト\u2160・\u2161 公式ガイドブック")).isEqualTo("ドラゴンクエストI II 公式ガイドブック")
+                .isNotEqualTo(sanitized("ドラゴンクエスト\u2162 公式ガイドブック"));
+        assertThat(sanitized("Star Wars Episode \u2160\u2013\u2162")).isEqualTo("Star Wars Episode I III")
+                .isNotEqualTo(sanitized("Star Wars Episode \u2163"));
+    }
+
+    @ParameterizedTest(name = "{0} -> {1}")
+    @CsvSource(delimiter = '|', value = {
+            "ドラゴンクエスト\u2160・\u2161        | ドラゴンクエストI II",
+            "化学\u2160・\u2161の新研究            | 化学I IIの新研究",
+            "\u2160・\u2161・\u2162               | I II III",
+            "三体\u2161·黑暗森林                  | 三体II 黑暗森林",
+            "第\u2161・１巻                        | 第II 1巻",
+            "Star Wars Episode \u2160\u2013\u2162 | Star Wars Episode I III",
+            "Episodes \u2163\u2013\u2165          | Episodes IV VI",
+            "\u2170·\u2171                       | i ii",
+            // Numerals in a row are one number (ⅩⅢ is 13), and a Latin letter or an ASCII digit beside one leaves the
+            // punctuation dropped, as beside a fullwidth digit
+            "\u2169\u2162                        | XIII",
+            "Part\u2013\u2161                     | PartII",
+            "\u2161\u2013B                        | IIB",
+            "\u2161·2                             | II2",
+            "Henry \u2167\u2019s Wives              | Henry VIIIs Wives",
+            // A modifier letter after a numeral is dropped, as it is after the ASCII letters the numeral becomes
+            "ドラゴンクエスト\u2161\u30FC           | ドラゴンクエストII",
+    })
+    void punctuationBetweenRomanNumerals_becomesASpace(String title, String expected) {
+        // They are Latin, but written in ASCII two of them would run into another numeral, as the digits of 第１・２巻
+        // would run into another number
         assertThat(sanitized(title)).isEqualTo(expected);
     }
 
@@ -163,8 +231,14 @@ class PathPatternResolverScriptTest {
             "Arabic-Indic digits  | \u0627\u0644\u062C\u0632\u0621 \u0663",
             "Thai                 | \u0E2A\u0E27\u0E31\u0E2A\u0E14\u0E35",
             "Hebrew with niqqud   | \u05E9\u05C1\u05B8\u05DC\u05D5\u05B9\u05DD",
+            "Katakana with ー     | \u30B3\u30FC\u30D2\u30FC",
+            "Halfwidth katakana   | \uFF76\uFF9E\uFF70\uFF99",
+            "Arabic with tatweel  | \u06A9\u0640\u062A\u0627\u0628",
+            "Ukrainian with ʼ     | \u043C\u02BC\u044F\u0442\u0430",
+            "Chinese year with 〇 | 二〇〇八年",
+            "Hangzhou numerals    | \u3021\u3022\u3029",
     })
-    void otherScripts_keepTheirJoinersMarksAndDigits(String script, String title) {
+    void otherScripts_keepTheirJoinersMarksModifiersAndDigits(String script, String title) {
         assertThat(sanitized(title)).isEqualTo(Normalizer.normalize(title, Normalizer.Form.NFC));
     }
 
@@ -194,25 +268,106 @@ class PathPatternResolverScriptTest {
     @ParameterizedTest(name = "{0} -> {1}")
     @CsvSource(delimiter = '|', value = {
             "《三体》                      | 三体",
-            "こんにちは。世界               | こんにちは世界",
+            "こんにちは。                  | こんにちは",
             "الثلاثية، الجزء الأول          | الثلاثية الجزء الأول",
             "«Война и мир»                 | Война и мир",
+            "三体 · 黑暗森林                | 三体 黑暗森林",
     })
-    void nonLatinPunctuation_isDropped(String title, String expected) {
+    void nonLatinPunctuationAtTheEdgeOfAWord_isDropped(String title, String expected) {
+        assertThat(sanitized(title)).isEqualTo(expected);
+    }
+
+    @ParameterizedTest(name = "{0} -> {1}")
+    @CsvSource(delimiter = '|', value = {
+            "三体·黑暗森林                  | 三体 黑暗森林",
+            "東京・大阪                     | 東京 大阪",
+            "こんにちは。世界               | こんにちは 世界",
+            "ハリー・ポッター               | ハリー ポッター",
+            "Война—мир                     | Война мир",
+            "《三体》《黑暗森林》            | 三体 黑暗森林",
+            // A decimal separator too: dropped, it would make another number of 20.5 (205)
+            "٢٠\u066B٥ مليون                 | ٢٠ ٥ مليون",
+            "۳\u066B۵                        | ۳ ۵",
+    })
+    void nonLatinPunctuationBetweenNonLatinWords_becomesASpace(String title, String expected) {
+        // It used to glue the words together ("三体黑暗森林")
+        assertThat(sanitized(title)).isEqualTo(expected);
+    }
+
+    @ParameterizedTest(name = "{0} -> {1}")
+    @CsvSource(delimiter = '|', value = {
+            "第１・２巻                     | 第1 2巻",
+            "第１．５巻                     | 第1 5巻",
+            "\uD835\uDFCF·\uD835\uDFD0                   | 1 2",
+            // ASCII digits leave it dropped, as for Latin names
+            "第1・2巻                       | 第12巻",
+            "Vol. 1·2                      | Vol. 12",
+            // A modifier letter after a fullwidth digit is dropped, as it is after the ASCII digit it becomes
+            "１ー２                         | 12",
+    })
+    void punctuationBetweenFullwidthDigits_becomesASpace(String title, String expected) {
+        // The digits are written in ASCII, but count as the non-Latin digits they are
+        assertThat(sanitized(title)).isEqualTo(expected);
+    }
+
+    @ParameterizedTest(name = "{0} -> {1}")
+    @CsvSource(delimiter = '|', value = {
+            "なぜ?・どうして                | なぜ どうして",
+            "三体\t·黑暗                        | 三体 黑暗",
+            "三体:·黑暗                     | 三体 黑暗",
+            "三体·*黑暗*                    | 三体 黑暗",
+            // Without non-ASCII punctuation, ASCII is handled as before
+            "なぜ?どうして                  | なぜどうして",
+            "Tab\t·and?·more                    | Tabandmore",
+    })
+    void charactersRemovedLater_doNotKeepPunctuationFromBecomingASpace(String title, String expected) {
+        // The question mark, tab, colon and asterisks are removed from the name, so they are not the neighbours that decide
+        assertThat(sanitized(title)).isEqualTo(expected);
+    }
+
+    @ParameterizedTest(name = "{0} -> {1}")
+    @CsvSource(delimiter = '|', value = {
+            "三体·2                        | 三体2",
+            "東京·Tokyo                    | 東京Tokyo",
+            "Bjørk·東京                    | Bjørk東京",
+            "п\u2019ять                       | пять",
+            "Жанна д\u2019Арк                 | Жанна дАрк",
+            "三体-黑暗                      | 三体-黑暗",
+            "三体:黑暗                      | 三体黑暗",
+            "١\u066C٠٠٠ ليلة                 | ١٠٠٠ ليلة",
+            "۱\u066C۰۰۰                      | ۱۰۰۰",
+            "Ինչո\u055Eւ                      | Ինչու",
+            "Ինչո\u055Bւ                      | Ինչու",
+            "Ինչո\u055Cւ                      | Ինչու",
+            "ト\u309Bラコ\u309Bン                 | トラコン",
+            "ハ\u309Cン                       | ハン",
+    })
+    void punctuationNextToAsciiOrLatinText_orInsideAWord_isDroppedAsBefore(String title, String expected) {
+        // ASCII and Latin neighbours keep Latin names as they were; an apostrophe sits inside a word
         assertThat(sanitized(title)).isEqualTo(expected);
     }
 
     @ParameterizedTest(name = "U+{0}")
     @ValueSource(strings = {
             "0085", "0092", "009F", "200E", "200F", "202A", "202B", "202C", "202D", "202E", "2066", "2067", "2068",
-            "2069", "FEFF", "200B", "00AD", "2060", "2122", "00A9", "00BD", "2764", "1F600", "1F1EB", "1F3FD",
+            "2069", "FEFF", "200B", "00AD", "2060", "00BD", "00B2", "2460", "2180", "00AA", "00BA", "1D49", "207F", "2090",
             "E000", "F0000", "0378", "D800", "DC00",
     })
-    void invisibleCharactersSymbolsAndEmoji_neverReachTheName(String hex) {
+    void invisibleCharactersAndNumbers_neverReachTheName(String hex) {
         String character = new String(Character.toChars(Integer.parseInt(hex, 16)));
 
         assertThat(sanitized("Naguib" + character + "Mahfouz")).isEqualTo("NaguibMahfouz");
         assertThat(sanitized("قصر" + character + "الشوق")).isEqualTo("قصرالشوق");
+        assertThat(sanitized("中国" + character + " " + character + "文化")).isEqualTo("中国 文化");
+    }
+
+    @ParameterizedTest(name = "U+{0}")
+    @ValueSource(strings = {"2122", "00A9", "2764", "1F600", "1F1EB", "1F3FD", "2116", "2139", "24C2", "00B7", "2014", "066B"})
+    void symbolsAndEmoji_neverReachTheName_butKeepNonLatinWordsApart(String hex) {
+        String character = new String(Character.toChars(Integer.parseInt(hex, 16)));
+
+        assertThat(sanitized("Naguib" + character + "Mahfouz")).isEqualTo("NaguibMahfouz");
+        assertThat(sanitized("قصر" + character + "الشوق")).isEqualTo("قصر الشوق");
         assertThat(sanitized("中国" + character + " " + character + "文化")).isEqualTo("中国 文化");
     }
 
@@ -221,6 +376,7 @@ class PathPatternResolverScriptTest {
         assertThat(sanitized("猫\u2764\uFE0F")).isEqualTo("猫");
         assertThat(sanitized("Family \uD83D\uDC68\u200D\uD83D\uDC69\u200D\uD83D\uDC67 Album")).isEqualTo("Family Album");
         assertThat(sanitized("\u0633\u0644\u0627\u0645 #\uFE0F\u20E3")).isEqualTo("\u0633\u0644\u0627\u0645 #");
+        assertThat(sanitized("猫\uD83D\uDC68\u200D\uD83D\uDC69\u200D\uD83D\uDC67狗")).isEqualTo("猫 狗");
     }
 
     @ParameterizedTest(name = "{0}")
@@ -228,6 +384,8 @@ class PathPatternResolverScriptTest {
             "\u200C\u06A9\u062A\u0627\u0628\u200C",
             "\u06A9\u200C \u0628",
             "\u06A9\u200C\uD83D\uDE00",
+            "\u06A9\u200C\u00B7\u0628",
+            "\u06A9\u00B7\u200C\u0628",
     })
     void joinersAtTheEdgeOfAWord_areDropped(String title) {
         assertThat(sanitized(title)).doesNotContain("\u200C");
@@ -240,12 +398,243 @@ class PathPatternResolverScriptTest {
             "\u06A9\u200C\u200C\u0628", "\u06A9\u200C\uD83D\uDE00\u0628", "\u0915\u094D\u200D\u0937",
             "\u0D9A\u200D\u0DCA\u0DC0", "\u0D9A\u2764\u200D\u0DCA", "a\u200D\u0301b", "Love \u2764\uFE0F Story",
             "Æsop · Œdipus", "\uD800lone\uDC00", "\u202Bقصر\u200F الشوق\u202C", "1\uFE0F\u20E3", "  ",
+            "三体·黑暗森林", "ハリー・ポッター", "\u06A9\u200C\u00B7\u0628", "\u30AB\u00B7\u30FC\u30AD", "\u6771\u30FC\u00B7a",
+            "\u06A9\u200D\u0640", "\uFF76\uFF9E\uFF70", "Winter\u02BCs", "\uD835\uDC00\u0301", "\u24B6\u2139\u24C2",
+            "\u4E2D\u3001\u3001\u200C\u6587", "\u30AB\u3099\u00B7\u3099\u30AD", "第１・２巻", "１ー２", "\uFF11\u200C·\uFF12",
+            "なぜ?・どうして", "٢٠\u066B٥", "١\u066C٠٠٠", "Ինչո\u055Eւ", "ト\u309Bラ", "二〇〇八", "N\u00BA 5", "\uD801\uDF80\u0301",
+            "\uD837\uDF00\u0301\u200C\u0628", "三体\u2161·黑暗", "ドラゴンクエスト\u2160・\u2161", "\u2160・\u2161・\u2162",
+            "Episode \u2160\u2013\u2162", "Part\u2013\u2161", "\u2161\u30FC\u00B7\u30B3", "\u2161\u200D\u4E2D",
     })
     void sanitizing_isStableAndComposed(String title) {
         String once = sanitized(title);
 
         assertThat(sanitized(once)).isEqualTo(once);
         assertThat(Normalizer.isNormalized(once, Normalizer.Form.NFC)).isTrue();
+    }
+
+    /**
+     * The cases the move preview must agree on: pattern-resolver.spec.ts in booklore-ui asserts this same table
+     * (SHARED_SANITIZE_CASES), so a row added or changed here belongs there too. Each row is a description, a
+     * title and the name sanitize() makes of it.
+     */
+    private static final String[][] SHARED_SANITIZE_CASES = {
+            // Punctuation and symbols between non-Latin words become a space
+            {"middle dot between Chinese words", "三体·黑暗森林", "三体 黑暗森林"},
+            {"katakana middle dot", "東京・大阪", "東京 大阪"},
+            {"middle dot after a prolonged sound mark", "ハリー・ポッター", "ハリー ポッター"},
+            {"fullwidth colon", "三体\uFF1A黑暗森林", "三体 黑暗森林"},
+            {"ideographic full stop", "こんにちは。世界", "こんにちは 世界"},
+            {"em dash between Cyrillic words", "Война—мир", "Война мир"},
+            {"danda between Hindi words", "गोदान।प्रेमचंद", "गोदान प्रेमचंद"},
+            {"Arabic comma before an Arabic-Indic digit", "الجزء،٣", "الجزء ٣"},
+            {"symbol between Arabic words", "قصر™الشوق", "قصر الشوق"},
+            {"emoji between Chinese words", "猫\uD83D\uDE00狗", "猫 狗"},
+            {"emoji sequence between Chinese words", "猫\uD83D\uDC68\u200D\uD83D\uDC69狗", "猫 狗"},
+            {"two in a row make one space", "三体·—黑暗", "三体 黑暗"},
+            {"after a letter with a mark", "カ\u3099·キ\u3099", "ガ ギ"},
+            {"joiner before it is dropped", "ک\u200C·ب", "ک ب"},
+            // and are dropped as before anywhere else
+            {"brackets at the edges", "《三体》", "三体"},
+            {"comma before a space", "الثلاثية، الجزء الأول", "الثلاثية الجزء الأول"},
+            {"already spaced", "三体 · 黑暗", "三体 黑暗"},
+            {"next to an ASCII digit", "三体·2", "三体2"},
+            {"next to a Latin word", "東京·Tokyo", "東京Tokyo"},
+            {"next to a Latin letter that is not ASCII", "Bjørk·東京", "Bjørk東京"},
+            {"Latin apostrophe", "Harry Potter and the Philosopher\u2019s Stone", "Harry Potter and the Philosophers Stone"},
+            {"Latin dash", "A\u2013B", "AB"},
+            {"Latin quotes and middle dot", "«Les Misérables» · Tome 1", "Les Miserables Tome 1"},
+            {"apostrophe inside a Ukrainian word", "п\u2019ять", "пять"},
+            {"apostrophe in a Russian name", "Жанна д\u2019Арк", "Жанна дАрк"},
+            {"Hebrew geresh", "ג\u05F3ורג\u05F3", "גורג"},
+            {"Arabic thousands separator", "١\u066C٠٠٠ ليلة", "١٠٠٠ ليلة"},
+            {"Persian thousands separator", "۱\u066C۰۰۰", "۱۰۰۰"},
+            {"Armenian question mark over a vowel", "Ինչո\u055Eւ", "Ինչու"},
+            {"Armenian emphasis mark", "Ինչո\u055Bւ", "Ինչու"},
+            {"Armenian exclamation mark", "Ինչո\u055Cւ", "Ինչու"},
+            {"spacing dakuten", "ト\u309Bラコ\u309Bン", "トラコン"},
+            {"spacing handakuten", "ハ\u309Cン", "ハン"},
+            {"zero-width space, which is not punctuation", "中国\u200B文化", "中国文化"},
+            {"fraction, which is not punctuation", "中国\u00BD文化", "中国文化"},
+            // A decimal separator becomes a space too: dropped, it would make another number of 20.5 (205)
+            {"Arabic decimal separator", "٢٠\u066B٥ مليون", "٢٠ ٥ مليون"},
+            {"Persian decimal separator", "۳\u066B۵", "۳ ۵"},
+            // Fullwidth and mathematical digits count as the non-Latin digits they are, though written in ASCII
+            {"between fullwidth digits", "第１・２巻", "第1 2巻"},
+            {"fullwidth full stop between fullwidth digits", "第１．５巻", "第1 5巻"},
+            {"between mathematical digits", "\uD835\uDFCF·\uD835\uDFD0", "1 2"},
+            {"between ASCII digits, as before", "第1・2巻", "第12巻"},
+            {"modifier letter after a fullwidth digit", "１ー２", "12"},
+            // Characters removed later are looked through
+            {"after a question mark that is removed", "なぜ?・どうして", "なぜ どうして"},
+            {"after a tab that is removed", "三体\t·黑暗", "三体 黑暗"},
+            {"after a colon that is removed", "三体:·黑暗", "三体 黑暗"},
+            {"Latin text around removed characters", "Tab\t·and?·more", "Tabandmore"},
+            // ASCII punctuation is handled as before
+            {"ASCII hyphen", "三体-黑暗", "三体-黑暗"},
+            {"ASCII colon", "三体:黑暗", "三体黑暗"},
+            {"ASCII question mark", "なぜ?どうして", "なぜどうして"},
+            // Letters and digits that are another form of ASCII ones are written in ASCII
+            {"ligatures", "The Signi\uFB01cance of \uFB02ow", "The Significance of flow"},
+            {"fullwidth letters and digits", "\uFF28\uFF41\uFF52\uFF52\uFF59 \uFF11", "Harry 1"},
+            {"mathematical letters and digits", "\uD835\uDC01\uD835\uDC28\uD835\uDC25\uD835\uDC1D \uD835\uDFCF", "Bold 1"},
+            {"circled and squared letters", "\u24B6\u24D1\u24D2 \uD83C\uDD30", "Abc A"},
+            {"Dutch ij and long s", "\u0132sselmeer Wei\u017Fs", "IJsselmeer Weiss"},
+            {"accent on a mathematical letter", "\uD835\uDC00\u0301", "A"},
+            {"inside non-Latin text", "中\uFB01文", "中fi文"},
+            {"Roman numerals", "Henry \u2167", "Henry VIII"},
+            {"Roman numeral in a Japanese title", "ドラゴンクエスト\u2162", "ドラゴンクエストIII"},
+            // Roman numerals count as numbers, though Latin, so that two of them do not run into another one
+            {"Roman numeral before Chinese punctuation", "三体\u2161·黑暗森林", "三体II 黑暗森林"},
+            {"between Roman numerals in a Japanese title", "ドラゴンクエスト\u2160・\u2161", "ドラゴンクエストI II"},
+            {"between Roman numerals in a Latin title", "Episode \u2160\u2013\u2162", "Episode I III"},
+            {"between small Roman numerals", "\u2170\u00B7\u2171", "i ii"},
+            {"between a Roman numeral and a fullwidth digit", "第\u2161・\uFF11巻", "第II 1巻"},
+            {"Roman numerals in a row, which are one number", "\u2169\u2162", "XIII"},
+            {"Roman numeral next to a Latin word", "Part\u2013\u2161", "PartII"},
+            {"Roman numeral next to an ASCII digit", "\u2161\u00B72", "II2"},
+            {"modifier letter after a Roman numeral", "ドラゴンクエスト\u2161\u30FC", "ドラゴンクエストII"},
+            // and the rest are left as they were
+            {"ligature that is not plain ASCII stays a letter", "\u01C4", "\u01C4"},
+            {"parenthesized letters, which are more than letters", "A\u249C\u249DB", "AB"},
+            {"superscript digits and fractions", "E=mc\u00B2 \u00BD", "E=mc"},
+            {"ordinal indicators", "N\u00BA 5 and 1\u00AA edición", "N 5 and 1 edicion"},
+            {"ordinal indicator typed for a degree sign", "451\u00BA Fahrenheit", "451 Fahrenheit"},
+            {"superscript letter", "XIX\u1D49 siècle", "XIX siecle"},
+            {"superscript and subscript letters", "M\u02E1\u02E1\u1D49 2\u207F x\u2090", "M 2 x"},
+            {"Roman numeral with no ASCII form", "\u2180 x", "x"},
+            {"circled digits", "Chapter \u2460", "Chapter"},
+            {"symbols that spell letters", "Pokémon\u2122 \u2116 5", "Pokemon 5"},
+            {"letters that are emoji", "Info \u2139\uFE0F Metro \u24C2\uFE0F", "Info Metro"},
+            // Modifier letters of no script are dropped next to Latin text and kept in non-Latin words
+            {"modifier apostrophe in a Latin word", "Winter\u02BCs Tale", "Winters Tale"},
+            {"okina", "Hawai\u02BBi", "Hawaii"},
+            {"stress mark", "\u02C8stress", "stress"},
+            {"before a Latin word", "\u30FCstart", "start"},
+            {"prolonged sound marks", "コ\u30FCヒ\u30FC", "コ\u30FCヒ\u30FC"},
+            {"prolonged sound mark before Latin letters", "ファイナルファンタジ\u30FCVII", "ファイナルファンタジ\u30FCVII"},
+            {"halfwidth katakana", "\uFF76\uFF9E\uFF70\uFF99", "\uFF76\uFF9E\uFF70\uFF99"},
+            {"Arabic tatweel", "ک\u0640تاب", "ک\u0640تاب"},
+            {"modifier apostrophe in a Ukrainian word", "м\u02BCята", "м\u02BCята"},
+            {"Greek numeral sign", "\u0391\u0374", "\u0391\u02B9"},
+            // Letter numbers of other scripts are kept like their digits
+            {"ideographic zero", "二〇〇八年", "二〇〇八年"},
+            {"Hangzhou numerals", "\u3021\u3022\u3029", "\u3021\u3022\u3029"},
+            // Accents are stripped from Latin letters outside the BMP too
+            {"accent on a Latin letter outside the BMP", "\uD801\uDF80\u0301", "\uD801\uDF80"},
+            {"accent on a Latin letter outside the BMP before a joiner", "\uD837\uDF00\u0301\u200C\u0628", "\uD837\uDF00\u0628"},
+    };
+
+    static Stream<Arguments> sharedSanitizeCases() {
+        return Arrays.stream(SHARED_SANITIZE_CASES).map(row -> arguments((Object[]) row));
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("sharedSanitizeCases")
+    void sharedCases_comeOutAsTheMovePreviewShowsThem(String description, String title, String expected) {
+        assertThat(sanitized(title)).isEqualTo(expected);
+    }
+
+    // Characters that occur in and around names in Latin script, and those of other scripts
+    private static final int[] LATIN_NAME_CHARACTERS = {
+            'a', 'Z', 'e', '1', ' ', '-', '.', '\'', '_', ':', '?', '\t', 0xE9, 0x0301, 0x0308, 0xFE0F, 0x20E3, 0x200C,
+            0x200D, 0x200B, 0x200E, 0xFEFF, 0xAD, 0x85, 0x2019, 0x2018, 0x2013, 0x2014, 0x2026, 0xAB, 0xBB, 0xB7, 0x30FB,
+            0x3002, 0xFF0C, 0xFF1A, 0x300A, 0x2122, 0xA9, 0xBD, 0xB2, 0x2460, 0x2139, 0x24C2, 0x1F600, 0x1F3FD,
+            0x1F1EB, 0x2260, 0x2116, 0x02BC, 0x02C8, 0x02BB, 0x02B9, 0x0374, 0x30FC, 0x0640, 0xFF70, 0xFF9E, 0x3031, 0xE000,
+            0x0378, 0x249C, 0x05F3, 0x2032, 0xB4, 0xAA, 0xBA, 0x1D49, 0x207F, 0x2090, 0x02E1, 0x2180, 0x066B, 0x066C, 0x055E,
+            0x309B, 0xFF0E, 0x7F, '*', '"',
+    };
+    private static final int[] OTHER_NAME_CHARACTERS = {
+            0x4E09, 0x4F53, 0x30AC, 0x30AB, 0x3099, 0xFF76, 0x06A9, 0x0628, 0x064E, 0x043F, 0x0414, 0x0915, 0x094D, 0x0D9A,
+            0x0DCA, 0x05E9, 0x05C1, 0x0E2A, 0x1100, 0x1161, 0xAC00, 0x0663, 0x00F8, 0x0142, 0x00A0, 0x3000, 0x2028, 0xFB01,
+            0xFF21, 0xFF11, 0xFF12, 0x1D401, 0x1D7CF, 0x017F, 0x0133, 0x01C5, 0x01C8, 0xB5, 0x24B6, 0x1F130, 0x0E46,
+            0x3005, 0xD800, 0xDC00, 0x1E9B, 0x216B, 0x2161, 0x3007, 0x0531, 0x0565, 0x10780, 0x1DF00,
+    };
+
+    private static String randomName(Random random, int[] alphabet) {
+        StringBuilder name = new StringBuilder();
+        for (int length = 1 + random.nextInt(16); length > 0; length--) {
+            name.appendCodePoint(alphabet[random.nextInt(alphabet.length)]);
+        }
+        return name.toString();
+    }
+
+    @Test
+    void randomNames_sanitizeStablyAndComposed() {
+        int[] alphabet = IntStream.concat(Arrays.stream(LATIN_NAME_CHARACTERS), Arrays.stream(OTHER_NAME_CHARACTERS)).toArray();
+        Random random = new Random(20261021);
+        for (int i = 0; i < 20_000; i++) {
+            String name = randomName(random, alphabet);
+            String once = sanitized(name);
+
+            assertThat(sanitized(once)).as("sanitizing %s twice", name.codePoints().mapToObj(Integer::toHexString).toList())
+                    .isEqualTo(once);
+            assertThat(Normalizer.isNormalized(once, Normalizer.Form.NFC)).isTrue();
+        }
+    }
+
+    @Test
+    void randomAsciiNames_comeOutAsTheyDidWhenEveryNonAsciiCodePointWasDropped() {
+        // The move preview takes a shorter way with them (pattern-resolver.spec.ts), so both must come out as before
+        int[] ascii = IntStream.range(0, 0x80).toArray();
+        Random random = new Random(20261021);
+        for (int i = 0; i < 20_000; i++) {
+            // Letters around it, so the name is never empty
+            String name = "a" + randomName(random, ascii) + "a";
+
+            assertThat(sanitized(name)).as("sanitizing %s", name.codePoints().mapToObj(Integer::toHexString).toList())
+                    .isEqualTo(asciiOnlySanitize(name));
+        }
+    }
+
+    @Test
+    void randomLatinNames_comeOutAsTheyDidWhenEveryNonAsciiCodePointWasDropped() {
+        Random random = new Random(20261021);
+        for (int i = 0; i < 20_000; i++) {
+            // Letters around it, so the name is never empty
+            String name = "a" + randomName(random, LATIN_NAME_CHARACTERS) + "a";
+
+            assertThat(sanitized(name)).as("sanitizing %s", name.codePoints().mapToObj(Integer::toHexString).toList())
+                    .isEqualTo(asciiOnlySanitize(name));
+        }
+    }
+
+    /**
+     * The cuts the move preview must agree on: pattern-resolver.spec.ts in booklore-ui asserts this same table
+     * (SHARED_TRUNCATION_CASES), so a row added or changed here belongs there too. Each row is a description, a
+     * path component, a limit in bytes and what truncatePathComponent() makes of it.
+     */
+    private static final Object[][] SHARED_TRUNCATION_CASES = {
+            {"within the limit", "The Hobbit", 200, "The Hobbit"},
+            {"Latin cut inside a word", "word ".repeat(39) + "words and more", 200, "word ".repeat(39) + "words"},
+            {"Latin cut after a space", "word ".repeat(40) + "end", 200, "word ".repeat(39) + "word"},
+            {"cut after a space a middle dot became", "中".repeat(66) + " 文文文", 200, "中".repeat(66)},
+            {"cut after an ideographic space", "某\u3000某某", 7, "某"},
+            {"cut after a joiner", "کتاب ".repeat(21) + "نومی\u200Cخواهم", 200, "کتاب ".repeat(21) + "نومی"},
+            {"cut inside a letter and its vowel signs", "क" + "कहानियाँ ".repeat(7) + "कहानियाँ", 200, "क" + "कहानियाँ ".repeat(7) + "कहानि"},
+            {"cut inside halfwidth katakana and its voiced mark", "ア".repeat(65) + "\uFF76\uFF9E", 200, "ア".repeat(65)},
+            {"cut inside an emoji sequence", "a\uD83D\uDC68\u200D\uD83D\uDC69", 6, "a"},
+            {"a conjunct longer than the limit", "\u0915\u094D\u0937", 7, "\u0915\u094D"},
+            {"a letter under a pile of marks", "a" + "\u0301".repeat(10), 5, "a\u0301\u0301"},
+            {"a first character over the limit", "某", 2, ""},
+            {"whole code points", "\uD800\uDC00".repeat(60), 202, "\uD800\uDC00".repeat(50)},
+    };
+
+    static Stream<Arguments> sharedTruncationCases() {
+        return Arrays.stream(SHARED_TRUNCATION_CASES).map(Arguments::of);
+    }
+
+    @ParameterizedTest(name = "{0}")
+    @MethodSource("sharedTruncationCases")
+    void sharedTruncationCases_comeOutAsTheMovePreviewShowsThem(String description, String component, int maxBytes, String expected) {
+        assertThat(PathPatternResolver.truncatePathComponent(component, maxBytes)).isEqualTo(expected);
+    }
+
+    @Test
+    void longChineseTitle_withPunctuationThatBecameASpaceAtTheCut_endsWithoutIt() {
+        // The middle dot becomes a space, which the first 200 bytes end in
+        String result = resolve("中".repeat(66) + "·文文文", "Author", "{title}", "x.epub");
+
+        assertThat(result).isEqualTo("中".repeat(66) + ".epub");
     }
 
     // Names in other scripts now reach the 200-byte cap of a title at 70 to 100 characters
