@@ -26,9 +26,11 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.text.Normalizer;
+import java.util.Collection;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.Objects;
+import java.util.Optional;
 import java.util.Set;
 import java.util.zip.CRC32;
 
@@ -172,6 +174,34 @@ public class FileMoveHelper {
         Path sourceDir = source.getParent();
         Path targetDir = target.getParent();
         return Objects.equals(sourceDir, targetDir) || (!isAbsent(targetDir) && Files.isSameFile(sourceDir, targetDir));
+    }
+
+    /** Where a folder audiobook's folder is, relative to its library path, as file sub paths are stored. */
+    public static String folderSubPath(BookFileEntity folder) {
+        String subPath = folder.getFileSubPath();
+        return subPath == null || subPath.isEmpty() ? folder.getFileName() : subPath + "/" + folder.getFileName();
+    }
+
+    /**
+     * A file of one of {@code books}, other than the folder audiobook {@code folder} itself,
+     * that is inside its folder: another book's file in a subfolder ("extras/booklet.pdf"), or
+     * one of its own book's files. Moving the folder would carry that file along to somewhere
+     * its row does not say it is.
+     */
+    public static Optional<Path> fileInsideFolder(BookFileEntity folder, Collection<BookEntity> books) {
+        Path folderPath = folder.getFullFilePath().toAbsolutePath().normalize();
+        for (BookEntity book : books) {
+            for (BookFileEntity file : book.getBookFiles()) {
+                if (file == folder || (file.getId() != null && file.getId().equals(folder.getId()))) {
+                    continue;
+                }
+                Path path = file.getFullFilePath().toAbsolutePath().normalize();
+                if (path.startsWith(folderPath)) {
+                    return Optional.of(path);
+                }
+            }
+        }
+        return Optional.empty();
     }
 
     /**

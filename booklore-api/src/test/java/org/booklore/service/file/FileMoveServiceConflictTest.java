@@ -503,4 +503,59 @@ class FileMoveServiceConflictTest {
         assertThat(Files.readString(sidecarB)).isEqualTo("sidecar B");
         assertThat(Files.readString(coverB)).isEqualTo("cover B");
     }
+
+    @Test
+    void folderAudiobookHoldingAnotherBooksFile_staysWhereItIs() throws IOException {
+        // The scanner makes "Old Folder" an audiobook and the PDF in its subfolder a book of its own
+        write(libraryRoot.resolve("Old Folder/01.mp3"), "part 1");
+        Path booklet = write(libraryRoot.resolve("Old Folder/extras/booklet.pdf"), "booklet");
+        BookEntity audiobook = book("New Title", "", "Old Folder", true);
+        BookEntity bookletBook = book("Booklet", "Old Folder/extras", "booklet.pdf", false);
+        when(bookRepository.findAllByLibraryPathIdAndFileSubPathStartingWith(libraryPath.getId(), "Old Folder"))
+                .thenReturn(List.of(bookletBook));
+
+        FileMoveResult result = service.moveSingleFile(audiobook);
+
+        assertThat(result.isMoved()).isFalse();
+        assertThat(Files.readString(libraryRoot.resolve("Old Folder/01.mp3"))).isEqualTo("part 1");
+        assertThat(Files.readString(booklet)).isEqualTo("booklet");
+        assertThat(libraryRoot.resolve("New Title")).doesNotExist();
+        verify(bookFileRepository, never()).updateFileNameAndSubPath(anyLong(), any(), any());
+    }
+
+    @Test
+    void folderAudiobookHoldingOneOfItsOwnFiles_staysWhereItIs() throws IOException {
+        // A PDF attached to the audiobook without moving it, from inside the audiobook's folder
+        write(libraryRoot.resolve("Old Folder/01.mp3"), "part 1");
+        Path booklet = write(libraryRoot.resolve("Old Folder/extras/booklet.pdf"), "booklet");
+        BookEntity audiobook = book("New Title", "", "Old Folder", true);
+        addFile(audiobook, "Old Folder/extras", "booklet.pdf", true, false);
+        // The PDF first: moving it aside and then its folder takes the PDF's temporary file away with the folder
+        audiobook.getBookFiles().addFirst(audiobook.getBookFiles().removeLast());
+
+        FileMoveResult result = service.moveSingleFile(audiobook);
+
+        assertThat(result.isMoved()).isFalse();
+        assertThat(Files.readString(libraryRoot.resolve("Old Folder/01.mp3"))).isEqualTo("part 1");
+        assertThat(Files.readString(booklet)).isEqualTo("booklet");
+        assertThat(leftoverTempFiles()).isEmpty();
+        verify(bookFileRepository, never()).updateFileNameAndSubPath(anyLong(), any(), any());
+    }
+
+    @Test
+    void folderAudiobookWithABookInASimilarlyNamedFolder_stillMoves() throws IOException {
+        // The query matches "_" as any character; that book is not inside the folder
+        write(libraryRoot.resolve("Old_Folder/01.mp3"), "part 1");
+        write(libraryRoot.resolve("OldXFolder/book.epub"), "another book");
+        BookEntity audiobook = book("New Title", "", "Old_Folder", true);
+        BookEntity otherBook = book("Other", "OldXFolder", "book.epub", false);
+        when(bookRepository.findAllByLibraryPathIdAndFileSubPathStartingWith(libraryPath.getId(), "Old_Folder"))
+                .thenReturn(List.of(otherBook));
+
+        FileMoveResult result = service.moveSingleFile(audiobook);
+
+        assertThat(result.isMoved()).isTrue();
+        assertThat(Files.readString(libraryRoot.resolve("New Title/01.mp3"))).isEqualTo("part 1");
+        assertThat(Files.readString(libraryRoot.resolve("OldXFolder/book.epub"))).isEqualTo("another book");
+    }
 }

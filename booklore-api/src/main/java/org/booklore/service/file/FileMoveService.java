@@ -156,7 +156,7 @@ public class FileMoveService {
             }
 
             // Move the files FIRST before updating database
-            if (!moveFiles(bookId, fileTargets)) {
+            if (!moveFiles(bookEntity, fileTargets)) {
                 return;
             }
             Map<Long, Path> finalPathsByBookFileId = finalPaths(bookEntity, fileTargets);
@@ -260,7 +260,7 @@ public class FileMoveService {
 
             // Work out every file's target, and leave the whole book in place if one of them is taken
             List<FileTarget> fileTargets = planFileTargets(bookWithFiles, bookWithFiles.getLibraryPath(), pattern, targetParentDir);
-            if (fileTargets.isEmpty() || !targetsAreFree(bookWithFiles.getId(), fileTargets)) {
+            if (fileTargets.isEmpty() || !targetsAreFree(bookWithFiles, fileTargets)) {
                 return FileMoveResult.builder().moved(false).build();
             }
 
@@ -271,7 +271,7 @@ public class FileMoveService {
             }
 
             // Move all files FIRST before updating database
-            if (!moveFiles(bookWithFiles.getId(), fileTargets)) {
+            if (!moveFiles(bookWithFiles, fileTargets)) {
                 return FileMoveResult.builder().moved(false).build();
             }
             Map<Long, Path> finalPathsByBookFileId = finalPaths(bookWithFiles, fileTargets);
@@ -359,9 +359,11 @@ public class FileMoveService {
      * Whether every target is free. A move never replaces another book's file or folder, so when
      * something other than a file's own source is at its target, or two of the book's files would
      * be moved to the same target (two EPUBs of one book, named by a pattern without
-     * {currentFilename}), the whole book stays where it is.
+     * {currentFilename}), the whole book stays where it is. So it does when one of its folders
+     * would carry along a file that is not moved with it.
      */
-    private boolean targetsAreFree(Long bookId, List<FileTarget> fileTargets) throws IOException {
+    private boolean targetsAreFree(BookEntity book, List<FileTarget> fileTargets) throws IOException {
+        Long bookId = book.getId();
         Map<String, Path> sourcesByTarget = new HashMap<>();
         for (FileTarget fileTarget : fileTargets) {
             // Shares may ignore case and composed vs decomposed spelling, so targets differing only in those are the same
@@ -378,6 +380,30 @@ public class FileMoveService {
                 return false;
             }
         }
+        return foldersCarryNothingElse(book, fileTargets);
+    }
+
+    /**
+     * Whether none of the folder audiobooks to move holds a file of any book (its own included)
+     * other than itself. Moving the folder would carry that file along while its row still named
+     * the old place, and a rescan would then drop it, or delete its book and import it anew.
+     */
+    private boolean foldersCarryNothingElse(BookEntity book, List<FileTarget> fileTargets) {
+        Set<Long> movedFileIds = fileTargets.stream().map(FileTarget::bookFileId).collect(Collectors.toSet());
+        for (var bookFile : book.getBookFiles()) {
+            if (!bookFile.isFolderBased() || !movedFileIds.contains(bookFile.getId())) {
+                continue;
+            }
+            List<BookEntity> books = new ArrayList<>(bookRepository.findAllByLibraryPathIdAndFileSubPathStartingWith(
+                    book.getLibraryPath().getId(), FileMoveHelper.folderSubPath(bookFile)));
+            books.add(book);
+            Optional<Path> carried = FileMoveHelper.fileInsideFolder(bookFile, books);
+            if (carried.isPresent()) {
+                log.warn("Not moving book ID {}: moving the folder {} would carry along {}, which is not moved with it",
+                        book.getId(), bookFile.getFullFilePath(), carried.get());
+                return false;
+            }
+        }
         return true;
     }
 
@@ -388,9 +414,9 @@ public class FileMoveService {
      * file fails to move, every file is put back where it was before the exception is rethrown, so
      * that a book is never left half moved.
      */
-    private boolean moveFiles(Long bookId, List<FileTarget> fileTargets) throws IOException {
+    private boolean moveFiles(BookEntity book, List<FileTarget> fileTargets) throws IOException {
         synchronized (FileMoveHelper.MOVE_LOCK) {
-            if (!targetsAreFree(bookId, fileTargets)) {
+            if (!targetsAreFree(book, fileTargets)) {
                 return false;
             }
             Map<FileTarget, Path> tempPaths = new HashMap<>();
