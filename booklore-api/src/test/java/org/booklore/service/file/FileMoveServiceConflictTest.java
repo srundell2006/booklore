@@ -40,10 +40,16 @@ import java.nio.charset.Charset;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.text.Normalizer;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.function.Consumer;
 import java.util.stream.Stream;
 
@@ -103,12 +109,25 @@ class FileMoveServiceConflictTest {
     }
 
     private FileMoveService service(FileMoveHelper fileMoveHelper, SidecarMetadataWriter sidecarMetadataWriter) {
+        return service(fileMoveHelper, sidecarMetadataWriter, FileMoveHelper.MOVE_LOCK_WAIT);
+    }
+
+    private FileMoveService service(FileMoveHelper fileMoveHelper, Duration moveLockWait) {
+        return service(fileMoveHelper, sidecarMetadataWriter, moveLockWait);
+    }
+
+    private FileMoveService service(FileMoveHelper fileMoveHelper, SidecarMetadataWriter sidecarMetadataWriter, Duration moveLockWait) {
         return new FileMoveService(appProperties, bookRepository, bookFileRepository, libraryRepository, fileMoveHelper,
                 monitoringRegistrationService, libraryMapper, bookMapper, notificationService, entityManager,
                 transactionTemplate, sidecarMetadataWriter) {
             @Override
             protected void sleep(long millis) {
                 // No-op
+            }
+
+            @Override
+            protected Duration moveLockWait() {
+                return moveLockWait;
             }
         };
     }
@@ -193,6 +212,68 @@ class FileMoveServiceConflictTest {
         assertThat(Files.readString(second)).isEqualTo("second book");
         assertThat(leftoverTempFiles()).isEmpty();
         verify(bookFileRepository, never()).updateFileNameAndSubPath(eq(secondBook.getBookFiles().getFirst().getId()), any(), any());
+    }
+
+    @Test
+    void moveStuckOnTheShare_failsLaterMovesInsteadOfHoldingThemUpForGood() throws Exception {
+        write(libraryRoot.resolve("incoming/a.epub"), "stuck book");
+        Path otherSource = write(libraryRoot.resolve("incoming/b.epub"), "other book");
+        BookEntity stuckBook = book("Stuck", "incoming", "a.epub", false);
+        BookEntity otherBook = book("Other", "incoming", "b.epub", false);
+        CountDownLatch stuck = new CountDownLatch(1);
+        CountDownLatch unstuck = new CountDownLatch(1);
+        // A rename into the target directory that blocks in IO on the share, deaf to interrupts
+        FileMoveService stuckService = service(new FileMoveHelper(monitoringRegistrationService, appSettingService) {
+            @Override
+            protected void rename(Path source, Path target) throws IOException {
+                if (target.getFileName().toString().startsWith("Stuck")) {
+                    stuck.countDown();
+                    awaitUninterruptibly(unstuck);
+                }
+                super.rename(source, target);
+            }
+        });
+        ExecutorService movers = Executors.newCachedThreadPool();
+        try {
+            Future<FileMoveResult> stuckMove = movers.submit(() -> stuckService.moveSingleFile(stuckBook));
+            assertThat(stuck.await(10, TimeUnit.SECONDS)).isTrue();
+
+            FileMoveService waitingService = service(new FileMoveHelper(monitoringRegistrationService, appSettingService), Duration.ofMillis(200));
+            FileMoveResult waited = movers.submit(() -> waitingService.moveSingleFile(otherBook)).get(10, TimeUnit.SECONDS);
+
+            assertThat(waited.isMoved()).isFalse();
+            assertThat(Files.readString(otherSource)).isEqualTo("other book");
+            verify(bookFileRepository, never()).updateFileNameAndSubPath(eq(otherBook.getBookFiles().getFirst().getId()), any(), any());
+
+            // Once a move has given up on it, later moves do not each wait it out again
+            FileMoveService patientService = service(new FileMoveHelper(monitoringRegistrationService, appSettingService), Duration.ofMinutes(1));
+            assertThat(movers.submit(() -> patientService.moveSingleFile(otherBook)).get(10, TimeUnit.SECONDS).isMoved()).isFalse();
+            assertThat(Files.readString(otherSource)).isEqualTo("other book");
+
+            unstuck.countDown();
+            assertThat(stuckMove.get(10, TimeUnit.SECONDS).isMoved()).isTrue();
+            assertThat(patientService.moveSingleFile(otherBook).isMoved()).isTrue();
+            assertThat(Files.readString(libraryRoot.resolve("Other.epub"))).isEqualTo("other book");
+            assertThat(Files.readString(libraryRoot.resolve("Stuck.epub"))).isEqualTo("stuck book");
+        } finally {
+            unstuck.countDown();
+            movers.shutdownNow();
+        }
+    }
+
+    private static void awaitUninterruptibly(CountDownLatch latch) {
+        boolean interrupted = false;
+        while (true) {
+            try {
+                latch.await();
+                break;
+            } catch (InterruptedException e) {
+                interrupted = true;
+            }
+        }
+        if (interrupted) {
+            Thread.currentThread().interrupt();
+        }
     }
 
     private FileMoveRequest moveToLibrary2(BookEntity... books) {

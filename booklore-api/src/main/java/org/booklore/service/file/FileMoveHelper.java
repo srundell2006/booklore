@@ -26,12 +26,15 @@ import java.nio.file.Paths;
 import java.nio.file.StandardCopyOption;
 import java.nio.file.attribute.BasicFileAttributes;
 import java.text.Normalizer;
+import java.time.Duration;
 import java.util.Collection;
 import java.util.HashSet;
 import java.util.HexFormat;
 import java.util.Objects;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.TimeUnit;
+import java.util.concurrent.locks.ReentrantLock;
 import java.util.zip.CRC32;
 
 @Slf4j
@@ -43,9 +46,19 @@ public class FileMoveHelper {
      * Held from checking a move's targets until its files are moved or put back. Java cannot rename
      * without replacing whatever is at the target, so two books moved at the same time (metadata
      * refreshes run in parallel) could otherwise both find a target free and the second replace the
-     * first.
+     * first. Taken with {@link #lockMoves}, which waits for it only so long: a move stuck in IO on
+     * the share never lets go of it.
      */
-    public static final Object MOVE_LOCK = new Object();
+    private static final ReentrantLock MOVE_LOCK = new ReentrantLock(true);
+    /**
+     * How long a move waits for the moves ahead of it. Long enough for them to ride out a CIFS
+     * reconnect, during which every call to the share blocks for up to two minutes.
+     */
+    public static final Duration MOVE_LOCK_WAIT = Duration.ofMinutes(5);
+    /** How many times the move lock has been taken; written only by its holder. */
+    private static volatile long moveLockHolds;
+    /** The hold of the move lock that a move gave up waiting for. */
+    private static volatile long abandonedHold = -1;
 
     private final MonitoringRegistrationService monitoringRegistrationService;
     private final AppSettingService appSettingService;
@@ -63,6 +76,34 @@ public class FileMoveHelper {
     private static final int MAX_NAME_BYTES = 255;
     // "~" and 8 hex digits
     private static final int HASH_SUFFIX_BYTES = 9;
+
+    /**
+     * Takes the move lock, waiting for it at most {@code wait}. Returns false, without the lock,
+     * when it is still held then, and at once while it is held by a move an earlier wait gave up
+     * on: that move is stuck, and every move after it would otherwise wait out its time too.
+     */
+    public static boolean lockMoves(Duration wait) {
+        if (moveLockHolds == abandonedHold && MOVE_LOCK.isLocked() && !MOVE_LOCK.isHeldByCurrentThread()) {
+            return false;
+        }
+        try {
+            if (!MOVE_LOCK.tryLock(wait.toNanos(), TimeUnit.NANOSECONDS)) {
+                abandonedHold = moveLockHolds;
+                return false;
+            }
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return false;
+        }
+        if (MOVE_LOCK.getHoldCount() == 1) {
+            moveLockHolds++;
+        }
+        return true;
+    }
+
+    public static void unlockMoves() {
+        MOVE_LOCK.unlock();
+    }
 
     public boolean waitForFileAccessible(Path path) {
         for (int attempt = 1; attempt <= MAX_ATTEMPTS; attempt++) {

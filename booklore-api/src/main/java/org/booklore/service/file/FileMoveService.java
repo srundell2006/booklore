@@ -29,6 +29,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.text.Normalizer;
+import java.time.Duration;
 import java.util.*;
 import java.util.stream.Collectors;
 
@@ -412,10 +413,15 @@ public class FileMoveService {
      * runs in between, and the targets are checked again first: another book may have been moved
      * onto one since they were planned. Returns false, moving nothing, when one is taken. When any
      * file fails to move, every file is put back where it was before the exception is rethrown, so
-     * that a book is never left half moved.
+     * that a book is never left half moved. Throws, moving nothing, when the moves ahead do not
+     * finish in time: one may be stuck on the share.
      */
     private boolean moveFiles(BookEntity book, List<FileTarget> fileTargets) throws IOException {
-        synchronized (FileMoveHelper.MOVE_LOCK) {
+        if (!FileMoveHelper.lockMoves(moveLockWait())) {
+            throw new IOException("Not moving book ID " + book.getId() + ": another move has not finished within "
+                    + moveLockWait().toSeconds() + " s, and may be stuck on the share");
+        }
+        try {
             if (!targetsAreFree(book, fileTargets)) {
                 return false;
             }
@@ -439,16 +445,36 @@ public class FileMoveService {
                 }
                 throw e;
             }
+        } finally {
+            FileMoveHelper.unlockMoves();
         }
     }
 
-    /** Puts moved files back where they were, never over a file that has taken a source's place since. */
+    /**
+     * Puts moved files back where they were, never over a file that has taken a source's place
+     * since. When the moves ahead do not finish in time, the files go back without waiting any
+     * longer: a rollback never replaces a file, and the rows name the sources.
+     */
     private void moveBack(List<FileTarget> fileTargets) {
-        synchronized (FileMoveHelper.MOVE_LOCK) {
+        boolean locked = FileMoveHelper.lockMoves(moveLockWait());
+        if (!locked) {
+            log.warn("Another move has not finished within {} s, and may be stuck on the share. Moving files back all the same",
+                    moveLockWait().toSeconds());
+        }
+        try {
             for (FileTarget fileTarget : fileTargets) {
                 fileMoveHelper.rollbackMove(fileTarget.target(), fileTarget.source());
             }
+        } finally {
+            if (locked) {
+                FileMoveHelper.unlockMoves();
+            }
         }
+    }
+
+    /** How long a move waits for the moves ahead of it. Tests override it to wait less. */
+    protected Duration moveLockWait() {
+        return FileMoveHelper.MOVE_LOCK_WAIT;
     }
 
     /**
