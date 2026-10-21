@@ -26,6 +26,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.SimpleFileVisitor;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -146,7 +147,11 @@ public class LibraryOrganizeService {
         Path targetPath = targetPath(book, bookFile, pattern);
 
         // No other move may take the target between finding it free and moving there
-        synchronized (FileMoveHelper.MOVE_LOCK) {
+        if (!FileMoveHelper.lockMoves(moveLockWait())) {
+            throw new IOException("Another move has not finished within " + moveLockWait().toSeconds()
+                    + " s, and may be stuck on the share");
+        }
+        try {
             // Resolve name conflicts: if target exists and isn't the current file, suffix (1), (2), …
             targetPath = resolveConflict(targetPath, currentPath, bookFile.isFolderBased());
 
@@ -164,6 +169,8 @@ public class LibraryOrganizeService {
             if (!moveFile(currentPath, targetPath)) {
                 return false;
             }
+        } finally {
+            FileMoveHelper.unlockMoves();
         }
         log.debug("Moved '{}' -> '{}'", currentPath, targetPath);
 
@@ -213,17 +220,33 @@ public class LibraryOrganizeService {
         bookFile.setFileName(newFileName);
     }
 
-    /** Moves a file back to where it was, never over a file that has taken its place since. */
+    /**
+     * Moves a file back to where it was, never over a file that has taken its place since. When
+     * the moves ahead do not finish in time, the file goes back without waiting any longer: it is
+     * never moved over another file, and its row names the place it goes back to.
+     */
     private void moveBack(Path movedPath, Path originalPath) {
-        synchronized (FileMoveHelper.MOVE_LOCK) {
-            try {
-                if (!moveFile(movedPath, originalPath)) {
-                    log.error("Failed to move '{}' back to '{}': another file has taken its place", movedPath, originalPath);
-                }
-            } catch (IOException e) {
-                log.error("Failed to move '{}' back to '{}'", movedPath, originalPath, e);
+        boolean locked = FileMoveHelper.lockMoves(moveLockWait());
+        if (!locked) {
+            log.warn("Another move has not finished within {} s, and may be stuck on the share. Moving '{}' back all the same",
+                    moveLockWait().toSeconds(), movedPath);
+        }
+        try {
+            if (!moveFile(movedPath, originalPath)) {
+                log.error("Failed to move '{}' back to '{}': another file has taken its place", movedPath, originalPath);
+            }
+        } catch (IOException e) {
+            log.error("Failed to move '{}' back to '{}'", movedPath, originalPath, e);
+        } finally {
+            if (locked) {
+                FileMoveHelper.unlockMoves();
             }
         }
+    }
+
+    /** How long a move waits for the moves ahead of it. Tests override it to wait less. */
+    Duration moveLockWait() {
+        return FileMoveHelper.MOVE_LOCK_WAIT;
     }
 
     /**

@@ -10,6 +10,7 @@ import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
+import org.booklore.service.file.FileMoveHelper;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -28,13 +29,17 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.attribute.PosixFilePermissions;
 import java.text.Normalizer;
+import java.time.Duration;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Stream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.junit.jupiter.api.Assertions.assertTimeoutPreemptively;
 import static org.junit.jupiter.api.Assumptions.assumeFalse;
 import static org.junit.jupiter.api.Assumptions.assumeTrue;
 import static org.mockito.ArgumentMatchers.any;
@@ -141,6 +146,50 @@ class LibraryOrganizeServiceTest {
         try (Stream<Path> paths = Files.list(dir)) {
             return paths.map(path -> path.getFileName().toString()).sorted().toList();
         }
+    }
+
+    @Test
+    void moveStuckOnTheShare_failsTheRunsMovesInsteadOfHangingIt() throws Exception {
+        write("incoming/one.epub", "one");
+        write("incoming/two.epub", "two");
+        book("One", "incoming", "one.epub", false);
+        book("Two", "incoming", "two.epub", false);
+        service = new LibraryOrganizeService(libraryRepository, bookRepository, bookFileRepository, transactionManager) {
+            @Override
+            Duration moveLockWait() {
+                return Duration.ofMillis(200);
+            }
+        };
+        CountDownLatch held = new CountDownLatch(1);
+        CountDownLatch unstuck = new CountDownLatch(1);
+        // Another move that took the lock and is stuck in IO on the share
+        Thread stuckMove = Thread.ofPlatform().start(() -> {
+            if (FileMoveHelper.lockMoves(Duration.ZERO)) {
+                try {
+                    held.countDown();
+                    unstuck.await();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                } finally {
+                    FileMoveHelper.unlockMoves();
+                }
+            }
+        });
+        try {
+            assertThat(held.await(10, TimeUnit.SECONDS)).isTrue();
+
+            assertTimeoutPreemptively(Duration.ofSeconds(10), () -> service.organizeLibrary(1L));
+
+            assertThat(namesIn(libraryRoot.resolve("incoming"))).containsExactly("one.epub", "two.epub");
+            verifyNothingRecorded();
+        } finally {
+            unstuck.countDown();
+            stuckMove.join();
+        }
+
+        service.organizeLibrary(1L);
+
+        assertThat(namesIn(libraryRoot)).containsExactly("One.epub", "Two.epub");
     }
 
     @Test
