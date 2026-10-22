@@ -133,6 +133,17 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
                 .orElse(fileName);
     }
 
+    /** A base name without a duplicate's copy marker (" (1)", " - Copy", "(copy)"); as it is when it has none. */
+    public static String withoutCopyMarker(String baseName) {
+        String s = collapse(baseName == null ? "" : baseName);
+        Matcher word = COPY_WORD.matcher(s);
+        if (word.matches()) {
+            return word.group(1).trim();
+        }
+        Matcher number = COPY_NUMBER.matcher(s);
+        return number.matches() ? number.group(1).trim() : s;
+    }
+
     /** The book this name reads as. A " (n)" copy number counts as one more number: "Saga (2)" is the second Saga. */
     public String identity() {
         if (copy != null && copy.number() != null) {
