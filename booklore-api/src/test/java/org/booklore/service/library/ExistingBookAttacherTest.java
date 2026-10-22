@@ -20,6 +20,7 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -97,7 +98,7 @@ class ExistingBookAttacherTest {
                 book.getBookFiles().add(file);
             }
         }
-        when(bookRepository.findById(id)).thenReturn(Optional.of(book));
+        when(bookRepository.findByIdForUpdate(id)).thenReturn(Optional.of(book));
         return book;
     }
 
@@ -124,8 +125,11 @@ class ExistingBookAttacherTest {
 
         assertThat(attached).containsExactly(pdf);
         InOrder inOrder = inOrder(transactionManager, bookRepository, bookAdditionalFileRepository);
-        inOrder.verify(transactionManager).getTransaction(any());
-        inOrder.verify(bookRepository).findById(11L);
+        ArgumentCaptor<TransactionDefinition> transaction = ArgumentCaptor.forClass(TransactionDefinition.class);
+        inOrder.verify(transactionManager).getTransaction(transaction.capture());
+        // Its own even inside the watcher's, so that it reads the book's files as they are once it holds the book
+        assertThat(transaction.getValue().getPropagationBehavior()).isEqualTo(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        inOrder.verify(bookRepository).findByIdForUpdate(11L);
         ArgumentCaptor<BookFileEntity> saved = ArgumentCaptor.forClass(BookFileEntity.class);
         inOrder.verify(bookAdditionalFileRepository).save(saved.capture());
         inOrder.verify(transactionManager).commit(any());
@@ -142,7 +146,7 @@ class ExistingBookAttacherTest {
         LibraryFile pdf = onDisk("A", "Title.pdf", BookFileType.PDF);
         BookEntity deleted = book(12, path, null, BookFileType.EPUB);
         deleted.setDeleted(true);
-        when(bookRepository.findById(13L)).thenReturn(Optional.empty());
+        when(bookRepository.findByIdForUpdate(13L)).thenReturn(Optional.empty());
 
         assertThat(attacher.attach(12, Kind.SAME_FOLDER, List.of(pdf))).isEmpty();
         assertThat(attacher.attach(13, Kind.SAME_FOLDER, List.of(pdf))).isEmpty();

@@ -42,6 +42,14 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
 
     Optional<BookEntity> findByBookCoverHash(String bookCoverHash);
 
+    /**
+     * The book, its row locked until the transaction ends: two attaches to one book, from the watcher and a rescan,
+     * run one after the other, and the second sees the files the first gave it.
+     */
+    @Lock(jakarta.persistence.LockModeType.PESSIMISTIC_WRITE)
+    @Query("SELECT b FROM BookEntity b WHERE b.id = :id")
+    Optional<BookEntity> findByIdForUpdate(@Param("id") long id);
+
     @Query("SELECT b.id FROM BookEntity b WHERE b.library.id = :libraryId AND (b.deleted IS NULL OR b.deleted = false)")
     Set<Long> findBookIdsByLibraryId(@Param("libraryId") long libraryId);
 

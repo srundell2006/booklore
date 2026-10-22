@@ -22,6 +22,7 @@ import org.booklore.util.FileUtils;
 import org.booklore.util.cover.CoverKind;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import java.time.Instant;
@@ -32,8 +33,11 @@ import java.util.Set;
 
 /**
  * Attaches new files to a book the library already has, as the rescan and the watcher decided with
- * {@link org.booklore.service.library.matching.ExistingBookMatcher}. One transaction per book: the rescan's own, or
- * the watcher's when it has one open.
+ * {@link org.booklore.service.library.matching.ExistingBookMatcher}. One transaction per book, of its own even when
+ * the watcher has one open, that starts by locking the book's row. A watcher event and a rescan can attach files of
+ * two folders to one fileless book at once; with the lock the second waits for the first to commit, then reads the
+ * book's files afresh and finds it no longer fileless. In the watcher's transaction it would read them as they were
+ * when that transaction began.
  * <p>
  * What the book was is read before any file is built for it. With association management on, building a file for a
  * book adds it to the book's files at once, so a fileless book would already look like it had one, and the new file
@@ -70,13 +74,14 @@ public class ExistingBookAttacher {
      * @return the files attached
      */
     public List<LibraryFile> attach(long bookId, Kind kind, List<LibraryFile> files) {
-        List<LibraryFile> attached = new TransactionTemplate(transactionManager)
-                .execute(status -> attachToBook(bookId, kind, files));
+        TransactionTemplate transaction = new TransactionTemplate(transactionManager);
+        transaction.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        List<LibraryFile> attached = transaction.execute(status -> attachToBook(bookId, kind, files));
         return attached == null ? List.of() : attached;
     }
 
     private List<LibraryFile> attachToBook(long bookId, Kind kind, List<LibraryFile> files) {
-        BookEntity book = bookRepository.findById(bookId).orElse(null);
+        BookEntity book = bookRepository.findByIdForUpdate(bookId).orElse(null);
         if (book == null || Boolean.TRUE.equals(book.getDeleted())) {
             log.warn("book#{} is gone or deleted since {} was matched to it; not attached", bookId, names(files));
             filelessShells.notFileless(bookId);

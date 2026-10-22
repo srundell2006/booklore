@@ -1,6 +1,7 @@
 package org.booklore.service.watcher;
 
 import org.booklore.BookloreApplication;
+import org.booklore.model.dto.settings.LibraryFile;
 import org.booklore.model.entity.AuthorEntity;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookMetadataEntity;
@@ -12,6 +13,9 @@ import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
 import org.booklore.service.book.PhysicalBookService;
+import org.booklore.service.library.ExistingBookAttacher;
+import org.booklore.service.library.FilelessShells;
+import org.booklore.service.library.matching.ExistingBookMatcher.Kind;
 import org.booklore.service.task.TaskCronService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -24,6 +28,7 @@ import org.springframework.context.annotation.Import;
 import org.springframework.context.annotation.Primary;
 import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
+import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.support.TransactionTemplate;
 
@@ -36,16 +41,23 @@ import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.CountDownLatch;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.Future;
+import java.util.concurrent.TimeUnit;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
 
 /**
  * The watcher matches a new file against the library's fileless books as it read them up to ten minutes before. A
  * fileless book edited since then (retitled, or no longer a physical book) must not take a file named for what it
- * was. Runs the watcher's handler against H2 with the files on disk.
+ * was. Nor may a watcher event and a rescan, attaching at once, give one fileless book the files of two folders.
+ * Runs the watcher's handler and the shared attacher against H2 with the files on disk.
  */
 @SpringBootTest(classes = {
         BookloreApplication.class
@@ -55,7 +67,7 @@ import static org.mockito.Mockito.mock;
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.jpa.database-platform=org.hibernate.dialect.H2Dialect",
         "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.H2Dialect",
-        "spring.datasource.url=jdbc:h2:mem:watcherfileless;DB_CLOSE_DELAY=-1",
+        "spring.datasource.url=jdbc:h2:mem:watcherfileless;DB_CLOSE_DELAY=-1;LOCK_TIMEOUT=20000",
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",
         "spring.datasource.password=",
@@ -101,6 +113,10 @@ class WatcherFilelessBookDatabaseTest {
     private BookFileTransactionalHandler bookFileTransactionalHandler;
     @Autowired
     private PhysicalBookService physicalBookService;
+    @Autowired
+    private ExistingBookAttacher existingBookAttacher;
+    @MockitoSpyBean
+    private FilelessShells filelessShells;
 
     @TempDir
     Path tempDir;
@@ -165,7 +181,84 @@ class WatcherFilelessBookDatabaseTest {
         assertThat(pathsOf(shell)).containsExactly("Weir, Andy/The Martian.epub");
     }
 
+    @Test
+    void twoAttachesToOneFilelessBookAtOnceGiveItTheFilesOfOneFolderOnly() throws Exception {
+        long shell = filelessBook("The Martian", "Andy Weir", false);
+        // With a cover and a library path, an attach adds the book's file and changes nothing else of the book
+        new JdbcTemplate(dataSource).update("UPDATE book SET book_cover_hash = 'cover', library_path_id = ? WHERE id = ?",
+                libraryPath.getId(), shell);
+        epub("Weir, Andy/The Martian.epub");
+        epub("Andy Weir/The Martian.epub");
+        // The first attach stops once it has stored its file, before its transaction commits
+        CountDownLatch firstStored = new CountDownLatch(1);
+        CountDownLatch release = new CountDownLatch(1);
+        doAnswer(invocation -> {
+            firstStored.countDown();
+            release.await(30, TimeUnit.SECONDS);
+            return invocation.callRealMethod();
+        }).doCallRealMethod().when(filelessShells).notFileless(shell);
+
+        ExecutorService threads = Executors.newFixedThreadPool(2);
+        try {
+            // The watcher's attach from one folder, the rescan's from another, each matched while the book had no file
+            Future<List<LibraryFile>> first = threads.submit(() ->
+                    existingBookAttacher.attach(shell, Kind.FILELESS, List.of(libraryFile("Weir, Andy", "The Martian.epub"))));
+            assertThat(firstStored.await(30, TimeUnit.SECONDS)).isTrue();
+            Future<List<LibraryFile>> second = threads.submit(() ->
+                    existingBookAttacher.attach(shell, Kind.FILELESS, List.of(libraryFile("Andy Weir", "The Martian.epub"))));
+            Thread.sleep(500);
+            assertThat(second.isDone()).as("the second attach waits for the first to commit").isFalse();
+            release.countDown();
+
+            assertThat(first.get(30, TimeUnit.SECONDS)).hasSize(1);
+            assertThat(second.get(30, TimeUnit.SECONDS)).isEmpty();
+        } finally {
+            release.countDown();
+            threads.shutdownNow();
+        }
+        assertThat(pathsOf(shell)).containsExactly("Weir, Andy/The Martian.epub");
+        assertThat(bookIdAt("Andy Weir", "The Martian.epub")).isNull();
+    }
+
+    @Test
+    void anAttachInAWatcherEventSeesTheFileARescanGaveTheBookAfterTheEventBegan() throws Exception {
+        long shell = filelessBook("The Martian", "Andy Weir", false);
+        new JdbcTemplate(dataSource).update("UPDATE book SET book_cover_hash = 'cover', library_path_id = ? WHERE id = ?",
+                libraryPath.getId(), shell);
+        epub("Weir, Andy/The Martian.epub");
+        epub("Andy Weir/The Martian.epub");
+
+        ExecutorService threads = Executors.newSingleThreadExecutor();
+        try {
+            List<LibraryFile> inEvent = tx.execute(status -> {
+                // The event's transaction has read the database: on MariaDB its reads now see the data as it was then
+                bookRepository.count();
+                try {
+                    assertThat(threads.submit(() -> existingBookAttacher.attach(shell, Kind.FILELESS,
+                            List.of(libraryFile("Weir, Andy", "The Martian.epub")))).get(30, TimeUnit.SECONDS)).hasSize(1);
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+                return existingBookAttacher.attach(shell, Kind.FILELESS, List.of(libraryFile("Andy Weir", "The Martian.epub")));
+            });
+            assertThat(inEvent).isEmpty();
+        } finally {
+            threads.shutdownNow();
+        }
+        assertThat(pathsOf(shell)).containsExactly("Weir, Andy/The Martian.epub");
+    }
+
     // ========== fixture ==========
+
+    private LibraryFile libraryFile(String subPath, String name) {
+        return LibraryFile.builder()
+                .libraryEntity(library)
+                .libraryPathEntity(libraryPath)
+                .fileSubPath(subPath)
+                .fileName(name)
+                .bookFileType(BookFileType.EPUB)
+                .build();
+    }
 
     private long filelessBook(String title, String author, boolean physical) {
         return tx.execute(status -> {
