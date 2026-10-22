@@ -143,7 +143,7 @@ public abstract class AbstractFileProcessor implements PreparableBookFileProcess
         SidecarMetadataWriter.SidecarJob sidecarJob = null;
         if (!libraryFile.isDeferSidecarWrite() && sidecarMetadataWriter.isWriteOnScanEnabled()) {
             try {
-                sidecarJob = sidecarMetadataWriter.prepare(entity).orElse(null);
+                sidecarJob = sidecarMetadataWriter.prepareForScan(entity).orElse(null);
             } catch (Exception e) {
                 log.warn("Failed to write sidecar metadata for book ID {}: {}", entity.getId(), e.getMessage());
             }

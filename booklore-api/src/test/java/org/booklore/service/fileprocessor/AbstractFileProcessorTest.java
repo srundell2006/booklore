@@ -322,7 +322,7 @@ class AbstractFileProcessorTest {
             var job = new SidecarMetadataWriter.SidecarJob(BOOK_ID, tempDir, tempDir, "{}", null, null);
             when(bookCreatorService.createShellBook(any(), any(), any())).thenReturn(new BookCreatorService.ShellBook(book, true));
             when(sidecarMetadataWriter.isWriteOnScanEnabled()).thenReturn(true);
-            when(sidecarMetadataWriter.prepare(book)).thenReturn(Optional.of(job));
+            when(sidecarMetadataWriter.prepareForScan(book)).thenReturn(Optional.of(job));
 
             PersistedBook persisted = processor.persistPrepared(libraryFile, prepared(libraryFile, new FileFacts("abc", 12L), null, null));
 
@@ -340,7 +340,7 @@ class AbstractFileProcessorTest {
             PersistedBook persisted = processor.persistPrepared(libraryFile, prepared(libraryFile, new FileFacts("abc", 12L), null, null));
 
             assertThat(persisted.sidecarJob()).isNull();
-            verify(sidecarMetadataWriter, never()).prepare(any());
+            verify(sidecarMetadataWriter, never()).prepareForScan(any());
         }
 
         @Test
@@ -349,7 +349,7 @@ class AbstractFileProcessorTest {
             BookEntity book = shellBook();
             when(bookCreatorService.createShellBook(any(), any(), any())).thenReturn(new BookCreatorService.ShellBook(book, true));
             when(sidecarMetadataWriter.isWriteOnScanEnabled()).thenReturn(true);
-            when(sidecarMetadataWriter.prepare(book)).thenThrow(new IllegalStateException("broken"));
+            when(sidecarMetadataWriter.prepareForScan(book)).thenThrow(new IllegalStateException("broken"));
 
             PersistedBook persisted = processor.persistPrepared(libraryFile, prepared(libraryFile, new FileFacts("abc", 12L), null, null));
 
@@ -490,7 +490,7 @@ class AbstractFileProcessorTest {
             when(bookCreatorService.createShellBook(eq(libraryFile), eq(BookFileType.EPUB), any(FileFacts.class))).thenReturn(new BookCreatorService.ShellBook(book, true));
             when(bookMapper.toBook(book)).thenReturn(dto);
             when(sidecarMetadataWriter.isWriteOnScanEnabled()).thenReturn(true);
-            when(sidecarMetadataWriter.prepare(book)).thenReturn(Optional.of(job));
+            when(sidecarMetadataWriter.prepareForScan(book)).thenReturn(Optional.of(job));
 
             var result = processor.processFile(libraryFile);
 
@@ -506,7 +506,7 @@ class AbstractFileProcessorTest {
             var job = new SidecarMetadataWriter.SidecarJob(BOOK_ID, tempDir, tempDir, "{}", null, null);
             when(bookCreatorService.createShellBook(any(), any(), any())).thenReturn(new BookCreatorService.ShellBook(book, true));
             when(sidecarMetadataWriter.isWriteOnScanEnabled()).thenReturn(true);
-            when(sidecarMetadataWriter.prepare(book)).thenReturn(Optional.of(job));
+            when(sidecarMetadataWriter.prepareForScan(book)).thenReturn(Optional.of(job));
             doThrow(new IllegalStateException("broken")).when(sidecarMetadataWriter).execute(job);
 
             processor.processFile(libraryFile);

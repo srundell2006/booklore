@@ -36,6 +36,7 @@ import org.booklore.service.reader.FfprobeService;
 import org.booklore.util.CbxTestArchives;
 import org.booklore.util.FileService;
 import org.junit.jupiter.api.AfterAll;
+import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.MethodSource;
@@ -205,6 +206,31 @@ class ProcessorEquivalenceTest {
         assertThat(persisted.bookId()).isEqualTo(BOOK_ID);
         assertThat(persisted.created()).isEqualTo(!c.existing());
         assertThat(harness.snapshot()).isEqualTo(expected(c.name()));
+    }
+
+    @Test
+    void aScanKeepsTheSidecarAndCoverAlreadyNextToTheBook() throws Exception {
+        // Left by the book the file belonged to before, perhaps with what its owner curated: a scan keeps both
+        Case c = cases().filter(Case::sidecar).findFirst().orElseThrow();
+        for (boolean split : new boolean[]{false, true}) {
+            Harness harness = new Harness(tempDir.resolve(split ? "kept-split" : "kept-inline"), c);
+            LibraryFile libraryFile = harness.writeBook();
+            Path sidecar = Files.writeString(harness.sidecarMetadataWriter.getSidecarPath(libraryFile.getFullPath()), "{ \"curated\": true }");
+            Path sidecarCover = Files.write(harness.sidecarMetadataWriter.getCoverPath(libraryFile.getFullPath()), new byte[]{9, 9});
+            AbstractFileProcessor processor = harness.processor();
+
+            if (split) {
+                PreparedBookFile prepared = processor.prepare(PrepareRequest.of(libraryFile, harness.fileService.currentCropPolicy()), PrepareContext.unbounded());
+                PersistedBook persisted = processor.persistPrepared(libraryFile, prepared);
+                assertThat(persisted.sidecarJob()).isNotNull();
+                harness.sidecarMetadataWriter.execute(persisted.sidecarJob());
+            } else {
+                processor.processFile(libraryFile);
+            }
+
+            assertThat(sidecar).hasContent("{ \"curated\": true }");
+            assertThat(sidecarCover).hasBinaryContent(new byte[]{9, 9});
+        }
     }
 
     @AfterAll
