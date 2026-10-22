@@ -3,8 +3,6 @@ package org.booklore.service.library;
 import org.booklore.exception.APIException;
 import org.booklore.exception.ApiError;
 import org.booklore.model.dto.settings.LibraryFile;
-import org.booklore.model.entity.BookEntity;
-import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.websocket.LogNotification;
@@ -14,20 +12,15 @@ import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
 import org.booklore.repository.projection.BookFileScanRow;
 import org.booklore.service.NotificationService;
-import org.booklore.service.file.FileFingerprint;
 import org.booklore.service.library.importer.ImportSummary;
 import org.booklore.task.options.RescanLibraryContext;
-import org.booklore.util.FileUtils;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.PlatformTransactionManager;
-import org.springframework.transaction.support.TransactionTemplate;
 
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
@@ -63,7 +56,7 @@ public class LibraryProcessingService {
     private final BookDeletionService bookDeletionService;
     private final LibraryFileHelper libraryFileHelper;
     private final BookGroupingService bookGroupingService;
-    private final PlatformTransactionManager transactionManager;
+    private final ExistingBookAttacher existingBookAttacher;
 
     /**
      * Ids a rescan judged gone from disk, plus how many more it did not find but kept because
@@ -168,10 +161,9 @@ public class LibraryProcessingService {
 
         List<LibraryFile> newFiles = detectNewBookPaths(filteredFiles, bookFiles);
 
-        // Use BookGroupingService to determine what to attach vs create new
-        BookGroupingService.GroupingResult groupingResult = bookGroupingService.groupForRescan(newFiles, libraryEntity);
+        // Which new files belong to books the library has, decided from the rows already read
+        BookGroupingService.GroupingResult groupingResult = bookGroupingService.groupForRescan(newFiles, libraryEntity, bookFiles);
 
-        // Auto-attach files to existing books
         groupingResult.filesToAttach().forEach(this::autoAttachFiles);
 
         // Process new book groups
@@ -360,72 +352,15 @@ public class LibraryProcessingService {
     }
 
     /**
-     * Attaches the files to one existing book in a transaction of its own. The book from
-     * grouping is detached, so it is reloaded; a failure is logged and leaves other books alone.
+     * Attaches the files to one existing book in a transaction of its own. A failure is logged and leaves other books
+     * alone; files not attached are new again to the next scan.
      */
-    private void autoAttachFiles(BookEntity matchedBook, List<LibraryFile> files) {
+    private void autoAttachFiles(BookGroupingService.Attachment attachment) {
         try {
-            new TransactionTemplate(transactionManager).executeWithoutResult(status -> {
-                BookEntity book = bookRepository.findById(matchedBook.getId()).orElse(null);
-                if (book == null) {
-                    log.warn("Book id={} disappeared before its new files could be attached, skipping {} file(s)",
-                            matchedBook.getId(), files.size());
-                    return;
-                }
-                for (LibraryFile file : files) {
-                    autoAttachFile(book, file);
-                }
-            });
+            existingBookAttacher.attach(attachment.bookId(), attachment.kind(), attachment.files());
         } catch (Exception e) {
-            log.error("Error auto-attaching files to book id={}: {}", matchedBook.getId(), e.getMessage());
-        }
-    }
-
-    private void autoAttachFile(BookEntity book, LibraryFile file) {
-        // Check if file already exists to prevent duplicates during concurrent rescans
-        var existing = bookAdditionalFileRepository.findByLibraryPath_IdAndFileSubPathAndFileName(
-                file.getLibraryPathEntity().getId(), file.getFileSubPath(), file.getFileName());
-        if (existing.isPresent()) {
-            log.debug("Additional file already exists, skipping: {}", file.getFileName());
-            return;
-        }
-
-        // Set libraryPath if not set (fileless books like physical books don't have one)
-        if (book.getLibraryPath() == null) {
-            book.setLibraryPath(file.getLibraryPathEntity());
-        } else if (!book.getLibraryPath().getId().equals(file.getLibraryPathEntity().getId())) {
-            // Book already has a different libraryPath - cannot attach files from different paths
-            log.warn("Cannot attach file '{}' to book id={}: file is in libraryPath {} but book is in libraryPath {}",
-                    file.getFileName(), book.getId(), file.getLibraryPathEntity().getId(), book.getLibraryPath().getId());
-            return;
-        }
-
-        String hash = file.isFolderBased()
-                ? FileFingerprint.generateFolderHash(file.getFullPath())
-                : FileFingerprint.generateHash(file.getFullPath());
-        Long fileSizeKb = file.isFolderBased()
-                ? FileUtils.getFolderSizeInKb(file.getFullPath())
-                : FileUtils.getFileSizeInKb(file.getFullPath());
-        BookFileEntity additionalFile = BookFileEntity.builder()
-                .book(book)
-                .fileName(file.getFileName())
-                .fileSubPath(file.getFileSubPath())
-                .isBookFormat(true)
-                .bookType(file.getBookFileType())
-                .folderBased(file.isFolderBased())
-                .fileSizeKb(fileSizeKb)
-                .initialHash(hash)
-                .currentHash(hash)
-                .addedOn(Instant.now())
-                .build();
-
-        try {
-            bookAdditionalFileRepository.save(additionalFile);
-            String primaryFileName = book.hasFiles() ? book.getPrimaryBookFile().getFileName() : "book#" + book.getId();
-            log.info("Auto-attached new format {} to existing book: {}", file.getFileName(), primaryFileName);
-            fileAsBookProcessor.generateCoverFromAdditionalFile(book, file);
-        } catch (Exception e) {
-            log.error("Error auto-attaching file {}: {}", file.getFileName(), e.getMessage());
+            log.error("Error auto-attaching {} to book#{}: {}", attachment.files().stream().map(LibraryFile::getFileName).toList(),
+                    attachment.bookId(), e.getMessage());
         }
     }
 

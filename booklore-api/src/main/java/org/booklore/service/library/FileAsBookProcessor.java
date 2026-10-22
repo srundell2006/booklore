@@ -224,6 +224,18 @@ public class FileAsBookProcessor {
         }
     }
 
+    /**
+     * Writes the book's cover of the file's kind, audiobook or ebook, from the file, replacing one it has. Whether it
+     * should is the caller's decision.
+     */
+    void writeCoverFromFile(BookEntity bookEntity, LibraryFile file) {
+        if (file.getBookFileType() == BookFileType.AUDIOBOOK) {
+            generateAudiobookCoverFromFile(bookEntity, file);
+        } else {
+            generateEbookCoverFromFile(bookEntity, file);
+        }
+    }
+
     private void generateAudiobookCoverFromFile(BookEntity bookEntity, LibraryFile audioFile) {
         try {
             File file = getFileForCoverExtraction(audioFile);

@@ -258,7 +258,7 @@ class ExistingBookMatcherTest {
             for (FileEvidence file : files) {
                 if (ExistingBookMatcher.matchShell(file, index) instanceof Match match) {
                     String extension = file.fileName().substring(file.fileName().lastIndexOf('.') + 1);
-                    claims.add(new Claim<>(file, file.fileName(), match.bookId(), file.folderKey(), extension, file.copyBaseNameKey()));
+                    claims.add(new Claim<>(file, file.fileName(), match.bookId(), file.folderKey(), extension, file.fileNameKey()));
                 }
             }
             return claims;
@@ -329,6 +329,17 @@ class ExistingBookMatcherTest {
                     file("W/Weir, Andy", "The Martian - Copy.epub"));
 
             assertThat(ExistingBookMatcher.resolveShellClaims(claims).accepted().get(62L)).hasSize(2);
+        }
+
+        @Test
+        void thePartsOfOneAudiobookAllAttach() {
+            FilelessShellIndex index = FilelessShellIndex.of(List.of(shell(63, "The Lost Hero", "Rick Riordan")));
+            List<Claim<FileEvidence>> claims = claims(index,
+                    file("R/Riordan, Rick", "The Lost Hero (Part 1).m4b"),
+                    file("R/Riordan, Rick", "The Lost Hero - Part 2.m4b"));
+            assertThat(claims).hasSize(2);
+
+            assertThat(ExistingBookMatcher.resolveShellClaims(claims).accepted().get(63L)).hasSize(2);
         }
     }
 

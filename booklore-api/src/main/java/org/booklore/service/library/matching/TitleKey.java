@@ -144,6 +144,25 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
         return number.matches() ? number.group(1).trim() : s;
     }
 
+    /** An audiobook file's base name without the part or disc it holds: "Title (Part 2)" and "Title - Disc 1" are "Title". */
+    public static String withoutAudioPart(String baseName) {
+        String s = collapse(baseName == null ? "" : baseName);
+        StringBuilder kept = new StringBuilder();
+        Matcher bracket = BRACKET.matcher(s);
+        int last = 0;
+        while (bracket.find()) {
+            kept.append(s, last, bracket.start());
+            if (!PART_CONTENT.matcher(bracket.group(1).trim()).matches()) {
+                kept.append(bracket.group());
+            }
+            last = bracket.end();
+        }
+        kept.append(s.substring(last));
+        s = collapse(kept.toString());
+        Matcher trailingPart = TRAILING_PART.matcher(s);
+        return trailingPart.find() ? s.substring(0, trailingPart.start()).trim() : s;
+    }
+
     /** The book this name reads as. A " (n)" copy number counts as one more number: "Saga (2)" is the second Saga. */
     public String identity() {
         if (copy != null && copy.number() != null) {

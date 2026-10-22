@@ -268,8 +268,8 @@ public final class ExistingBookMatcher {
      *
      * @param folderKey the file's library path and sub path
      * @param format    the file's format, or one value for every file where a book has a single file
-     * @param nameKey   the file's base name without a copy marker ({@link FileEvidence#copyBaseNameKey}): files of
-     *                  one format and one name key are copies of one file
+     * @param nameKey   {@link FileEvidence#fileNameKey}: files of one format and one name key are copies, or parts,
+     *                  of one file
      */
     public record Claim<F>(F file, String fileName, long bookId, String folderKey, String format, String nameKey) {
     }

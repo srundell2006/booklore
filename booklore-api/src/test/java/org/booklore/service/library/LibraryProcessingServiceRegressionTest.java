@@ -14,7 +14,6 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.transaction.PlatformTransactionManager;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -49,7 +48,7 @@ class LibraryProcessingServiceRegressionTest {
     @Mock
     private BookGroupingService bookGroupingService;
     @Mock
-    private PlatformTransactionManager transactionManager;
+    private ExistingBookAttacher existingBookAttacher;
 
     private LibraryProcessingService libraryProcessingService;
 
@@ -65,7 +64,7 @@ class LibraryProcessingServiceRegressionTest {
                 bookDeletionService,
                 libraryFileHelper,
                 bookGroupingService,
-                transactionManager
+                existingBookAttacher
         );
     }
 
@@ -95,8 +94,8 @@ class LibraryProcessingServiceRegressionTest {
         when(libraryFileHelper.filterByAllowedFormats(anyList(), any())).thenAnswer(inv -> inv.getArgument(0));
         // A fileless book (e.g., physical book) has no book_file rows at all
         when(bookAdditionalFileRepository.findScanRowsByLibraryId(libraryId)).thenReturn(Collections.emptyList());
-        when(bookGroupingService.groupForRescan(anyList(), any(LibraryEntity.class)))
-                .thenReturn(new BookGroupingService.GroupingResult(Collections.emptyMap(), Collections.emptyMap()));
+        when(bookGroupingService.groupForRescan(anyList(), any(LibraryEntity.class), any()))
+                .thenReturn(new BookGroupingService.GroupingResult(List.of(), Collections.emptyMap()));
 
         RescanLibraryContext context = RescanLibraryContext.builder().libraryId(libraryId).build();
 

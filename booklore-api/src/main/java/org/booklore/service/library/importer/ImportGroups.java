@@ -34,12 +34,12 @@ public final class ImportGroups {
     }
 
     /**
-     * The cover an additional format makes for its book, as FileAsBookProcessor.generateCoverFromAdditionalFile decides
-     * for a book with files: only when an audiobook meets an ebook, and then of the additional format's kind.
+     * The cover an additional format makes for a book with files: only when an audiobook meets an ebook, and then of
+     * the additional format's kind. The importer, the sequential import and attaching to an existing book all decide so.
      *
      * @return null when the additional format makes no cover
      */
-    static CoverKind crossTypeCover(BookFileType primaryType, BookFileType additionalType) {
+    public static CoverKind crossTypeCover(BookFileType primaryType, BookFileType additionalType) {
         boolean primaryIsAudiobook = primaryType == BookFileType.AUDIOBOOK;
         boolean additionalIsAudiobook = additionalType == BookFileType.AUDIOBOOK;
         if (primaryIsAudiobook == additionalIsAudiobook) {

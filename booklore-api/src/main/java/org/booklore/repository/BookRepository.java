@@ -3,7 +3,9 @@ package org.booklore.repository;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.BookFileType;
+import org.booklore.repository.projection.BookAuthorRow;
 import org.booklore.repository.projection.BookCoverUpdateProjection;
+import org.booklore.repository.projection.FilelessBookRow;
 import jakarta.transaction.Transactional;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.*;
@@ -49,24 +51,6 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
 
     @Query("SELECT DISTINCT b FROM BookEntity b JOIN b.bookFiles bf WHERE b.libraryPath.id = :libraryPathId AND bf.fileSubPath = :fileSubPath AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false)")
     List<BookEntity> findAllByLibraryPathIdAndFileSubPath(@Param("libraryPathId") Long libraryPathId, @Param("fileSubPath") String fileSubPath);
-
-    /**
-     * Same books as {@link #findAllByLibraryPathIdAndFileSubPath}, in id order, with every
-     * file (not just the matching ones) and the library fetched, so rescan grouping can
-     * pick primary files without a query per book.
-     */
-    @EntityGraph(attributePaths = {"bookFiles", "library", "libraryPath"})
-    @Query("""
-            SELECT DISTINCT b FROM BookEntity b
-            JOIN b.bookFiles bf
-            WHERE b.libraryPath.id = :libraryPathId
-            AND bf.fileSubPath = :fileSubPath
-            AND bf.isBookFormat = true
-            AND (b.deleted IS NULL OR b.deleted = false)
-            ORDER BY b.id
-            """)
-    List<BookEntity> findAllWithFilesByLibraryPathIdAndFileSubPath(@Param("libraryPathId") Long libraryPathId,
-                                                                   @Param("fileSubPath") String fileSubPath);
 
     @Query("SELECT b FROM BookEntity b JOIN b.bookFiles bf WHERE b.libraryPath.id = :libraryPathId AND bf.fileSubPath = :fileSubPath AND bf.fileName = :fileName AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false)")
     Optional<BookEntity> findByLibraryPath_IdAndFileSubPathAndFileName(@Param("libraryPathId") Long libraryPathId,
@@ -240,18 +224,32 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     List<BookEntity> findFilelessBooksByLibraryId(@Param("libraryId") Long libraryId);
 
     /**
-     * Same books as {@link #findFilelessBooksByLibraryId}, in id order, with the metadata and
-     * library path that rescan grouping matches on fetched up front.
+     * The fileless books of the library that are not deleted, one row per author, in book id order: what matching a
+     * new file against them needs, for the whole library in one query and without entities. Books without metadata
+     * have no title to match and are left out.
      */
-    @EntityGraph(attributePaths = {"metadata", "libraryPath"})
     @Query("""
-            SELECT b FROM BookEntity b
+            SELECT new org.booklore.repository.projection.FilelessBookRow(
+                b.id, lp.id, b.isPhysical, b.bookCoverHash, b.audiobookCoverHash, m.title, m.subtitle, m.seriesNumber, a.name)
+            FROM BookEntity b
+            JOIN b.metadata m
+            LEFT JOIN b.libraryPath lp
+            LEFT JOIN m.authors a
             WHERE b.library.id = :libraryId
             AND (b.deleted IS NULL OR b.deleted = false)
             AND NOT EXISTS (SELECT bf.id FROM BookFileEntity bf WHERE bf.book = b)
             ORDER BY b.id
             """)
-    List<BookEntity> findFilelessBooksWithMetadataByLibraryId(@Param("libraryId") Long libraryId);
+    List<FilelessBookRow> findFilelessBookRowsByLibraryId(@Param("libraryId") Long libraryId);
+
+    /** The author names of these books, one row per book and author. */
+    @Query("""
+            SELECT new org.booklore.repository.projection.BookAuthorRow(m.bookId, a.name)
+            FROM BookMetadataEntity m
+            JOIN m.authors a
+            WHERE m.bookId IN :bookIds
+            """)
+    List<BookAuthorRow> findAuthorNamesByBookIds(@Param("bookIds") Collection<Long> bookIds);
 
     @Query("SELECT b.id as id, m.coverUpdatedOn as coverUpdatedOn FROM BookEntity b LEFT JOIN b.metadata m WHERE b.id IN :bookIds")
     List<BookCoverUpdateProjection> findCoverUpdateInfoByIds(@Param("bookIds") Collection<Long> bookIds);

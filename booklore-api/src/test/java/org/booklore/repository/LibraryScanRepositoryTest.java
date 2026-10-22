@@ -3,6 +3,7 @@ package org.booklore.repository;
 import jakarta.persistence.EntityManager;
 import jakarta.persistence.PersistenceContext;
 import org.booklore.BookloreApplication;
+import org.booklore.model.entity.AuthorEntity;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.BookFileEntity.AudioFileChapter;
@@ -10,7 +11,9 @@ import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.BookFileType;
+import org.booklore.repository.projection.BookAuthorRow;
 import org.booklore.repository.projection.BookFileScanRow;
+import org.booklore.repository.projection.FilelessBookRow;
 import org.booklore.service.task.TaskCronService;
 import org.hibernate.Session;
 import org.hibernate.stat.Statistics;
@@ -121,10 +124,6 @@ class LibraryScanRepositoryTest {
                 .bookType(type)
                 .isBookFormat(bookFormat)
                 .build());
-    }
-
-    private void metadata(BookEntity book, String title) {
-        persist(BookMetadataEntity.builder().book(book).bookId(book.getId()).title(title).build());
     }
 
     private void clear() {
@@ -288,68 +287,83 @@ class LibraryScanRepositoryTest {
     @Nested
     class GroupingLookups {
 
+        private AuthorEntity author(String name) {
+            return persist(AuthorEntity.builder().name(name).build());
+        }
+
+        private BookMetadataEntity metadata(BookEntity book, String title, AuthorEntity... authors) {
+            BookMetadataEntity metadata = BookMetadataEntity.builder().book(book).bookId(book.getId()).title(title).build();
+            metadata.setAuthors(new ArrayList<>(List.of(authors)));
+            return persist(metadata);
+        }
+
         @Test
-        void filelessBooksWithMetadataMatchTheGroupByQueryAndComeWithMetadataLoaded() {
+        void filelessBookRowsAreTheGroupByQuerysBooksOneRowPerAuthorInOneStatement() {
+            AuthorEntity weir = author("Andy Weir");
+            AuthorEntity leigh = author("Lora Leigh");
+            AuthorEntity rowan = author("Michelle Rowan");
             BookEntity physical = book(library, null, false);
-            metadata(physical, "Dune");
-            BookEntity physicalWithPath = book(library, libraryPath, false);
-            metadata(physicalWithPath, "Emma");
-            BookEntity deletedPhysical = book(library, null, true);
-            metadata(deletedPhysical, "Gone");
+            physical.setIsPhysical(true);
+            BookMetadataEntity martian = metadata(physical, "The Martian", weir);
+            martian.setSubtitle("A Novel");
+            martian.setSeriesNumber(1f);
+            BookEntity anthology = book(library, libraryPath, false);
+            anthology.setBookCoverHash("cover");
+            metadata(anthology, "Primal Heat", leigh, rowan);
+            BookEntity withoutAuthors = book(library, libraryPath, false);
+            withoutAuthors.setAudiobookCoverHash("audio");
+            metadata(withoutAuthors, "Emma");
+            BookEntity deleted = book(library, null, true);
+            metadata(deleted, "Gone", weir);
             BookEntity withFile = book(library, libraryPath, false);
-            metadata(withFile, "Has File");
+            metadata(withFile, "Has File", weir);
             file(withFile, "", "Has File.epub", BookFileType.EPUB, true);
+            BookEntity onlyANonBookFile = book(library, libraryPath, false);
+            metadata(onlyANonBookFile, "Has Notes", weir);
+            file(onlyANonBookFile, "", "notes.txt", BookFileType.PDF, false);
+            LibraryEntity otherLibrary = persist(LibraryEntity.builder().name("Other").icon("book").watch(false).build());
+            metadata(book(otherLibrary, null, false), "Elsewhere", weir);
             clear();
 
             List<Long> expected = bookRepository.findFilelessBooksByLibraryId(library.getId()).stream()
                     .map(BookEntity::getId).sorted().toList();
             clear();
 
-            List<BookEntity> fileless = bookRepository.findFilelessBooksWithMetadataByLibraryId(library.getId());
-            long statements = statistics().getPrepareStatementCount();
+            List<FilelessBookRow> rows = bookRepository.findFilelessBookRowsByLibraryId(library.getId());
 
-            assertThat(fileless).extracting(BookEntity::getId)
-                    .containsExactlyElementsOf(expected)
-                    .containsExactly(physical.getId(), physicalWithPath.getId());
-            assertThat(fileless).extracting(b -> b.getMetadata().getTitle()).containsExactly("Dune", "Emma");
-            assertThat(fileless.get(1).getLibraryPath().getId()).isEqualTo(libraryPath.getId());
-            assertThat(statistics().getPrepareStatementCount()).isEqualTo(statements);
+            assertThat(statistics().getPrepareStatementCount()).isEqualTo(1);
+            assertThat(rows.stream().map(FilelessBookRow::bookId).distinct().toList()).containsExactlyElementsOf(expected);
+            assertThat(rows).extracting(FilelessBookRow::bookId, FilelessBookRow::libraryPathId, FilelessBookRow::physical,
+                            FilelessBookRow::bookCoverHash, FilelessBookRow::audiobookCoverHash, FilelessBookRow::title,
+                            FilelessBookRow::subtitle, FilelessBookRow::seriesNumber, FilelessBookRow::authorName)
+                    .containsExactlyInAnyOrder(
+                            tuple(physical.getId(), null, true, null, null, "The Martian", "A Novel", 1f, "Andy Weir"),
+                            tuple(anthology.getId(), libraryPath.getId(), false, "cover", null, "Primal Heat", null, null, "Lora Leigh"),
+                            tuple(anthology.getId(), libraryPath.getId(), false, "cover", null, "Primal Heat", null, null, "Michelle Rowan"),
+                            tuple(withoutAuthors.getId(), libraryPath.getId(), false, null, "audio", "Emma", null, null, null));
         }
 
         @Test
-        void booksInDirectoryMatchThePlainQueryAndComeWithAllTheirFiles() {
-            BookEntity first = book(library, libraryPath, false);
-            BookFileEntity firstEpub = file(first, "Author/Title", "Title.epub", BookFileType.EPUB, true);
-            BookFileEntity firstAudio = file(first, "Author/Title/audio", "audio", BookFileType.AUDIOBOOK, true);
-            BookFileEntity firstNotes = file(first, "Author/Title", "notes.txt", BookFileType.PDF, false);
-            BookEntity second = book(library, libraryPath, false);
-            BookFileEntity secondPdf = file(second, "Author/Title", "Other.pdf", BookFileType.PDF, true);
-            BookEntity deleted = book(library, libraryPath, true);
-            file(deleted, "Author/Title", "Deleted.epub", BookFileType.EPUB, true);
-            BookEntity onlyNonBook = book(library, libraryPath, false);
-            file(onlyNonBook, "Author/Title", "cover.jpg", BookFileType.PDF, false);
-            BookEntity elsewhere = book(library, libraryPath, false);
-            file(elsewhere, "Author/Other", "Other.epub", BookFileType.EPUB, true);
+        void authorNamesComeForTheBooksAskedForInOneStatement() {
+            AuthorEntity leigh = author("Lora Leigh");
+            AuthorEntity rowan = author("Michelle Rowan");
+            BookEntity anthology = book(library, libraryPath, false);
+            metadata(anthology, "Primal Heat", leigh, rowan);
+            BookEntity single = book(library, libraryPath, false);
+            metadata(single, "Mate Claimed", leigh);
+            BookEntity none = book(library, libraryPath, false);
+            metadata(none, "Anonymous");
+            BookEntity notAsked = book(library, libraryPath, false);
+            metadata(notAsked, "Other", rowan);
             clear();
 
-            List<Long> expected = bookRepository.findAllByLibraryPathIdAndFileSubPath(libraryPath.getId(), "Author/Title")
-                    .stream().map(BookEntity::getId).sorted().toList();
-            clear();
+            List<BookAuthorRow> rows = bookRepository.findAuthorNamesByBookIds(List.of(anthology.getId(), single.getId(), none.getId()));
 
-            List<BookEntity> books = bookRepository.findAllWithFilesByLibraryPathIdAndFileSubPath(libraryPath.getId(), "Author/Title");
-            long statements = statistics().getPrepareStatementCount();
-
-            assertThat(books).extracting(BookEntity::getId)
-                    .containsExactlyElementsOf(expected)
-                    .containsExactly(first.getId(), second.getId());
-            assertThat(books.getFirst().getBookFiles()).extracting(BookFileEntity::getId)
-                    .containsExactly(firstEpub.getId(), firstAudio.getId(), firstNotes.getId());
-            assertThat(books.get(1).getBookFiles()).extracting(BookFileEntity::getId).containsExactly(secondPdf.getId());
-            // What grouping reads: primary file (needs the library's format priority) and file types.
-            assertThat(books).extracting(b -> b.getPrimaryBookFile().getId())
-                    .containsExactly(firstEpub.getId(), secondPdf.getId());
-            assertThat(books.getFirst().getLibraryPath().getId()).isEqualTo(libraryPath.getId());
-            assertThat(statistics().getPrepareStatementCount()).isEqualTo(statements);
+            assertThat(statistics().getPrepareStatementCount()).isEqualTo(1);
+            assertThat(rows).extracting(BookAuthorRow::bookId, BookAuthorRow::authorName).containsExactlyInAnyOrder(
+                    tuple(anthology.getId(), "Lora Leigh"),
+                    tuple(anthology.getId(), "Michelle Rowan"),
+                    tuple(single.getId(), "Lora Leigh"));
         }
     }
 

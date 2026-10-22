@@ -88,9 +88,14 @@ public record FileEvidence(Long libraryPathId,
         return TitleKey.baseName(fileName).toLowerCase(Locale.ROOT);
     }
 
-    /** The base name without a duplicate's copy marker: "Title - Copy.epub" is the same file as "Title.epub". */
-    public String copyBaseNameKey() {
-        return TitleKey.withoutCopyMarker(TitleKey.baseName(fileName)).toLowerCase(Locale.ROOT);
+    /**
+     * The name every copy of this file, and for an audiobook every part of it, shares: the base name without a copy
+     * marker and without an audiobook's part or disc. "Title - Copy.epub" is the same file as "Title.epub", and "Title
+     * (Part 2).m4b" part of the same audiobook as "Title (Part 1).m4b".
+     */
+    public String fileNameKey() {
+        String name = TitleKey.withoutCopyMarker(TitleKey.baseName(fileName));
+        return (audio ? TitleKey.withoutAudioPart(name) : name).toLowerCase(Locale.ROOT);
     }
 
     private record SeriesPrefix(int number, String rest) {

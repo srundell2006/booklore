@@ -2,8 +2,6 @@ package org.booklore.service.library;
 
 import org.booklore.exception.APIException;
 import org.booklore.model.dto.settings.LibraryFile;
-import org.booklore.model.entity.BookEntity;
-import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.BookFileType;
@@ -16,6 +14,7 @@ import org.booklore.repository.LibraryRepository;
 import org.booklore.repository.projection.BookFileScanRow;
 import org.booklore.service.NotificationService;
 import org.booklore.service.library.importer.ImportSummary;
+import org.booklore.service.library.matching.ExistingBookMatcher;
 import org.booklore.task.options.RescanLibraryContext;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -25,7 +24,6 @@ import org.mockito.ArgumentCaptor;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
-import org.springframework.transaction.PlatformTransactionManager;
 import org.springframework.transaction.annotation.Transactional;
 
 import java.io.IOException;
@@ -63,7 +61,7 @@ class LibraryProcessingServiceTest {
     @Mock
     private BookGroupingService bookGroupingService;
     @Mock
-    private PlatformTransactionManager transactionManager;
+    private ExistingBookAttacher existingBookAttacher;
 
     private LibraryProcessingService libraryProcessingService;
 
@@ -85,7 +83,7 @@ class LibraryProcessingServiceTest {
                 bookDeletionService,
                 libraryFileHelper,
                 bookGroupingService,
-                transactionManager
+                existingBookAttacher
         );
 
         Path libraryRoot = Files.createDirectory(tempDir.resolve("library"));
@@ -146,8 +144,8 @@ class LibraryProcessingServiceTest {
     }
 
     private void givenNothingToGroup() {
-        when(bookGroupingService.groupForRescan(anyList(), eq(libraryEntity)))
-                .thenReturn(new BookGroupingService.GroupingResult(Collections.emptyMap(), Collections.emptyMap()));
+        when(bookGroupingService.groupForRescan(anyList(), eq(libraryEntity), any()))
+                .thenReturn(new BookGroupingService.GroupingResult(List.of(), Collections.emptyMap()));
     }
 
     private void givenInitialScanGroupsPerFile() {
@@ -169,7 +167,7 @@ class LibraryProcessingServiceTest {
     @SuppressWarnings("unchecked")
     private List<LibraryFile> filesPassedToRescanGrouping() {
         ArgumentCaptor<List<LibraryFile>> captor = ArgumentCaptor.forClass(List.class);
-        verify(bookGroupingService).groupForRescan(captor.capture(), eq(libraryEntity));
+        verify(bookGroupingService).groupForRescan(captor.capture(), eq(libraryEntity), any());
         return captor.getValue();
     }
 
@@ -454,7 +452,7 @@ class LibraryProcessingServiceTest {
         inOrder.verify(bookAdditionalFileRepository).findScanRowsByLibraryId(LIBRARY_ID);
         verify(bookAdditionalFileRepository, times(2)).findScanRowsByLibraryId(LIBRARY_ID);
         assertThat(filesPassedToRescanGrouping()).isEmpty();
-        verifyNoInteractions(transactionManager);
+        verifyNoInteractions(existingBookAttacher);
     }
 
     @Test
@@ -575,7 +573,7 @@ class LibraryProcessingServiceTest {
         inOrder.verify(bookDeletionService).processDeletedLibraryFiles(List.of(12L));
         inOrder.verify(bookRestorationService).restoreDeletedBooks(eq(libraryEntity), any(), anySet(), any());
         inOrder.verify(bookDeletionService).purgeDisallowedFormats(eq(libraryEntity), any());
-        inOrder.verify(bookGroupingService).groupForRescan(anyList(), eq(libraryEntity));
+        inOrder.verify(bookGroupingService).groupForRescan(anyList(), eq(libraryEntity), any());
         inOrder.verify(fileAsBookProcessor).processLibraryFilesGrouped(anyMap(), eq(libraryEntity));
     }
 
@@ -793,7 +791,7 @@ class LibraryProcessingServiceTest {
         assertThat(filesPassedToRescanGrouping()).extracting(LibraryFile::getFileName).containsExactly("back.pdf");
         InOrder inOrder = inOrder(bookRestorationService, bookGroupingService);
         inOrder.verify(bookRestorationService).restoreDeletedBooks(any(), any(), anySet(), any());
-        inOrder.verify(bookGroupingService).groupForRescan(anyList(), any());
+        inOrder.verify(bookGroupingService).groupForRescan(anyList(), any(), any());
     }
 
     @Test
@@ -820,66 +818,49 @@ class LibraryProcessingServiceTest {
     // ---- rescan: auto-attach ----
 
     @Test
-    void rescanLibrary_attachesFilesToAReloadedBookInATransactionPerBook() throws IOException {
-        Files.writeString(Path.of(pathEntity.getPath(), "book.epub"), "epub");
-        Files.writeString(Path.of(pathEntity.getPath(), "book.pdf"), "pdf");
+    void rescanLibrary_handsEachBooksFilesToTheAttacherWithTheRowsGroupingRead() throws IOException {
         LibraryFile pdf = libraryFile("", "book.pdf", BookFileType.PDF);
-
-        BookFileEntity epubFile = BookFileEntity.builder().id(1L).fileSubPath("").fileName("book.epub")
-                .isBookFormat(true).bookType(BookFileType.EPUB).build();
-        BookEntity detached = BookEntity.builder().id(11L).build();
-        BookEntity managed = BookEntity.builder().id(11L).library(libraryEntity).libraryPath(pathEntity)
-                .bookFiles(new ArrayList<>(List.of(epubFile))).build();
-        epubFile.setBook(managed);
+        LibraryFile shellEpub = libraryFile("Author", "Shell.epub");
 
         givenLibrary();
-        givenScan(libraryFile("", "book.epub"), pdf);
+        givenScan(libraryFile("", "book.epub"), pdf, shellEpub);
         givenRows(row(1, 11, "", "book.epub"));
-        when(bookGroupingService.groupForRescan(anyList(), eq(libraryEntity)))
-                .thenReturn(new BookGroupingService.GroupingResult(Map.of(detached, List.of(pdf)), Collections.emptyMap()));
-        when(bookRepository.findById(11L)).thenReturn(Optional.of(managed));
+        when(bookGroupingService.groupForRescan(anyList(), eq(libraryEntity), any()))
+                .thenReturn(new BookGroupingService.GroupingResult(List.of(
+                        new BookGroupingService.Attachment(11L, ExistingBookMatcher.Kind.SAME_FOLDER, List.of(pdf)),
+                        new BookGroupingService.Attachment(12L, ExistingBookMatcher.Kind.FILELESS, List.of(shellEpub))),
+                        Collections.emptyMap()));
 
         rescan();
 
-        InOrder inOrder = inOrder(transactionManager, bookRepository, bookAdditionalFileRepository);
-        inOrder.verify(transactionManager).getTransaction(any());
-        inOrder.verify(bookRepository).findById(11L);
-        ArgumentCaptor<BookFileEntity> saved = ArgumentCaptor.forClass(BookFileEntity.class);
-        inOrder.verify(bookAdditionalFileRepository).save(saved.capture());
-        inOrder.verify(transactionManager).commit(any());
-        assertThat(saved.getValue().getBook()).isSameAs(managed);
-        assertThat(saved.getValue().getFileName()).isEqualTo("book.pdf");
-        assertThat(saved.getValue().getCurrentHash()).isNotNull();
-        verify(fileAsBookProcessor).generateCoverFromAdditionalFile(managed, pdf);
+        ArgumentCaptor<LibraryBookFiles> rows = ArgumentCaptor.forClass(LibraryBookFiles.class);
+        verify(bookGroupingService).groupForRescan(anyList(), eq(libraryEntity), rows.capture());
+        assertThat(rows.getValue().rows()).extracting(BookFileScanRow::fileName).containsExactly("book.epub");
+        InOrder inOrder = inOrder(existingBookAttacher, fileAsBookProcessor);
+        inOrder.verify(existingBookAttacher).attach(11L, ExistingBookMatcher.Kind.SAME_FOLDER, List.of(pdf));
+        inOrder.verify(existingBookAttacher).attach(12L, ExistingBookMatcher.Kind.FILELESS, List.of(shellEpub));
+        inOrder.verify(fileAsBookProcessor).processLibraryFilesGrouped(anyMap(), eq(libraryEntity));
     }
 
     @Test
     void rescanLibrary_aFailedAttachDoesNotStopTheRest() throws IOException {
-        Files.writeString(Path.of(pathEntity.getPath(), "ok.pdf"), "pdf");
         LibraryFile missing = libraryFile("", "missing.pdf", BookFileType.PDF);
         LibraryFile ok = libraryFile("", "ok.pdf", BookFileType.PDF);
-        Map<BookEntity, List<LibraryFile>> toAttach = new LinkedHashMap<>();
-        toAttach.put(BookEntity.builder().id(11L).build(), List.of(missing));
-        toAttach.put(BookEntity.builder().id(12L).build(), List.of(ok));
-        BookEntity secondManaged = BookEntity.builder().id(12L).build();
 
         givenLibrary();
         givenScan(missing, ok);
         givenRows();
-        when(bookGroupingService.groupForRescan(anyList(), eq(libraryEntity)))
-                .thenReturn(new BookGroupingService.GroupingResult(toAttach, Collections.emptyMap()));
-        when(bookRepository.findById(11L)).thenReturn(Optional.of(BookEntity.builder().id(11L).build()));
-        when(bookRepository.findById(12L)).thenReturn(Optional.of(secondManaged));
+        when(bookGroupingService.groupForRescan(anyList(), eq(libraryEntity), any()))
+                .thenReturn(new BookGroupingService.GroupingResult(List.of(
+                        new BookGroupingService.Attachment(11L, ExistingBookMatcher.Kind.SAME_FOLDER, List.of(missing)),
+                        new BookGroupingService.Attachment(12L, ExistingBookMatcher.Kind.SAME_FOLDER, List.of(ok))),
+                        Collections.emptyMap()));
+        when(existingBookAttacher.attach(11L, ExistingBookMatcher.Kind.SAME_FOLDER, List.of(missing)))
+                .thenThrow(new IllegalStateException("cannot read missing.pdf"));
 
         rescan();
 
-        // Hashing missing.pdf throws: that book's transaction rolls back, the next one still runs.
-        verify(transactionManager).rollback(any());
-        verify(transactionManager).commit(any());
-        ArgumentCaptor<BookFileEntity> saved = ArgumentCaptor.forClass(BookFileEntity.class);
-        verify(bookAdditionalFileRepository).save(saved.capture());
-        assertThat(saved.getValue().getBook()).isSameAs(secondManaged);
-        assertThat(secondManaged.getLibraryPath()).isSameAs(pathEntity);
+        verify(existingBookAttacher).attach(12L, ExistingBookMatcher.Kind.SAME_FOLDER, List.of(ok));
         verify(fileAsBookProcessor).processLibraryFilesGrouped(anyMap(), eq(libraryEntity));
     }
 
@@ -924,8 +905,8 @@ class LibraryProcessingServiceTest {
         givenLibrary();
         givenScan(libraryFile("", "book1.epub"));
         givenRows();
-        when(bookGroupingService.groupForRescan(anyList(), eq(libraryEntity)))
-                .thenReturn(new BookGroupingService.GroupingResult(Collections.emptyMap(), Map.of("book1", List.of(libraryFile("", "book1.epub")))));
+        when(bookGroupingService.groupForRescan(anyList(), eq(libraryEntity), any()))
+                .thenReturn(new BookGroupingService.GroupingResult(List.of(), Map.of("book1", List.of(libraryFile("", "book1.epub")))));
         when(fileAsBookProcessor.processLibraryFilesGrouped(anyMap(), eq(libraryEntity))).thenReturn(imported(1, 6, true, false));
 
         rescan();
