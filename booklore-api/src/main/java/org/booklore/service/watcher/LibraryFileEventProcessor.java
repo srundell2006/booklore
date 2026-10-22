@@ -21,6 +21,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
 import java.io.IOException;
+import java.io.UncheckedIOException;
 import java.nio.file.*;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
@@ -41,9 +42,16 @@ public class LibraryFileEventProcessor {
     private static final int MIN_AUDIO_FILES_FOR_FOLDER_AUDIOBOOK = 2;
     /**
      * How long a new file with the content of a stored file that is still there waits for that file to go before it
-     * is taken for a copy: a mover that writes the destination before it removes the source removes it within this.
+     * is taken for a copy: a mover that writes the destination before it removes the source removes it within this
+     * once it stops writing. The wait counts from the last file seen arriving or growing in the library.
      */
     static final long COPY_SOURCE_WAIT_MS = 30000L;
+    /**
+     * The longest such a file waits while files keep arriving in its library. A move of a large folder across devices
+     * copies the whole tree before it removes any of it, and the watcher takes each finished folder of the tree as it
+     * comes.
+     */
+    static final long COPY_SOURCE_MAX_WAIT_MS = 600000L;
 
     private final BlockingQueue<FileEvent> eventQueue = new LinkedBlockingQueue<>();
     private final LibraryRepository libraryRepository;
@@ -57,16 +65,39 @@ public class LibraryFileEventProcessor {
     private final ConcurrentMap<Path, ScheduledFuture<?>> pendingDeletes = new ConcurrentHashMap<>();
     private final ConcurrentMap<Path, ScheduledFuture<?>> pendingFolderCreates = new ConcurrentHashMap<>();
     private final Set<Path> filesFromPendingFolder = ConcurrentHashMap.newKeySet();
-    /** New files that copy a stored file still there, by path, until that file goes or the wait is over. */
+    /**
+     * What copies a stored file still there, by path, until that file goes or the wait is over: a new file, a folder
+     * audiobook, or the new files of a BOOK_PER_FOLDER folder, which wait as one. Changed under {@link #copyLock}, so a
+     * timer and a deletion cannot both hand one back, and a timer that fires as it is replaced sees the replacement.
+     */
     private final ConcurrentMap<Path, PendingCopy> pendingCopies = new ConcurrentHashMap<>();
+    private final Object copyLock = new Object();
+    /** When each library last saw a file arrive, or one still being written. */
+    private final ConcurrentMap<Long, Long> lastWriteSeen = new ConcurrentHashMap<>();
     private long copySourceWaitMs = COPY_SOURCE_WAIT_MS;
+    private long copySourceMaxWaitMs = COPY_SOURCE_MAX_WAIT_MS;
 
-    private record PendingCopy(long libraryId, String hash, ScheduledFuture<?> recheck) {
+    /**
+     * @param hashes the contents it copies; a deletion of one of them hands it back at once
+     * @param folder whether it is a folder, handed back as a folder create
+     * @param since  when it began to wait
+     */
+    private record PendingCopy(long libraryId, Set<String> hashes, boolean folder, long since, ScheduledFuture<?> recheck) {
     }
 
     /** For tests, which cannot wait the full time. */
     void setCopySourceWaitMs(long copySourceWaitMs) {
         this.copySourceWaitMs = copySourceWaitMs;
+    }
+
+    /** For tests, which cannot wait the full time. */
+    void setCopySourceMaxWaitMs(long copySourceMaxWaitMs) {
+        this.copySourceMaxWaitMs = copySourceMaxWaitMs;
+    }
+
+    /** Whether the file or folder at this path waits as a copy of a stored file. For tests. */
+    boolean waitsAsCopy(Path path) {
+        return pendingCopies.containsKey(path.toAbsolutePath().normalize());
     }
 
     @PostConstruct
@@ -99,6 +130,7 @@ public class LibraryFileEventProcessor {
 
             if (existing != null) existing.cancel(false);
         } else if (eventKind == StandardWatchEventKinds.ENTRY_CREATE) {
+            noteWrite(libraryId);
             ScheduledFuture<?> pendingDelete = pendingDeletes.remove(path);
             if (pendingDelete != null) {
                 pendingDelete.cancel(false);
@@ -107,39 +139,47 @@ public class LibraryFileEventProcessor {
 
             if (isDirectory) {
                 log.debug("[DEBOUNCE] Scheduling folder create for '{}' with {}ms delay", path, FOLDER_CREATE_DEBOUNCE_MS);
-                ScheduledFuture<?> existingFolder = pendingFolderCreates.put(path, scheduler.schedule(() -> {
-                    eventQueue.offer(new FileEvent(eventKind, libraryId, path, true));
-                    pendingFolderCreates.remove(path);
-                    filesFromPendingFolder.removeIf(f -> f.startsWith(path));
-                }, FOLDER_CREATE_DEBOUNCE_MS, TimeUnit.MILLISECONDS));
-
-                if (existingFolder != null) existingFolder.cancel(false);
+                scheduleFolderCreate(libraryId, path, FOLDER_CREATE_DEBOUNCE_MS, Wait.NONE, 0L);
             } else {
                 boolean insidePendingFolder = false;
                 for (var entry : pendingFolderCreates.entrySet()) {
                     if (path.startsWith(entry.getKey())) {
                         insidePendingFolder = true;
                         filesFromPendingFolder.add(path);
-                        ScheduledFuture<?> oldTimer = entry.getValue();
-                        if (oldTimer != null) oldTimer.cancel(false);
                         Path folderPath = entry.getKey();
-                        pendingFolderCreates.put(folderPath, scheduler.schedule(() -> {
-                            eventQueue.offer(new FileEvent(eventKind, libraryId, folderPath, true));
-                            pendingFolderCreates.remove(folderPath);
-                            filesFromPendingFolder.removeIf(f -> f.startsWith(folderPath));
-                        }, FOLDER_CREATE_DEBOUNCE_MS, TimeUnit.MILLISECONDS));
+                        scheduleFolderCreate(libraryId, folderPath, FOLDER_CREATE_DEBOUNCE_MS, Wait.NONE, 0L);
                         log.debug("[DEBOUNCE] File '{}' tracked, reset folder debounce for '{}'", path.getFileName(), folderPath);
                         break;
                     }
                 }
                 if (!insidePendingFolder) {
-                    scheduleWithStabilityCheck(path, () ->
+                    scheduleWithStabilityCheck(libraryId, path, () ->
                             eventQueue.offer(new FileEvent(eventKind, libraryId, path, false)));
                 }
             }
         } else {
             eventQueue.offer(new FileEvent(eventKind, libraryId, path, false));
         }
+    }
+
+    /**
+     * Queues a folder's create once the delay is over, unless something puts it off again first. It leaves the pending
+     * folders before it is queued, so a create that puts the folder off again while it is handled is not undone.
+     */
+    private void scheduleFolderCreate(long libraryId, Path folderPath, long delayMs, Wait waited, long since) {
+        ScheduledFuture<?> previous = pendingFolderCreates.put(folderPath, scheduler.schedule(() -> {
+            pendingFolderCreates.remove(folderPath);
+            filesFromPendingFolder.removeIf(f -> f.startsWith(folderPath));
+            eventQueue.offer(new FileEvent(StandardWatchEventKinds.ENTRY_CREATE, libraryId, folderPath, true, waited, since));
+        }, delayMs, TimeUnit.MILLISECONDS));
+        if (previous != null) {
+            previous.cancel(false);
+        }
+    }
+
+    /** A file arrived in the library, or one is still being written: a copy into it may still be going on. */
+    private void noteWrite(long libraryId) {
+        lastWriteSeen.put(libraryId, System.currentTimeMillis());
     }
 
     private void handleEvent(FileEvent event) {
@@ -160,7 +200,7 @@ public class LibraryFileEventProcessor {
 
         if (isDirectory) {
             switch (event.eventKind().name()) {
-                case "ENTRY_CREATE" -> handleFolderCreate(library, path);
+                case "ENTRY_CREATE" -> handleFolderCreate(library, path, event);
                 case "ENTRY_DELETE" -> handleFolderDelete(library, path);
                 default -> log.warn("[SKIP] Folder event '{}' ignored for '{}'", event.eventKind().name(), fileName);
             }
@@ -173,46 +213,111 @@ public class LibraryFileEventProcessor {
         }
 
         switch (event.eventKind().name()) {
-            case "ENTRY_CREATE" -> handleFileCreate(library, path, event.copyChecked());
+            case "ENTRY_CREATE" -> handleFileCreate(library, path, event);
             case "ENTRY_DELETE" -> handleFileDelete(library, path);
             default -> log.debug("[SKIP] File event '{}' ignored for '{}'", event.eventKind().name(), fileName);
         }
     }
 
-    /**
-     * A new file. One with the content of a stored file that is still at its path is a copy only if that file stays:
-     * it waits until that file's deletion comes in, which makes it the file moved, or until the wait is over.
-     *
-     * @param copyChecked whether the file already waited, and is now what it is
-     */
-    private void handleFileCreate(LibraryEntity library, Path path, boolean copyChecked) {
+    private void handleFileCreate(LibraryEntity library, Path path, FileEvent event) {
         if (!fileHasContent(path)) {
             log.debug("[SKIP] Zero-byte file: '{}'", path);
             return;
         }
         log.info("[FILE_CREATE] '{}'", path);
-        if (copyChecked) {
-            bookFileTransactionalHandler.handleNewBookFile(library.getId(), path);
+        handleNewFile(library.getId(), path, event.waited(), event.since());
+    }
+
+    /**
+     * A new file, on its own or found in a new folder. One with the content of a stored file that is still at its path
+     * is a copy only if that file stays: it waits until that file's deletion comes in, which makes it the file moved,
+     * or until the wait is over.
+     *
+     * @param waited how the file comes back from waiting as a copy, if it does
+     * @param since  when it began that wait
+     */
+    private void handleNewFile(long libraryId, Path path, Wait waited, long since) {
+        if (waited == Wait.COPY_OVER) {
+            bookFileTransactionalHandler.handleNewBookFile(libraryId, path);
             return;
         }
-        bookFileTransactionalHandler.handleNewBookFileUnlessCopy(library.getId(), path).ifPresent(copy -> {
-            ScheduledFuture<?> recheck = scheduler.schedule(() -> recheckCopy(path), copySourceWaitMs, TimeUnit.MILLISECONDS);
-            PendingCopy previous = pendingCopies.put(path, new PendingCopy(library.getId(), copy.hash(), recheck));
+        bookFileTransactionalHandler.handleNewBookFileUnlessCopy(libraryId, path).ifPresent(copy ->
+                waitAsCopy(libraryId, path, Set.of(copy.hash()), false, waitingSince(waited, since),
+                        "copies a file of book id=" + copy.bookId()));
+    }
+
+    /** When something began to wait as a copy: now, unless it comes back from that wait. */
+    private static long waitingSince(Wait waited, long since) {
+        return waited == Wait.COPY ? since : System.currentTimeMillis();
+    }
+
+    /**
+     * Leaves something new that copies a stored file still there to wait. It is handed back at once when a deletion
+     * of one of its contents comes in, which may make it the file moved; otherwise when its library has seen no file
+     * arrive or grow for the wait, or after the longest wait, as a copy.
+     */
+    private void waitAsCopy(long libraryId, Path path, Set<String> hashes, boolean folder, long since, String what) {
+        synchronized (copyLock) {
+            PendingCopy previous = pendingCopies.get(path);
+            long from = previous != null ? Math.min(previous.since(), since) : since;
             if (previous != null) {
                 previous.recheck().cancel(false);
             }
-            log.info("[FILE_CREATE] '{}' copies a file of book id={}; taken for a copy unless that file goes within {}ms",
-                    path, copy.bookId(), copySourceWaitMs);
-        });
+            long delay = Math.max(0L, from + copySourceWaitMs - System.currentTimeMillis());
+            pendingCopies.put(path, new PendingCopy(libraryId, Set.copyOf(hashes), folder, from,
+                    scheduler.schedule(() -> copyWaitEnds(path), delay, TimeUnit.MILLISECONDS)));
+        }
+        log.info("[FILE_CREATE] '{}' {}; taken for a copy unless that file goes within {}ms", path, what, copySourceWaitMs);
     }
 
-    /** Hands a waiting copy back to the queue, once: its source went, or the wait is over. */
-    private void recheckCopy(Path path) {
-        PendingCopy pending = pendingCopies.remove(path);
-        if (pending != null) {
-            pending.recheck().cancel(false);
-            eventQueue.offer(new FileEvent(StandardWatchEventKinds.ENTRY_CREATE, pending.libraryId(), path, false, true));
+    /**
+     * A waiting copy's wait is over, unless files kept arriving or growing in its library: a mover that copies a
+     * large tree removes the source only once it is all written, which can take longer than the wait.
+     */
+    private void copyWaitEnds(Path path) {
+        synchronized (copyLock) {
+            PendingCopy pending = pendingCopies.get(path);
+            long now = System.currentTimeMillis();
+            if (pending == null || now - pending.since() < copySourceWaitMs) {
+                // Handed back already, or waiting again with a timer of its own
+                return;
+            }
+            long lastWrite = lastWriteSeen.getOrDefault(pending.libraryId(), 0L);
+            if (now - lastWrite < copySourceWaitMs && now - pending.since() < copySourceMaxWaitMs) {
+                long delay = lastWrite + copySourceWaitMs - now;
+                pendingCopies.put(path, new PendingCopy(pending.libraryId(), pending.hashes(), pending.folder(),
+                        pending.since(), scheduler.schedule(() -> copyWaitEnds(path), delay, TimeUnit.MILLISECONDS)));
+                log.debug("[FILE_CREATE] '{}' waits on as a copy: files are still arriving in its library", path);
+                return;
+            }
+            handBack(path, Wait.COPY_OVER);
         }
+    }
+
+    /** Hands a waiting copy back to the queue, once. */
+    private void handBack(Path path, Wait waited) {
+        synchronized (copyLock) {
+            PendingCopy pending = pendingCopies.remove(path);
+            if (pending != null) {
+                pending.recheck().cancel(false);
+                eventQueue.offer(new FileEvent(StandardWatchEventKinds.ENTRY_CREATE, pending.libraryId(), path,
+                        pending.folder(), waited, pending.since()));
+            }
+        }
+    }
+
+    /**
+     * Hands back at once what waits as a copy of one of these contents, whose deletion just came in: the pool now holds
+     * the book it may have been moved from. What is still a copy then waits on, as the deletions of the other files a
+     * mover copied may be about to follow.
+     */
+    private void handBackCopiesOf(Collection<String> hashes) {
+        pendingCopies.forEach((path, pending) -> {
+            if (!Collections.disjoint(pending.hashes(), hashes)) {
+                noteWrite(pending.libraryId());
+                handBack(path, Wait.COPY);
+            }
+        });
     }
 
     private void handleFileDelete(LibraryEntity library, Path path) {
@@ -234,12 +339,9 @@ public class LibraryFileEventProcessor {
                         pendingDeletionPool.addFileDeletion(path, library.getId(), bookFile, book, timer);
                         log.info("[PENDING_DELETE] Book '{}' deferred deletion (grace period {}ms)", fileName, PENDING_DELETION_GRACE_MS);
                         // A new file waiting as its copy is where it was moved: the pool now hands it the book
-                        String hash = bookFile.getCurrentHash();
-                        pendingCopies.forEach((copy, pending) -> {
-                            if (hash != null && hash.equals(pending.hash())) {
-                                recheckCopy(copy);
-                            }
-                        });
+                        if (bookFile.getCurrentHash() != null) {
+                            handBackCopiesOf(Set.of(bookFile.getCurrentHash()));
+                        }
                     }, () -> log.debug("[NOT_FOUND] BookFile for deleted path '{}' not found (likely renamed/moved)", path));
 
         } catch (Exception e) {
@@ -247,7 +349,11 @@ public class LibraryFileEventProcessor {
         }
     }
 
-    private void handleFolderCreate(LibraryEntity library, Path folderPath) {
+    /**
+     * A new folder, or one that comes back from waiting. Its new files, or the folder audiobook it is, are handled as a
+     * new file is: one that copies a stored file still there waits for that file to go.
+     */
+    private void handleFolderCreate(LibraryEntity library, Path folderPath, FileEvent event) {
         log.info("[FOLDER_CREATE] '{}'", folderPath);
 
         pendingFolderCreates.entrySet().removeIf(entry -> {
@@ -260,6 +366,10 @@ public class LibraryFileEventProcessor {
             return false;
         });
 
+        if (putOffWhileAFileIsWritten(library.getId(), folderPath, event)) {
+            return;
+        }
+
         var mode = library.getOrganizationMode() != null
                 ? library.getOrganizationMode() : LibraryOrganizationMode.AUTO_DETECT;
 
@@ -269,7 +379,7 @@ public class LibraryFileEventProcessor {
         }
 
         if (mode == LibraryOrganizationMode.BOOK_PER_FOLDER) {
-            processFilesInFolderAsOneBook(library, folderPath);
+            processFilesInFolderAsOneBook(library, folderPath, event);
             return;
         }
 
@@ -280,7 +390,7 @@ public class LibraryFileEventProcessor {
             log.info("[FOLDER_AUDIOBOOK] Detected folder-based audiobook: {} ({} audio files)",
                     folderPath.getFileName(), analysis.audioFileCount());
             try {
-                bookFileTransactionalHandler.handleNewFolderAudiobook(library.getId(), folderPath);
+                handleNewFolderAudiobook(library.getId(), folderPath, event);
                 int cleared = 0;
                 var iterator = filesFromPendingFolder.iterator();
                 while (iterator.hasNext()) {
@@ -300,6 +410,67 @@ public class LibraryFileEventProcessor {
         }
     }
 
+    /**
+     * Puts a new folder's create off while a book file in it is still being written, as when a copy into the folder
+     * outlasts the folder's debounce: the copy's finished files would be taken while the rest is still on its way, and
+     * a file half written would be read as a book of its own, with a content no stored file has. Waits as long as a
+     * single new file waits to settle; a folder that comes back from waiting as a copy is not put off.
+     *
+     * @return whether the create was put off
+     */
+    private boolean putOffWhileAFileIsWritten(long libraryId, Path folderPath, FileEvent event) {
+        if (event.waited() != Wait.NONE && event.waited() != Wait.SETTLING) {
+            return false;
+        }
+        long now = System.currentTimeMillis();
+        long since = event.waited() == Wait.SETTLING ? event.since() : now;
+        Optional<Path> written = fileBeingWritten(folderPath);
+        if (written.isEmpty()) {
+            return false;
+        }
+        if (now - since >= STABILITY_MAX_WAIT_MS) {
+            log.warn("[STABILITY] '{}' is still being written after {}ms; handling folder '{}' anyway",
+                    written.get(), STABILITY_MAX_WAIT_MS, folderPath);
+            return false;
+        }
+        noteWrite(libraryId);
+        log.info("[FOLDER_CREATE] '{}' is still being written; folder '{}' waits for it", written.get().getFileName(), folderPath);
+        scheduleFolderCreate(libraryId, folderPath, STABILITY_CHECK_INTERVAL_MS, Wait.SETTLING, since);
+        return true;
+    }
+
+    /** A book file in the folder, or below it, written to within the stability interval. */
+    private Optional<Path> fileBeingWritten(Path folderPath) {
+        long now = System.currentTimeMillis();
+        try (var stream = Files.walk(folderPath)) {
+            return stream.filter(Files::isRegularFile)
+                    .filter(p -> !isUnderIgnoredDirectory(p, folderPath))
+                    .filter(p -> isBookFile(p.getFileName().toString()))
+                    .filter(p -> {
+                        try {
+                            return now - Files.getLastModifiedTime(p).toMillis() < STABILITY_CHECK_INTERVAL_MS;
+                        } catch (IOException e) {
+                            return false;
+                        }
+                    })
+                    .findFirst();
+        } catch (IOException | UncheckedIOException e) {
+            log.debug("[STABILITY] Error walking folder '{}': {}", folderPath, e.getMessage());
+            return Optional.empty();
+        }
+    }
+
+    /** A folder audiobook, which waits as a new file does when a stored folder audiobook still there has its content. */
+    private void handleNewFolderAudiobook(long libraryId, Path folderPath, FileEvent event) {
+        if (event.waited() == Wait.COPY_OVER) {
+            bookFileTransactionalHandler.handleNewFolderAudiobook(libraryId, folderPath);
+            return;
+        }
+        bookFileTransactionalHandler.handleNewFolderAudiobookUnlessCopy(libraryId, folderPath).ifPresent(copy ->
+                waitAsCopy(libraryId, folderPath, Set.of(copy.hash()), true, waitingSince(event.waited(), event.since()),
+                        "copies the folder audiobook of book id=" + copy.bookId()));
+    }
+
     private void processFilesInFolderIndividually(LibraryEntity library, Path folderPath) {
         if (Files.exists(folderPath.resolve(".ignore"))) {
             log.debug("[SKIP] Folder has .ignore file: '{}'", folderPath);
@@ -314,7 +485,7 @@ public class LibraryFileEventProcessor {
                     .filter(this::fileHasContent)
                     .forEach(p -> {
                         try {
-                            bookFileTransactionalHandler.handleNewBookFile(library.getId(), p);
+                            handleNewFile(library.getId(), p, Wait.NONE, 0L);
                         } catch (Exception e) {
                             log.warn("[ERROR] Processing file '{}': {}", p, e.getMessage());
                         }
@@ -324,7 +495,12 @@ public class LibraryFileEventProcessor {
         }
     }
 
-    private void processFilesInFolderAsOneBook(LibraryEntity library, Path folderPath) {
+    /**
+     * BOOK_PER_FOLDER: the folder's new files as one book. A file that a stored file, still there, has the content of
+     * makes all the new files wait, so that a folder of copies of a book's files moves that book once the files they
+     * copy go, and a folder that is a copy becomes one book after the wait, as it did at once before.
+     */
+    private void processFilesInFolderAsOneBook(LibraryEntity library, Path folderPath, FileEvent event) {
         if (Files.exists(folderPath.resolve(".ignore"))) {
             log.debug("[SKIP] Folder has .ignore file: '{}'", folderPath);
             clearTrackedFilesFor(folderPath);
@@ -338,6 +514,9 @@ public class LibraryFileEventProcessor {
                     .filter(p -> !isUnderIgnoredDirectory(p, folderPath))
                     .filter(p -> isBookFile(p.getFileName().toString()))
                     .filter(this::fileHasContent)
+                    // A file a book has at its path is no new file: it would be taken for a copy of itself, and a
+                    // folder that comes back from waiting holds the files the pool gave their books meanwhile
+                    .filter(p -> !bookFilePersistenceService.isStoredByALiveBook(library, p))
                     .forEach(bookFiles::add);
         } catch (IOException e) {
             log.warn("[ERROR] Walking folder '{}': {}", folderPath, e.getMessage());
@@ -411,6 +590,23 @@ public class LibraryFileEventProcessor {
             return;
         }
 
+        if (event.waited() != Wait.COPY_OVER) {
+            Instant cutoff = Instant.now().minus(60, ChronoUnit.SECONDS);
+            Map<String, Long> copied = new LinkedHashMap<>();
+            for (Path p : unmatched) {
+                String hash = fileHashes.get(p);
+                if (hash != null) {
+                    bookFilePersistenceService.findBookCopied(hash, cutoff).ifPresent(bookId -> copied.put(hash, bookId));
+                }
+            }
+            if (!copied.isEmpty()) {
+                waitAsCopy(library.getId(), folderPath, copied.keySet(), true, waitingSince(event.waited(), event.since()),
+                        "has " + unmatched.size() + " new files, of which " + copied.size() + " copy files of books "
+                                + new TreeSet<>(copied.values()) + "; they wait together");
+                return;
+            }
+        }
+
         String libraryPath = bookFilePersistenceService.findMatchingLibraryPath(library, folderPath);
         LibraryPathEntity libPathEntity = bookFilePersistenceService.getLibraryPathEntityForFile(library, libraryPath);
 
@@ -446,7 +642,7 @@ public class LibraryFileEventProcessor {
             log.info("[FOLDER_CREATE] Processing {} tracked files individually", trackedFiles.size());
             for (Path filePath : trackedFiles) {
                 try {
-                    bookFileTransactionalHandler.handleNewBookFile(library.getId(), filePath);
+                    handleNewFile(library.getId(), filePath, Wait.NONE, 0L);
                 } catch (Exception e) {
                     log.warn("[ERROR] Processing tracked file '{}': {}", filePath, e.getMessage());
                 }
@@ -462,7 +658,7 @@ public class LibraryFileEventProcessor {
                     .filter(p -> !trackedFiles.contains(p))
                     .forEach(p -> {
                         try {
-                            bookFileTransactionalHandler.handleNewBookFile(library.getId(), p);
+                            handleNewFile(library.getId(), p, Wait.NONE, 0L);
                         } catch (Exception e) {
                             log.warn("[ERROR] Processing file '{}': {}", p, e.getMessage());
                         }
@@ -537,6 +733,14 @@ public class LibraryFileEventProcessor {
             pendingDeletionPool.addFolderDeletion(folderPath, library.getId(), booksWithFiles, timer);
             log.info("[PENDING_DELETE] {} books under '{}' deferred deletion (grace period {}ms)",
                     booksWithFiles.size(), folderPath, PENDING_DELETION_GRACE_MS);
+            // What waits as a copy of one of their files is where it was moved: the pool now hands it the book. A
+            // mover that removes a tree it copied may report the folder's deletion without those of its files.
+            handBackCopiesOf(booksWithFiles.stream()
+                    .flatMap(book -> book.getBookFiles().stream())
+                    .filter(BookFileEntity::isBookFormat)
+                    .map(BookFileEntity::getCurrentHash)
+                    .filter(Objects::nonNull)
+                    .toList());
         } catch (Exception e) {
             log.warn("[ERROR] Folder delete '{}': {}", folderPath, e.getMessage());
         }
@@ -573,11 +777,11 @@ public class LibraryFileEventProcessor {
         return BookFileExtension.fromFileName(fileName).isPresent();
     }
 
-    private void scheduleWithStabilityCheck(Path path, Runnable onStable) {
-        scheduler.schedule(() -> checkStability(path, onStable, System.currentTimeMillis()), 0, TimeUnit.MILLISECONDS);
+    private void scheduleWithStabilityCheck(long libraryId, Path path, Runnable onStable) {
+        scheduler.schedule(() -> checkStability(libraryId, path, onStable, System.currentTimeMillis()), 0, TimeUnit.MILLISECONDS);
     }
 
-    private void checkStability(Path path, Runnable onStable, long startTime) {
+    private void checkStability(long libraryId, Path path, Runnable onStable, long startTime) {
         try {
             if (!Files.exists(path)) {
                 onStable.run();
@@ -596,7 +800,8 @@ public class LibraryFileEventProcessor {
 
             if (msSinceMod < STABILITY_CHECK_INTERVAL_MS) {
                 log.debug("[STABILITY] File '{}' modified {}ms ago, rechecking in {}ms", path, msSinceMod, STABILITY_CHECK_INTERVAL_MS);
-                scheduler.schedule(() -> checkStability(path, onStable, startTime),
+                noteWrite(libraryId);
+                scheduler.schedule(() -> checkStability(libraryId, path, onStable, startTime),
                         STABILITY_CHECK_INTERVAL_MS, TimeUnit.MILLISECONDS);
             } else {
                 onStable.run();
@@ -625,12 +830,28 @@ public class LibraryFileEventProcessor {
     }
 
     /**
-     * @param copyChecked for a new file that waited as a copy of a stored file: it is handled as what it is now
+     * @param waited how the event comes back to the queue after waiting, if it does
+     * @param since  when that wait began
      */
     public record FileEvent(WatchEvent.Kind<?> eventKind, long libraryId, Path fullPath, boolean isDirectory,
-                            boolean copyChecked) {
+                            Wait waited, long since) {
         public FileEvent(WatchEvent.Kind<?> eventKind, long libraryId, Path fullPath, boolean isDirectory) {
-            this(eventKind, libraryId, fullPath, isDirectory, false);
+            this(eventKind, libraryId, fullPath, isDirectory, Wait.NONE, 0L);
         }
+    }
+
+    /** How an event comes back to the queue after waiting. */
+    public enum Wait {
+        /** It did not wait. */
+        NONE,
+        /** A folder's create, put off while a file in the folder was still being written. */
+        SETTLING,
+        /**
+         * Something new that copies a stored file still there, handed back as a deletion of its content came in. What
+         * is still such a copy waits on, from when it began to wait.
+         */
+        COPY,
+        /** The same, handed back as its wait is over: what is still such a copy is taken for a copy. */
+        COPY_OVER
     }
 }

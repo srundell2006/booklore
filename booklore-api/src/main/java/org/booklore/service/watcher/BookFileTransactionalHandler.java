@@ -190,6 +190,21 @@ public class BookFileTransactionalHandler {
 
     @Transactional
     public void handleNewFolderAudiobook(long libraryId, Path folderPath) {
+        handleFolderAudiobook(libraryId, folderPath, false);
+    }
+
+    /**
+     * As {@link #handleNewFolderAudiobook}, but a folder with the content of a stored folder audiobook that is still
+     * where it was is left alone, as {@link #handleNewBookFileUnlessCopy} leaves a file.
+     *
+     * @return the book whose folder audiobook it copies, when it left the folder alone
+     */
+    @Transactional
+    public Optional<CopyOfAStoredFile> handleNewFolderAudiobookUnlessCopy(long libraryId, Path folderPath) {
+        return handleFolderAudiobook(libraryId, folderPath, true);
+    }
+
+    private Optional<CopyOfAStoredFile> handleFolderAudiobook(long libraryId, Path folderPath, boolean leaveCopies) {
         LibraryEntity libraryEntity = libraryRepository.findById(libraryId)
                 .orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(libraryId));
 
@@ -211,7 +226,26 @@ public class BookFileTransactionalHandler {
                     folderName, match.book().bookId());
             notificationService.sendMessageToPermissions(Topic.LOG,
                     LogNotification.info("Finished processing folder audiobook: " + folderPath), Set.of(ADMIN, MANAGE_LIBRARY));
-            return;
+            return Optional.empty();
+        }
+
+        // A folder audiobook is stored with its folder's hash, so it is found moved, or copied, as a file is
+        Instant cutoff = Instant.now().minus(60, ChronoUnit.SECONDS);
+        Optional<BookFileEntity> movedFrom = bookFilePersistenceService.findMovedFile(folderHash, folderPath, cutoff);
+        if (movedFrom.isPresent()) {
+            bookFilePersistenceService.updatePathIfChanged(movedFrom.get(), libraryEntity, folderPath);
+            log.info("[CREATE] Folder audiobook '{}' recognized as moved, updated existing book's path", folderPath);
+            notificationService.sendMessageToPermissions(Topic.LOG,
+                    LogNotification.info("Finished processing folder audiobook: " + folderPath), Set.of(ADMIN, MANAGE_LIBRARY));
+            return Optional.empty();
+        }
+        if (leaveCopies) {
+            Optional<Long> copied = bookFilePersistenceService.findBookCopied(folderHash, cutoff);
+            if (copied.isPresent()) {
+                log.info("[CREATE] Folder audiobook '{}' copies that of book id={}, which is still there; left until "
+                        + "that folder had time to go, in case it was moved by copying", folderPath, copied.get());
+                return Optional.of(new CopyOfAStoredFile(copied.get(), folderHash));
+            }
         }
 
         LibraryFile libraryFile = LibraryFile.builder()
@@ -232,6 +266,7 @@ public class BookFileTransactionalHandler {
 
         notificationService.sendMessageToPermissions(Topic.LOG,
                 LogNotification.info("Finished processing folder audiobook: " + folderPath), Set.of(ADMIN, MANAGE_LIBRARY));
+        return Optional.empty();
     }
 
     /**

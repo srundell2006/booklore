@@ -8,10 +8,13 @@ import org.booklore.model.enums.BookFileType;
 import org.booklore.model.enums.LibraryOrganizationMode;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
+import org.booklore.service.file.FileFingerprint;
 import org.booklore.service.library.LibraryProcessingService;
 import org.booklore.util.FileUtils;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
@@ -20,14 +23,19 @@ import org.mockito.MockitoAnnotations;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.StandardWatchEventKinds;
+import java.nio.file.attribute.FileTime;
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
+import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.function.BooleanSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.*;
@@ -149,6 +157,7 @@ class LibraryFileEventProcessorTest {
 
             // Should not process immediately due to folder debounce
             verify(bookFileTransactionalHandler, never()).handleNewBookFile(anyLong(), any());
+            verify(bookFileTransactionalHandler, never()).handleNewBookFileUnlessCopy(anyLong(), any());
         }
 
         @Test
@@ -180,6 +189,7 @@ class LibraryFileEventProcessorTest {
             Thread.sleep(200);
 
             verify(bookFileTransactionalHandler, never()).handleNewBookFile(anyLong(), any());
+            verify(bookFileTransactionalHandler, never()).handleNewBookFileUnlessCopy(anyLong(), any());
         }
     }
 
@@ -200,7 +210,8 @@ class LibraryFileEventProcessorTest {
             // Folder debounce is 5s, then queue processing
             Thread.sleep(8000);
 
-            verify(bookFileTransactionalHandler, times(2)).handleNewBookFile(eq(1L), any());
+            verify(bookFileTransactionalHandler, times(2)).handleNewBookFileUnlessCopy(eq(1L), any());
+            verify(bookFileTransactionalHandler, never()).handleNewBookFile(anyLong(), any());
         }
 
         @Test
@@ -217,6 +228,7 @@ class LibraryFileEventProcessorTest {
             Thread.sleep(8000);
 
             verify(bookFileTransactionalHandler, never()).handleNewBookFile(anyLong(), any());
+            verify(bookFileTransactionalHandler, never()).handleNewBookFileUnlessCopy(anyLong(), any());
         }
 
         @Test
@@ -237,7 +249,8 @@ class LibraryFileEventProcessorTest {
             Thread.sleep(8000);
 
             // Only good.epub should be processed, not hidden.epub
-            verify(bookFileTransactionalHandler, times(1)).handleNewBookFile(eq(1L), any());
+            verify(bookFileTransactionalHandler, times(1)).handleNewBookFileUnlessCopy(eq(1L), any());
+            verify(bookFileTransactionalHandler).handleNewBookFileUnlessCopy(1L, folder.resolve("good.epub"));
         }
 
         @Test
@@ -253,6 +266,7 @@ class LibraryFileEventProcessorTest {
 
             verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
             verify(bookFileTransactionalHandler, never()).handleNewBookFile(anyLong(), any());
+            verify(bookFileTransactionalHandler, never()).handleNewBookFileUnlessCopy(anyLong(), any());
         }
 
         @Test
@@ -288,6 +302,7 @@ class LibraryFileEventProcessorTest {
 
                 // handleEvent should skip because path is outside library
                 verify(bookFileTransactionalHandler, never()).handleNewBookFile(anyLong(), any());
+                verify(bookFileTransactionalHandler, never()).handleNewBookFileUnlessCopy(anyLong(), any());
             } finally {
                 try (var stream = Files.walk(outsideFolder)) {
                     stream.sorted(java.util.Comparator.reverseOrder()).forEach(p -> {
@@ -342,8 +357,10 @@ class LibraryFileEventProcessorTest {
             processor.setCopySourceWaitMs(60000);
             Path copy = settledFile("moved.epub");
             Path source = tempDir.resolve("source").resolve("moved.epub");
+            // The second time, the pool holds the source's book and gives it the file
             when(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(1L, copy))
-                    .thenReturn(Optional.of(new BookFileTransactionalHandler.CopyOfAStoredFile(7L, "hash")));
+                    .thenReturn(Optional.of(new BookFileTransactionalHandler.CopyOfAStoredFile(7L, "hash")))
+                    .thenReturn(Optional.empty());
             BookEntity book = BookEntity.builder().id(7L).library(library).libraryPath(libraryPath).build();
             BookFileEntity stored = BookFileEntity.builder().id(70L).book(book).fileSubPath("source").fileName("moved.epub")
                     .currentHash("hash").isBookFormat(true).bookType(BookFileType.EPUB).build();
@@ -355,10 +372,13 @@ class LibraryFileEventProcessorTest {
             processor.processEvent(StandardWatchEventKinds.ENTRY_DELETE, 1L, source, false);
 
             verify(pendingDeletionPool, timeout(3000)).addFileDeletion(eq(source), eq(1L), eq(stored), eq(book), any());
-            // Then the pool, holding the source's book, hands it the copy
+            // Then the copy is checked again, with the pool holding the source's book
             InOrder order = inOrder(pendingDeletionPool, bookFileTransactionalHandler);
             order.verify(pendingDeletionPool, timeout(3000)).addFileDeletion(eq(source), eq(1L), eq(stored), eq(book), any());
-            order.verify(bookFileTransactionalHandler, timeout(3000)).handleNewBookFile(1L, copy);
+            order.verify(bookFileTransactionalHandler, timeout(3000)).handleNewBookFileUnlessCopy(1L, copy);
+            verify(bookFileTransactionalHandler, times(2)).handleNewBookFileUnlessCopy(1L, copy);
+            assertThat(processor.waitsAsCopy(copy)).isFalse();
+            verify(bookFileTransactionalHandler, never()).handleNewBookFile(anyLong(), any());
         }
 
         @Test
@@ -381,6 +401,258 @@ class LibraryFileEventProcessorTest {
             verify(pendingDeletionPool, timeout(3000)).addFileDeletion(eq(other), eq(1L), eq(stored), eq(book), any());
             Thread.sleep(500);
             verify(bookFileTransactionalHandler, never()).handleNewBookFile(anyLong(), any());
+            verify(bookFileTransactionalHandler, times(1)).handleNewBookFileUnlessCopy(1L, copy);
+            assertThat(processor.waitsAsCopy(copy)).isTrue();
+        }
+
+        @Test
+        void aCopyWaitsOnWhileFilesKeepArrivingInItsLibrary() throws Exception {
+            processor.setCopySourceWaitMs(1500);
+            Path copy = settledFile("copy.epub");
+            when(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(1L, copy))
+                    .thenReturn(Optional.of(new BookFileTransactionalHandler.CopyOfAStoredFile(7L, "hash")));
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, copy, false);
+            verify(bookFileTransactionalHandler, timeout(3000)).handleNewBookFileUnlessCopy(1L, copy);
+            // Files keep arriving for twice the wait, as a large copy into the library makes them
+            arriveFor(3000);
+
+            verify(bookFileTransactionalHandler, never()).handleNewBookFile(1L, copy);
+            assertThat(processor.waitsAsCopy(copy)).isTrue();
+            // Once no file arrived for the wait, it is taken for a copy
+            verify(bookFileTransactionalHandler, timeout(4000)).handleNewBookFile(1L, copy);
+        }
+
+        @Test
+        void aCopyWaitsNoLongerThanTheLongestWaitWhileFilesKeepArriving() throws Exception {
+            processor.setCopySourceWaitMs(1000);
+            processor.setCopySourceMaxWaitMs(2500);
+            Path copy = settledFile("copy.epub");
+            when(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(1L, copy))
+                    .thenReturn(Optional.of(new BookFileTransactionalHandler.CopyOfAStoredFile(7L, "hash")));
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, copy, false);
+            verify(bookFileTransactionalHandler, timeout(3000)).handleNewBookFileUnlessCopy(1L, copy);
+            arriveFor(5000);
+
+            // Taken for a copy while files were still arriving
+            verify(bookFileTransactionalHandler).handleNewBookFile(1L, copy);
+        }
+
+        /** New files arrive in the library, one every few hundred milliseconds, for this long. */
+        private void arriveFor(long millis) throws Exception {
+            long until = System.currentTimeMillis() + millis;
+            for (int i = 0; System.currentTimeMillis() < until; i++) {
+                processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, settledFile("arrived " + i + ".epub"), false);
+                Thread.sleep(300);
+            }
+        }
+    }
+
+    /**
+     * A new folder's files, or the folder audiobook it is, that copy stored files still there wait for those files to
+     * go, as a single new file does: a mover that copies a folder into a new one and removes the source after moves
+     * its books, and a copy is still a copy once the wait is over.
+     */
+    @Nested
+    class CopiesInNewFolders {
+
+        private Path settled(Path file, String content) throws IOException {
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, content);
+            Files.setLastModifiedTime(file, FileTime.from(Instant.now().minusSeconds(60)));
+            return file;
+        }
+
+        /** What the watcher sees when a stored file of book 7, with this content, is removed. */
+        private void storedFileRemoved(String subPath, String fileName, String hash) {
+            BookEntity book = BookEntity.builder().id(7L).library(library).libraryPath(libraryPath).build();
+            BookFileEntity stored = BookFileEntity.builder().id(70L).book(book).fileSubPath(subPath).fileName(fileName)
+                    .currentHash(hash).isBookFormat(true).bookType(BookFileType.EPUB).build();
+            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(1L, subPath, fileName))
+                    .thenReturn(Optional.of(stored));
+            processor.processEvent(StandardWatchEventKinds.ENTRY_DELETE, 1L, tempDir.resolve(subPath).resolve(fileName), false);
+        }
+
+        private void waitUntil(BooleanSupplier condition) throws InterruptedException {
+            long deadline = System.currentTimeMillis() + 5000;
+            while (!condition.getAsBoolean() && System.currentTimeMillis() < deadline) {
+                Thread.sleep(50);
+            }
+            assertThat(condition.getAsBoolean()).isTrue();
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = LibraryOrganizationMode.class, names = {"AUTO_DETECT", "BOOK_PER_FILE"})
+        void aFileOfANewFolderThatCopiesAStoredFileWaitsUntilItsSourceGoes(LibraryOrganizationMode mode) throws Exception {
+            library.setOrganizationMode(mode);
+            processor.setCopySourceWaitMs(60000);
+            Path folder = tempDir.resolve("Moved");
+            Path copy = settled(folder.resolve("Foundation.epub"), "content");
+            // The second time, the pool holds the source's book and gives it the file
+            when(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(1L, copy))
+                    .thenReturn(Optional.of(new BookFileTransactionalHandler.CopyOfAStoredFile(7L, "hash")))
+                    .thenReturn(Optional.empty());
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, folder, true);
+
+            verify(bookFileTransactionalHandler, timeout(8000)).handleNewBookFileUnlessCopy(1L, copy);
+            waitUntil(() -> processor.waitsAsCopy(copy));
+            storedFileRemoved("Asimov", "Foundation.epub", "hash");
+
+            verify(bookFileTransactionalHandler, timeout(3000).times(2)).handleNewBookFileUnlessCopy(1L, copy);
+            waitUntil(() -> !processor.waitsAsCopy(copy));
+            verify(bookFileTransactionalHandler, never()).handleNewBookFile(anyLong(), any());
+        }
+
+        @ParameterizedTest
+        @EnumSource(value = LibraryOrganizationMode.class, names = {"AUTO_DETECT", "BOOK_PER_FILE"})
+        void aFileOfANewFolderThatCopiesAStoredFileThatStaysIsANewFileOnceTheWaitIsOver(LibraryOrganizationMode mode) throws Exception {
+            library.setOrganizationMode(mode);
+            processor.setCopySourceWaitMs(1500);
+            Path folder = tempDir.resolve("Copies");
+            Path copy = settled(folder.resolve("Foundation.epub"), "content");
+            when(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(1L, copy))
+                    .thenReturn(Optional.of(new BookFileTransactionalHandler.CopyOfAStoredFile(7L, "hash")));
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, folder, true);
+
+            verify(bookFileTransactionalHandler, timeout(8000)).handleNewBookFileUnlessCopy(1L, copy);
+            verify(bookFileTransactionalHandler, never()).handleNewBookFile(anyLong(), any());
+            verify(bookFileTransactionalHandler, timeout(5000)).handleNewBookFile(1L, copy);
+            Thread.sleep(500);
+            verify(bookFileTransactionalHandler, times(1)).handleNewBookFile(1L, copy);
+            verify(bookFileTransactionalHandler, times(1)).handleNewBookFileUnlessCopy(1L, copy);
+        }
+
+        @Test
+        void bookPerFolder_aNewFolderWithACopyOfAStoredFileWaitsWithAllItsNewFilesAndIsOneBookOnceTheWaitIsOver() throws Exception {
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
+            processor.setCopySourceWaitMs(1500);
+            Path folder = tempDir.resolve("Copies");
+            Path copy = settled(folder.resolve("Foundation.epub"), "copied content");
+            settled(folder.resolve("Foundation.pdf"), "new content");
+            when(pendingDeletionPool.matchFolderByHashes(any())).thenReturn(Optional.empty());
+            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
+            when(bookFilePersistenceService.findBookCopied(eq(FileFingerprint.generateHash(copy)), any())).thenReturn(Optional.of(7L));
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, folder, true);
+
+            waitUntil(() -> processor.waitsAsCopy(folder));
+            verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
+            // The copied file stays where it was: the folder's new files are one new book, as before
+            verify(libraryProcessingService, timeout(5000)).processLibraryFiles(argThat(files -> files.size() == 2), eq(library));
+            assertThat(processor.waitsAsCopy(folder)).isFalse();
+        }
+
+        @Test
+        void bookPerFolder_aFolderOfCopiesMovesEachFileAsItsSourceGoesAndTheRestWaitsOn() throws Exception {
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
+            processor.setCopySourceWaitMs(60000);
+            Path folder = tempDir.resolve("Moved");
+            Path epub = settled(folder.resolve("Foundation.epub"), "epub content");
+            Path pdf = settled(folder.resolve("Foundation.pdf"), "pdf content");
+            String epubHash = FileFingerprint.generateHash(epub);
+            String pdfHash = FileFingerprint.generateHash(pdf);
+            // The sources' deletions come in one at a time: the pool then holds each file's book, and the file it gave
+            // its book is stored at its path
+            Set<String> removed = ConcurrentHashMap.newKeySet();
+            Set<String> recovered = ConcurrentHashMap.newKeySet();
+            when(pendingDeletionPool.matchFolderByHashes(any())).thenReturn(Optional.empty());
+            when(pendingDeletionPool.matchByHash(anyString())).thenAnswer(inv -> {
+                String hash = inv.getArgument(0);
+                return removed.contains(hash) && recovered.add(hash) ? Optional.of(poolMatch(hash)) : Optional.empty();
+            });
+            when(bookFilePersistenceService.isStoredByALiveBook(eq(library), any())).thenAnswer(inv ->
+                    recovered.contains(FileFingerprint.generateHash(inv.getArgument(1, Path.class))));
+            when(bookFilePersistenceService.findBookCopied(anyString(), any())).thenAnswer(inv ->
+                    removed.contains(inv.getArgument(0, String.class)) ? Optional.empty() : Optional.of(7L));
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, folder, true);
+            waitUntil(() -> processor.waitsAsCopy(folder));
+
+            removed.add(epubHash);
+            storedFileRemoved("Asimov", "Foundation.epub", epubHash);
+            verify(pendingDeletionPool, timeout(3000)).recoverBook(argThat(m -> m.file().currentHash().equals(epubHash)), eq(libraryPath),
+                    eq("Moved"), eq("Foundation.epub"), eq(epubHash));
+            // The PDF's source is still there: it waits on, from when the folder began to wait
+            waitUntil(() -> processor.waitsAsCopy(folder));
+
+            removed.add(pdfHash);
+            storedFileRemoved("Asimov", "Foundation.pdf", pdfHash);
+            verify(pendingDeletionPool, timeout(3000)).recoverBook(argThat(m -> m.file().currentHash().equals(pdfHash)), eq(libraryPath),
+                    eq("Moved"), eq("Foundation.pdf"), eq(pdfHash));
+            waitUntil(() -> !processor.waitsAsCopy(folder));
+            verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
+        }
+
+        private PendingDeletionPool.MatchResult poolMatch(String hash) {
+            var file = new PendingDeletionPool.FileSnapshot(70L, "Foundation", "Asimov", hash, false, BookFileType.EPUB);
+            var book = new PendingDeletionPool.BookSnapshot(7L, 1L, "Asimov", List.of(file));
+            return new PendingDeletionPool.MatchResult(null, book, file);
+        }
+
+        @Test
+        void aNewFolderAudiobookThatCopiesAStoredOneWaitsAndIsHandedBackWhenTheFolderHoldingItGoes() throws Exception {
+            processor.setCopySourceWaitMs(60000);
+            Path folder = tempDir.resolve("Moved").resolve("Book");
+            settled(folder.resolve("Track 01.mp3"), "first");
+            settled(folder.resolve("Track 02.mp3"), "second");
+            when(bookFileTransactionalHandler.handleNewFolderAudiobookUnlessCopy(1L, folder))
+                    .thenReturn(Optional.of(new BookFileTransactionalHandler.CopyOfAStoredFile(7L, "folder hash")))
+                    .thenReturn(Optional.empty());
+            BookEntity book = BookEntity.builder().id(7L).library(library).libraryPath(libraryPath).deleted(false)
+                    .bookFiles(new ArrayList<>(List.of(BookFileEntity.builder().id(70L).fileSubPath("Audio").fileName("Book")
+                            .folderBased(true).currentHash("folder hash").isBookFormat(true).bookType(BookFileType.AUDIOBOOK).build())))
+                    .build();
+            when(bookRepository.findBooksWithFilesUnderPath(eq(1L), eq("Audio/Book"))).thenReturn(List.of(book));
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, folder, true);
+
+            verify(bookFileTransactionalHandler, timeout(8000)).handleNewFolderAudiobookUnlessCopy(1L, folder);
+            waitUntil(() -> processor.waitsAsCopy(folder));
+            // A mover that removes the tree it copied: the folder's deletion, whose files the database does not hold
+            processor.processEvent(StandardWatchEventKinds.ENTRY_DELETE, 1L, tempDir.resolve("Audio").resolve("Book"), true);
+
+            verify(pendingDeletionPool, timeout(3000)).addFolderDeletion(any(), eq(1L), eq(List.of(book)), any());
+            verify(bookFileTransactionalHandler, timeout(3000).times(2)).handleNewFolderAudiobookUnlessCopy(1L, folder);
+            waitUntil(() -> !processor.waitsAsCopy(folder));
+            verify(bookFileTransactionalHandler, never()).handleNewFolderAudiobook(anyLong(), any());
+        }
+
+        @Test
+        void aNewFolderAudiobookThatCopiesAStoredOneThatStaysIsAFolderAudiobookOnceTheWaitIsOver() throws Exception {
+            processor.setCopySourceWaitMs(1500);
+            Path folder = tempDir.resolve("Book");
+            settled(folder.resolve("Track 01.mp3"), "first");
+            settled(folder.resolve("Track 02.mp3"), "second");
+            when(bookFileTransactionalHandler.handleNewFolderAudiobookUnlessCopy(1L, folder))
+                    .thenReturn(Optional.of(new BookFileTransactionalHandler.CopyOfAStoredFile(7L, "folder hash")));
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, folder, true);
+
+            verify(bookFileTransactionalHandler, timeout(8000)).handleNewFolderAudiobookUnlessCopy(1L, folder);
+            verify(bookFileTransactionalHandler, never()).handleNewFolderAudiobook(anyLong(), any());
+            verify(bookFileTransactionalHandler, timeout(5000)).handleNewFolderAudiobook(1L, folder);
+        }
+
+        @Test
+        void aNewFolderWaitsWhileAFileInItIsStillBeingWritten() throws Exception {
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FILE);
+            Path folder = Files.createDirectory(tempDir.resolve("Arriving"));
+            Path file = Files.writeString(folder.resolve("Big.m4b"), "the start");
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, folder, true);
+            // Still being written well past the folder's debounce, as a large file copied into a new folder is
+            long until = System.currentTimeMillis() + 8000;
+            while (System.currentTimeMillis() < until) {
+                Files.writeString(file, " and more", StandardOpenOption.APPEND);
+                Thread.sleep(500);
+            }
+
+            verify(bookFileTransactionalHandler, never()).handleNewBookFileUnlessCopy(anyLong(), any());
+            // Handled once it is written in full
+            verify(bookFileTransactionalHandler, timeout(8000)).handleNewBookFileUnlessCopy(1L, file);
         }
     }
 
@@ -504,6 +776,7 @@ class LibraryFileEventProcessorTest {
             Thread.sleep(4000);
 
             verify(bookFileTransactionalHandler, never()).handleNewBookFile(anyLong(), any());
+            verify(bookFileTransactionalHandler, never()).handleNewBookFileUnlessCopy(anyLong(), any());
         }
 
         @Test
@@ -516,6 +789,7 @@ class LibraryFileEventProcessorTest {
             Thread.sleep(4000);
 
             verify(bookFileTransactionalHandler, never()).handleNewBookFile(anyLong(), any());
+            verify(bookFileTransactionalHandler, never()).handleNewBookFileUnlessCopy(anyLong(), any());
         }
 
         @Test

@@ -765,6 +765,48 @@ class BookFileTransactionalHandlerTest {
         }
 
         @Test
+        void aStoredFolderAudiobookGoneFromItsFolderMovesToTheNewFolder() {
+            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
+            BookEntity book = buildBook(20L, false);
+            BookFileEntity folder = buildBookFile(200L, book, "audiobook", "folderhash");
+            folder.setFolderBased(true);
+            when(bookFilePersistenceService.findMovedFile(eq("folderhash"), eq(Path.of("/library/sub/audiobook")), any()))
+                    .thenReturn(Optional.of(folder));
+
+            handler.handleNewFolderAudiobook(1L, Path.of("/library/sub/audiobook"));
+
+            verify(bookFilePersistenceService).updatePathIfChanged(folder, library, Path.of("/library/sub/audiobook"));
+            verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
+            verifyNoInteractions(existingBookAttacher);
+        }
+
+        @Test
+        void aCopyOfAStoredFolderAudiobookStillThereIsLeftAloneToWait() {
+            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
+            when(bookFilePersistenceService.findMovedFile(anyString(), any(), any())).thenReturn(Optional.empty());
+            when(bookFilePersistenceService.findBookCopied(eq("folderhash"), any())).thenReturn(Optional.of(20L));
+
+            org.assertj.core.api.Assertions.assertThat(handler.handleNewFolderAudiobookUnlessCopy(1L, Path.of("/library/sub/audiobook")))
+                    .contains(new BookFileTransactionalHandler.CopyOfAStoredFile(20L, "folderhash"));
+
+            verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
+            verifyNoInteractions(existingBookAttacher);
+        }
+
+        @Test
+        void aCopyOfAStoredFolderAudiobookIsANewOneOnceItWaited() {
+            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
+            when(bookFilePersistenceService.findMovedFile(anyString(), any(), any())).thenReturn(Optional.empty());
+            when(bookFilePersistenceService.findBookCopied(eq("folderhash"), any())).thenReturn(Optional.of(20L));
+
+            handler.handleNewFolderAudiobook(1L, Path.of("/library/sub/audiobook"));
+
+            verify(bookFilePersistenceService, never()).findBookCopied(any(), any());
+            verify(libraryProcessingService).processLibraryFiles(argThat(files -> files.size() == 1
+                    && files.getFirst().isFolderBased()), eq(library));
+        }
+
+        @Test
         void noMatch_createsNewFolderAudiobook() {
             when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
 

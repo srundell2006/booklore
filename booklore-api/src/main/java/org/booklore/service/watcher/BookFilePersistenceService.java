@@ -190,6 +190,16 @@ public class BookFilePersistenceService {
                 .findFirst();
     }
 
+    /** Whether a book that is not deleted has a file stored at exactly this path. */
+    @Transactional(readOnly = true)
+    public boolean isStoredByALiveBook(LibraryEntity libraryEntity, Path path) {
+        LibraryPathEntity libraryPath = getLibraryPathEntityForFile(libraryEntity, findMatchingLibraryPath(libraryEntity, path));
+        return findBookFileByLibraryPathSubPathAndFileName(libraryPath.getId(),
+                FileUtils.getRelativeSubPath(libraryPath.getPath(), path), path.getFileName().toString())
+                .filter(file -> !Boolean.TRUE.equals(file.getBook().getDeleted()))
+                .isPresent();
+    }
+
     @Transactional
     public void deleteBookFile(BookFileEntity bookFile) {
         bookFileRepository.delete(bookFile);
