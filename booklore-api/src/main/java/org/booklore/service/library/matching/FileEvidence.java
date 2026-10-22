@@ -69,11 +69,6 @@ public record FileEvidence(Long libraryPathId,
         return new FileEvidence(libraryPathId, safeFolder, fileName, audio, context, readings, seriesReadings);
     }
 
-    /** The reading the folders support: what new-book grouping groups the file by. */
-    public TitleKey chosen() {
-        return readings.getFirst();
-    }
-
     /** Library path and sub path: the folder a file is in, for a rule that one book is claimed from one folder only. */
     public String folderKey() {
         return libraryPathId + ":" + folder;

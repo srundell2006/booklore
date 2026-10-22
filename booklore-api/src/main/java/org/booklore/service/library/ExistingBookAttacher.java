@@ -50,8 +50,9 @@ public class ExistingBookAttacher {
 
     /**
      * Attaches the files to the book, if it is still the book they were matched to: not deleted since, and for a
-     * fileless match still without files. Files not attached are left as they are, new to the next scan. An error
-     * reading a file rolls the book's transaction back and is thrown to the caller.
+     * fileless match still without files. Files not attached are left to the caller: the rescan leaves them new to the
+     * next scan, the watcher makes a new book of them. An error reading a file rolls the book's transaction back and
+     * is thrown to the caller.
      *
      * @return the files attached
      */
@@ -64,13 +65,15 @@ public class ExistingBookAttacher {
     private List<LibraryFile> attachToBook(long bookId, Kind kind, List<LibraryFile> files) {
         BookEntity book = bookRepository.findById(bookId).orElse(null);
         if (book == null || Boolean.TRUE.equals(book.getDeleted())) {
-            log.warn("book#{} is gone or deleted since {} was matched to it; left for the next scan", bookId, names(files));
+            log.warn("book#{} is gone or deleted since {} was matched to it; not attached", bookId, names(files));
+            filelessShells.notFileless(bookId);
             return List.of();
         }
         String label = label(book);
         boolean wasFileless = !book.hasFiles();
         if (kind == Kind.FILELESS && !wasFileless) {
-            log.info("{} got a file since {} was matched to it as a fileless book; left for the next scan", label, names(files));
+            log.info("{} got a file since {} was matched to it as a fileless book; not attached", label, names(files));
+            filelessShells.notFileless(bookId);
             return List.of();
         }
         boolean hadCover = book.getBookCoverHash() != null || book.getAudiobookCoverHash() != null;
@@ -92,7 +95,7 @@ public class ExistingBookAttacher {
             } else {
                 coverAsForANewBook(book, attached);
             }
-            filelessShells.claimed(book.getLibrary().getId(), bookId);
+            filelessShells.notFileless(bookId);
         } else {
             crossTypeCovers(book, primaryTypeBefore, attached);
         }

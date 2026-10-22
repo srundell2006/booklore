@@ -1,16 +1,17 @@
 package org.booklore.service.watcher;
 
 import org.booklore.model.entity.*;
-import org.booklore.model.enums.BookFileExtension;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.model.enums.LibraryOrganizationMode;
-import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
 import org.booklore.service.NotificationService;
 import org.booklore.service.file.FileFingerprint;
+import org.booklore.repository.projection.FilelessBookRow;
+import org.booklore.service.library.ExistingBookAttacher;
+import org.booklore.service.library.FilelessShells;
 import org.booklore.service.library.LibraryProcessingService;
-import org.booklore.util.BookFileGroupingUtils;
+import org.booklore.service.library.matching.ExistingBookMatcher.Kind;
 import org.booklore.util.FileUtils;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -24,7 +25,6 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
-import java.util.Map;
 import java.util.Optional;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.ScheduledFuture;
@@ -39,15 +39,16 @@ class BookFileTransactionalHandlerTest {
     @Mock private NotificationService notificationService;
     @Mock private LibraryRepository libraryRepository;
     @Mock private BookRepository bookRepository;
-    @Mock private BookAdditionalFileRepository bookAdditionalFileRepository;
     @Mock private PendingDeletionPool pendingDeletionPool;
+    @Mock private ExistingBookAttacher existingBookAttacher;
+
+    private FilelessShells filelessShells;
 
     private BookFileTransactionalHandler handler;
 
     private AutoCloseable mocks;
     private MockedStatic<FileFingerprint> fingerprintMock;
     private MockedStatic<FileUtils> fileUtilsMock;
-    private MockedStatic<BookFileGroupingUtils> groupingMock;
 
     private LibraryEntity library;
     private LibraryPathEntity libraryPath;
@@ -55,21 +56,21 @@ class BookFileTransactionalHandlerTest {
     @BeforeEach
     void setUp() {
         mocks = MockitoAnnotations.openMocks(this);
+        // The real per-library index of fileless books, read through the mocked repository
+        filelessShells = new FilelessShells(bookRepository);
         handler = new BookFileTransactionalHandler(
                 bookFilePersistenceService, libraryProcessingService, notificationService,
-                libraryRepository, bookRepository, bookAdditionalFileRepository, pendingDeletionPool);
+                libraryRepository, bookRepository, pendingDeletionPool, filelessShells, existingBookAttacher);
 
         fingerprintMock = mockStatic(FileFingerprint.class);
         fileUtilsMock = mockStatic(FileUtils.class);
-        groupingMock = mockStatic(BookFileGroupingUtils.class);
 
         fingerprintMock.when(() -> FileFingerprint.generateHash(any(Path.class))).thenReturn("hash123");
         fingerprintMock.when(() -> FileFingerprint.generateFolderHash(any(Path.class))).thenReturn("folderhash");
         fileUtilsMock.when(() -> FileUtils.getRelativeSubPath(anyString(), any(Path.class))).thenReturn("sub");
         fileUtilsMock.when(() -> FileUtils.getFileSizeInKb(any(Path.class))).thenReturn(100L);
         fileUtilsMock.when(() -> FileUtils.getFolderSizeInKb(any(Path.class))).thenReturn(500L);
-        groupingMock.when(() -> BookFileGroupingUtils.extractGroupingKey(anyString())).thenAnswer(inv -> inv.getArgument(0, String.class).toLowerCase());
-        groupingMock.when(() -> BookFileGroupingUtils.calculateSimilarity(anyString(), anyString())).thenReturn(0.5);
+        when(existingBookAttacher.attach(anyLong(), any(), anyList())).thenAnswer(inv -> inv.getArgument(2));
 
         libraryPath = new LibraryPathEntity();
         libraryPath.setId(1L);
@@ -89,7 +90,6 @@ class BookFileTransactionalHandlerTest {
 
     @AfterEach
     void tearDown() throws Exception {
-        groupingMock.close();
         fileUtilsMock.close();
         fingerprintMock.close();
         mocks.close();
@@ -116,6 +116,20 @@ class BookFileTransactionalHandlerTest {
                 .isBookFormat(true)
                 .bookType(BookFileType.EPUB)
                 .build();
+    }
+
+    /** The file's sub path below the library path, as FileUtils.getRelativeSubPath gives it. */
+    private void subPath(String subPath) {
+        fileUtilsMock.when(() -> FileUtils.getRelativeSubPath(anyString(), any(Path.class))).thenReturn(subPath);
+    }
+
+    private FilelessBookRow shellRow(long bookId, Long libraryPathId, String title, String... authors) {
+        return new FilelessBookRow(bookId, libraryPathId, false, null, null, title, null, null,
+                authors.length == 0 ? null : authors[0]);
+    }
+
+    private void shells(FilelessBookRow... rows) {
+        when(bookRepository.findFilelessBookRowsByLibraryId(1L)).thenReturn(List.of(rows));
     }
 
     private PendingDeletionPool.FileSnapshot fileSnap(Long id, String fileName, String hash) {
@@ -225,73 +239,105 @@ class BookFileTransactionalHandlerTest {
             verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
         }
 
-        @Test
-        void autoDetect_fuzzyMatchesFilelessBook() {
-            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), anyString(), anyString()))
+        private void noEarlierMatch() {
+            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), any(), anyString()))
                     .thenReturn(Optional.empty());
             when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
             when(bookRepository.findByCurrentHashIncludingRecentlyDeleted(anyString(), any())).thenReturn(Optional.empty());
-
-            BookMetadataEntity metadata = BookMetadataEntity.builder().bookId(10L).build();
-            // Use reflection or setter to set title
-            metadata.setTitle("test");
-            BookEntity filelessBook = buildBook(10L, false);
-            filelessBook.setMetadata(metadata);
-            filelessBook.setLibraryPath(libraryPath);
-
-            when(bookRepository.findFilelessBooksByLibraryId(1L)).thenReturn(List.of(filelessBook));
-            groupingMock.when(() -> BookFileGroupingUtils.calculateSimilarity(anyString(), anyString())).thenReturn(0.90);
-
-            handler.handleNewBookFile(1L, Path.of("/library/sub/test.epub"));
-
-            verify(bookAdditionalFileRepository).save(any(BookFileEntity.class));
         }
 
         @Test
-        void autoDetect_noFilelessMatch_matchesExistingBookByGroupingKey() {
-            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), anyString(), anyString()))
-                    .thenReturn(Optional.empty());
-            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
-            when(bookRepository.findByCurrentHashIncludingRecentlyDeleted(anyString(), any())).thenReturn(Optional.empty());
-            when(bookRepository.findFilelessBooksByLibraryId(1L)).thenReturn(List.of());
+        void autoDetect_attachesToTheFilelessBookWhoseTitleAndAuthorAgree() {
+            // Changed: the file attached to an author-less fileless book "test" because a static mock made every
+            // title score 0.90; now the title must be equal and an author must agree with the folders
+            subPath("W/Weir, Andy");
+            noEarlierMatch();
+            shells(shellRow(10L, null, "The Martian", "Andy Weir"));
 
-            BookEntity existingBook = buildBook(20L, false);
-            BookFileEntity primaryFile = buildBookFile(200L, existingBook, "test.epub", "otherhash");
-            existingBook.setBookFiles(new ArrayList<>(List.of(primaryFile)));
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "sub")).thenReturn(List.of(existingBook));
+            handler.handleNewBookFile(1L, Path.of("/library/W/Weir, Andy/The Martian.epub"));
 
-            // Both files should produce the same grouping key (extension stripped)
-            groupingMock.when(() -> BookFileGroupingUtils.extractGroupingKey("test.pdf")).thenReturn("test");
-            groupingMock.when(() -> BookFileGroupingUtils.extractGroupingKey("test.epub")).thenReturn("test");
-
-            handler.handleNewBookFile(1L, Path.of("/library/sub/test.pdf"));
-
-            verify(bookAdditionalFileRepository).save(any(BookFileEntity.class));
+            verify(existingBookAttacher).attach(eq(10L), eq(Kind.FILELESS), argThat(files ->
+                    files.size() == 1 && files.getFirst().getFileName().equals("The Martian.epub")
+                            && files.getFirst().getFileSubPath().equals("W/Weir, Andy")));
+            verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
         }
 
         @Test
-        void autoDetect_noMatch_createsNewBook() {
-            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), anyString(), anyString()))
-                    .thenReturn(Optional.empty());
-            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
-            when(bookRepository.findByCurrentHashIncludingRecentlyDeleted(anyString(), any())).thenReturn(Optional.empty());
-            when(bookRepository.findFilelessBooksByLibraryId(1L)).thenReturn(List.of());
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(anyLong(), anyString())).thenReturn(List.of());
+        void autoDetect_aFilelessBookOfAnotherAuthorOrWithoutAuthorsIsNotMatched() {
+            // Production: "Assignment - Karachi" and four more went to "Assignment" by I. Christie
+            subPath("A/Aarons, Edward S");
+            noEarlierMatch();
+            shells(shellRow(10L, null, "Assignment", "I. Christie"), shellRow(11L, null, "Assignment - Karachi"));
 
-            handler.handleNewBookFile(1L, Path.of("/library/sub/test.epub"));
+            handler.handleNewBookFile(1L, Path.of("/library/A/Aarons, Edward S/Assignment - Karachi.epub"));
+
+            verifyNoInteractions(existingBookAttacher);
+            verify(libraryProcessingService).processLibraryFiles(anyList(), eq(library));
+        }
+
+        @Test
+        void autoDetect_theFilelessBooksAreReadOncePerLibraryAndAClaimedOneIsNotOfferedAgain() {
+            // Before, every event read every fileless book of the library, and lazily its metadata
+            noEarlierMatch();
+            shells(shellRow(10L, null, "Survival", "Ann Smith"));
+            when(existingBookAttacher.attach(anyLong(), any(), anyList())).thenAnswer(inv -> {
+                filelessShells.notFileless(inv.getArgument(0));
+                return inv.getArgument(2);
+            });
+
+            subPath("S/Smith, Ann");
+            handler.handleNewBookFile(1L, Path.of("/library/S/Smith, Ann/Survival.epub"));
+            subPath("S/Smith, Ann/Series");
+            handler.handleNewBookFile(1L, Path.of("/library/S/Smith, Ann/Series/Survival.epub"));
+
+            // The watcher takes files one at a time: the first folder wins, and the second file is a new book
+            verify(existingBookAttacher, times(1)).attach(eq(10L), eq(Kind.FILELESS), anyList());
+            verify(libraryProcessingService, times(1)).processLibraryFiles(argThat(files ->
+                    files.getFirst().getFileSubPath().equals("S/Smith, Ann/Series")), eq(library));
+            verify(bookRepository, times(1)).findFilelessBookRowsByLibraryId(1L);
+        }
+
+        @Test
+        void autoDetect_aBookThatChangedSinceItWasReadMakesTheFileANewBook() {
+            subPath("W/Weir, Andy");
+            noEarlierMatch();
+            shells(shellRow(10L, null, "The Martian", "Andy Weir"));
+            when(existingBookAttacher.attach(anyLong(), any(), anyList())).thenReturn(List.of());
+
+            handler.handleNewBookFile(1L, Path.of("/library/W/Weir, Andy/The Martian.epub"));
 
             verify(libraryProcessingService).processLibraryFiles(anyList(), eq(library));
         }
 
         @Test
-        void bookPerFile_neverAttachesToExistingBooks() {
-            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FILE);
+        void autoDetect_noFilelessMatch_matchesExistingBookByTitle() {
+            noEarlierMatch();
+            BookEntity existingBook = buildBook(20L, false);
+            BookFileEntity primaryFile = buildBookFile(200L, existingBook, "test.epub", "otherhash");
+            existingBook.setBookFiles(new ArrayList<>(List.of(primaryFile)));
+            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "sub")).thenReturn(List.of(existingBook));
 
-            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), anyString(), anyString()))
-                    .thenReturn(Optional.empty());
-            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
-            when(bookRepository.findByCurrentHashIncludingRecentlyDeleted(anyString(), any())).thenReturn(Optional.empty());
-            when(bookRepository.findFilelessBooksByLibraryId(1L)).thenReturn(List.of());
+            handler.handleNewBookFile(1L, Path.of("/library/sub/test.pdf"));
+
+            verify(existingBookAttacher).attach(eq(20L), eq(Kind.SAME_FOLDER), anyList());
+            verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
+        }
+
+        @Test
+        void autoDetect_noMatch_createsNewBook() {
+            noEarlierMatch();
+            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(anyLong(), anyString())).thenReturn(List.of());
+
+            handler.handleNewBookFile(1L, Path.of("/library/sub/test.epub"));
+
+            verify(libraryProcessingService).processLibraryFiles(anyList(), eq(library));
+            verifyNoInteractions(existingBookAttacher);
+        }
+
+        @Test
+        void bookPerFile_neverAttachesToBooksWithFiles() {
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FILE);
+            noEarlierMatch();
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/test.epub"));
 
@@ -300,14 +346,22 @@ class BookFileTransactionalHandlerTest {
         }
 
         @Test
+        void bookPerFile_matchesAFilelessBookByTitleAndAuthor() {
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FILE);
+            subPath("Frank Herbert");
+            noEarlierMatch();
+            shells(shellRow(10L, 1L, "Dune", "Frank Herbert"), shellRow(11L, 1L, "different title", "Frank Herbert"));
+
+            handler.handleNewBookFile(1L, Path.of("/library/Frank Herbert/Dune.epub"));
+
+            verify(existingBookAttacher).attach(eq(10L), eq(Kind.FILELESS), anyList());
+            verify(bookRepository, never()).findAllByLibraryPathIdAndFileSubPath(anyLong(), anyString());
+        }
+
+        @Test
         void bookPerFolder_attachesToBookInSameFolder() {
             library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
-
-            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), anyString(), anyString()))
-                    .thenReturn(Optional.empty());
-            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
-            when(bookRepository.findByCurrentHashIncludingRecentlyDeleted(anyString(), any())).thenReturn(Optional.empty());
-            when(bookRepository.findFilelessBooksByLibraryId(1L)).thenReturn(List.of());
+            noEarlierMatch();
 
             BookEntity existingBook = buildBook(20L, false);
             BookFileEntity primaryFile = buildBookFile(200L, existingBook, "existing.epub", "otherhash");
@@ -316,19 +370,14 @@ class BookFileTransactionalHandlerTest {
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/new.pdf"));
 
-            verify(bookAdditionalFileRepository).save(any(BookFileEntity.class));
+            verify(existingBookAttacher).attach(eq(20L), eq(Kind.SAME_FOLDER), anyList());
             verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
         }
 
         @Test
         void bookPerFolder_noBookInFolder_createsNew() {
             library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
-
-            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), anyString(), anyString()))
-                    .thenReturn(Optional.empty());
-            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
-            when(bookRepository.findByCurrentHashIncludingRecentlyDeleted(anyString(), any())).thenReturn(Optional.empty());
-            when(bookRepository.findFilelessBooksByLibraryId(1L)).thenReturn(List.of());
+            noEarlierMatch();
             when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "sub")).thenReturn(List.of());
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/test.epub"));
@@ -339,13 +388,8 @@ class BookFileTransactionalHandlerTest {
         @Test
         void bookPerFolder_audiobook_findsNearestAncestorWithEbook() {
             library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
-            fileUtilsMock.when(() -> FileUtils.getRelativeSubPath(anyString(), any(Path.class))).thenReturn("author/book/audio");
-
-            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), anyString(), anyString()))
-                    .thenReturn(Optional.empty());
-            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
-            when(bookRepository.findByCurrentHashIncludingRecentlyDeleted(anyString(), any())).thenReturn(Optional.empty());
-            when(bookRepository.findFilelessBooksByLibraryId(1L)).thenReturn(List.of());
+            subPath("author/book/audio");
+            noEarlierMatch();
             when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "author/book/audio")).thenReturn(List.of());
 
             BookEntity parentBook = buildBook(30L, false);
@@ -356,62 +400,26 @@ class BookFileTransactionalHandlerTest {
 
             handler.handleNewBookFile(1L, Path.of("/library/author/book/audio/chapter1.m4b"));
 
-            verify(bookAdditionalFileRepository).save(any(BookFileEntity.class));
-        }
-
-        @Test
-        void bookPerFile_exactFilelessMatch_usesExactNotFuzzy() {
-            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FILE);
-
-            BookMetadataEntity metadata = BookMetadataEntity.builder().bookId(10L).build();
-            metadata.setTitle("different title");
-            BookEntity filelessBook = buildBook(10L, false);
-            filelessBook.setMetadata(metadata);
-            filelessBook.setLibraryPath(libraryPath);
-
-            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), anyString(), anyString()))
-                    .thenReturn(Optional.empty());
-            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
-            when(bookRepository.findByCurrentHashIncludingRecentlyDeleted(anyString(), any())).thenReturn(Optional.empty());
-            when(bookRepository.findFilelessBooksByLibraryId(1L)).thenReturn(List.of(filelessBook));
-            // extractGroupingKey returns lowercase of input, so "different title" != "test.epub"
-            // No exact match -> should create new
-            handler.handleNewBookFile(1L, Path.of("/library/sub/test.epub"));
-
-            verify(libraryProcessingService).processLibraryFiles(anyList(), eq(library));
+            verify(existingBookAttacher).attach(eq(30L), eq(Kind.SAME_FOLDER), anyList());
         }
 
         @Test
         void autoDetect_filelessBook_wrongLibraryPath_skipped() {
-            LibraryPathEntity otherPath = new LibraryPathEntity();
-            otherPath.setId(99L);
-            otherPath.setPath("/other");
-
-            BookMetadataEntity metadata = BookMetadataEntity.builder().bookId(10L).build();
-            metadata.setTitle("test");
-            BookEntity filelessBook = buildBook(10L, false);
-            filelessBook.setMetadata(metadata);
-            filelessBook.setLibraryPath(otherPath);
-
-            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), anyString(), anyString()))
-                    .thenReturn(Optional.empty());
-            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
-            when(bookRepository.findByCurrentHashIncludingRecentlyDeleted(anyString(), any())).thenReturn(Optional.empty());
-            when(bookRepository.findFilelessBooksByLibraryId(1L)).thenReturn(List.of(filelessBook));
+            subPath("W/Weir, Andy");
+            noEarlierMatch();
+            shells(shellRow(10L, 99L, "The Martian", "Andy Weir"));
             when(bookRepository.findAllByLibraryPathIdAndFileSubPath(anyLong(), anyString())).thenReturn(List.of());
 
-            handler.handleNewBookFile(1L, Path.of("/library/sub/test.epub"));
+            handler.handleNewBookFile(1L, Path.of("/library/W/Weir, Andy/The Martian.epub"));
 
+            verifyNoInteractions(existingBookAttacher);
             verify(libraryProcessingService).processLibraryFiles(anyList(), eq(library));
         }
 
         @Test
-        void autoDetect_fuzzyMatchBook_returnsHighSimilarity() {
-            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), anyString(), anyString()))
-                    .thenReturn(Optional.empty());
-            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
-            when(bookRepository.findByCurrentHashIncludingRecentlyDeleted(anyString(), any())).thenReturn(Optional.empty());
-            when(bookRepository.findFilelessBooksByLibraryId(1L)).thenReturn(List.of());
+        void autoDetect_attachesToTheBookOfTheSameTitleAmongSeveral() {
+            // Changed: the static mock of the similarity score is gone; the names decide
+            noEarlierMatch();
 
             BookEntity book1 = buildBook(20L, false);
             BookFileEntity file1 = buildBookFile(200L, book1, "mybook.epub", "h1");
@@ -422,44 +430,42 @@ class BookFileTransactionalHandlerTest {
             book2.setBookFiles(new ArrayList<>(List.of(file2)));
 
             when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "sub")).thenReturn(List.of(book1, book2));
-            // Make groupingKey different to avoid exact match, but similarity high for book1
-            groupingMock.when(() -> BookFileGroupingUtils.extractGroupingKey("mybook.pdf")).thenReturn("mybook");
-            groupingMock.when(() -> BookFileGroupingUtils.extractGroupingKey("mybook.epub")).thenReturn("mybook");
-            groupingMock.when(() -> BookFileGroupingUtils.extractGroupingKey("otherbook.epub")).thenReturn("otherbook");
-            groupingMock.when(() -> BookFileGroupingUtils.calculateSimilarity("mybook", "mybook")).thenReturn(1.0);
-            groupingMock.when(() -> BookFileGroupingUtils.calculateSimilarity("mybook", "otherbook")).thenReturn(0.3);
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/mybook.pdf"));
 
-            // Should attach to book1 via exact grouping key match
-            verify(bookAdditionalFileRepository).save(any(BookFileEntity.class));
+            verify(existingBookAttacher).attach(eq(20L), eq(Kind.SAME_FOLDER), anyList());
+        }
+
+        @Test
+        void autoDetect_anotherVolumeInTheFolderIsANewBook() {
+            // Production: "A Dangerous Universe 3" went to the book of "A Dangerous Universe 5.epub" at 0.95
+            noEarlierMatch();
+            BookEntity five = buildBook(20L, false);
+            five.setBookFiles(new ArrayList<>(List.of(buildBookFile(200L, five, "A Dangerous Universe 5.epub", "h1"))));
+            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "sub")).thenReturn(List.of(five));
+
+            handler.handleNewBookFile(1L, Path.of("/library/sub/A Dangerous Universe 3.epub"));
+
+            verifyNoInteractions(existingBookAttacher);
+            verify(libraryProcessingService).processLibraryFiles(anyList(), eq(library));
         }
 
         @Test
         void nullSubPath_autoDetect_createsNewBook() {
             fileUtilsMock.when(() -> FileUtils.getRelativeSubPath(anyString(), any(Path.class))).thenReturn(null);
-
-            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), any(), anyString()))
-                    .thenReturn(Optional.empty());
-            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
-            when(bookRepository.findByCurrentHashIncludingRecentlyDeleted(anyString(), any())).thenReturn(Optional.empty());
-            when(bookRepository.findFilelessBooksByLibraryId(1L)).thenReturn(List.of());
+            noEarlierMatch();
 
             handler.handleNewBookFile(1L, Path.of("/library/test.epub"));
 
-            // findMatchingBook returns null for null subPath, so new book is created
+            verify(bookRepository, never()).findAllByLibraryPathIdAndFileSubPath(anyLong(), any());
             verify(libraryProcessingService).processLibraryFiles(anyList(), eq(library));
         }
 
         @Test
-        void bookPerFolder_multipleActiveBooksInFolder_picksOneWithMostFiles() {
+        void bookPerFolder_severalBooksInTheFolderAttachToNone() {
+            // Changed: the book with the most files took the new file; with several books there, that is a guess
             library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
-
-            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), anyString(), anyString()))
-                    .thenReturn(Optional.empty());
-            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
-            when(bookRepository.findByCurrentHashIncludingRecentlyDeleted(anyString(), any())).thenReturn(Optional.empty());
-            when(bookRepository.findFilelessBooksByLibraryId(1L)).thenReturn(List.of());
+            noEarlierMatch();
 
             BookEntity smallBook = buildBook(20L, false);
             BookFileEntity f1 = buildBookFile(200L, smallBook, "a.epub", "h1");
@@ -474,8 +480,8 @@ class BookFileTransactionalHandlerTest {
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/new.mobi"));
 
-            // Should attach to bigBook (more files)
-            verify(bookAdditionalFileRepository).save(argThat(bf -> bf.getBook().equals(bigBook)));
+            verifyNoInteractions(existingBookAttacher);
+            verify(libraryProcessingService).processLibraryFiles(anyList(), eq(library));
         }
 
         @Test
@@ -497,27 +503,19 @@ class BookFileTransactionalHandlerTest {
         @Test
         void nullOrganizationMode_defaultsToAutoDetect() {
             library.setOrganizationMode(null);
-
-            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), anyString(), anyString()))
-                    .thenReturn(Optional.empty());
-            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
-            when(bookRepository.findByCurrentHashIncludingRecentlyDeleted(anyString(), any())).thenReturn(Optional.empty());
-            when(bookRepository.findFilelessBooksByLibraryId(1L)).thenReturn(List.of());
+            noEarlierMatch();
             when(bookRepository.findAllByLibraryPathIdAndFileSubPath(anyLong(), anyString())).thenReturn(List.of());
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/test.epub"));
 
-            // AUTO_DETECT path: findFilelessBooksByLibraryId is called (fuzzy matching)
-            verify(bookRepository).findFilelessBooksByLibraryId(1L);
+            // AUTO_DETECT: the folder's books, then the fileless books
+            verify(bookRepository).findAllByLibraryPathIdAndFileSubPath(1L, "sub");
+            verify(bookRepository).findFilelessBookRowsByLibraryId(1L);
         }
 
         @Test
         void autoDetect_deletedBookInDirectory_skipped() {
-            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), anyString(), anyString()))
-                    .thenReturn(Optional.empty());
-            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
-            when(bookRepository.findByCurrentHashIncludingRecentlyDeleted(anyString(), any())).thenReturn(Optional.empty());
-            when(bookRepository.findFilelessBooksByLibraryId(1L)).thenReturn(List.of());
+            noEarlierMatch();
 
             BookEntity deletedBook = buildBook(20L, true);
             BookFileEntity file = buildBookFile(200L, deletedBook, "test.epub", "h1");
@@ -527,28 +525,6 @@ class BookFileTransactionalHandlerTest {
             handler.handleNewBookFile(1L, Path.of("/library/sub/test.pdf"));
 
             verify(libraryProcessingService).processLibraryFiles(anyList(), eq(library));
-        }
-
-        @Test
-        void filelessBook_nullLibraryPath_setsLibraryPath() {
-            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), anyString(), anyString()))
-                    .thenReturn(Optional.empty());
-            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
-            when(bookRepository.findByCurrentHashIncludingRecentlyDeleted(anyString(), any())).thenReturn(Optional.empty());
-
-            BookMetadataEntity metadata = BookMetadataEntity.builder().bookId(10L).build();
-            metadata.setTitle("test");
-            BookEntity filelessBook = buildBook(10L, false);
-            filelessBook.setMetadata(metadata);
-            filelessBook.setLibraryPath(null);
-
-            when(bookRepository.findFilelessBooksByLibraryId(1L)).thenReturn(List.of(filelessBook));
-            groupingMock.when(() -> BookFileGroupingUtils.calculateSimilarity(anyString(), anyString())).thenReturn(0.90);
-
-            handler.handleNewBookFile(1L, Path.of("/library/sub/test.epub"));
-
-            verify(bookRepository).save(argThat(b -> b.getLibraryPath() != null));
-            verify(bookAdditionalFileRepository).save(any(BookFileEntity.class));
         }
     }
 
@@ -578,21 +554,32 @@ class BookFileTransactionalHandlerTest {
 
         @Test
         void matchingBook_autoAttachesFolderAudiobook() {
+            // Changed: the folder audiobook is compared with the books of the folder that holds it, as a rescan
+            // does, not with those of the folder above that, and by its name, not through a static mock of the key
             when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
 
             BookEntity existingBook = buildBook(20L, false);
             BookFileEntity primaryFile = buildBookFile(200L, existingBook, "audiobook.epub", "h1");
             existingBook.setBookFiles(new ArrayList<>(List.of(primaryFile)));
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(anyLong(), anyString())).thenReturn(List.of(existingBook));
-
-            // Folder name "audiobook" and file "audiobook.epub" should produce same grouping key
-            groupingMock.when(() -> BookFileGroupingUtils.extractGroupingKey("audiobook")).thenReturn("audiobook");
-            groupingMock.when(() -> BookFileGroupingUtils.extractGroupingKey("audiobook.epub")).thenReturn("audiobook");
+            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "sub")).thenReturn(List.of(existingBook));
 
             handler.handleNewFolderAudiobook(1L, Path.of("/library/sub/audiobook"));
 
-            verify(bookAdditionalFileRepository).save(argThat(bf ->
-                    bf.isFolderBased() && bf.getBookType() == BookFileType.AUDIOBOOK));
+            verify(existingBookAttacher).attach(eq(20L), eq(Kind.SAME_FOLDER), argThat(files -> files.size() == 1
+                    && files.getFirst().isFolderBased() && files.getFirst().getBookFileType() == BookFileType.AUDIOBOOK
+                    && files.getFirst().getFileName().equals("audiobook")));
+            verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
+        }
+
+        @Test
+        void aFolderAudiobookCanBeTheFileOfAFilelessBook() {
+            subPath("W/Weir, Andy");
+            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
+            shells(shellRow(10L, null, "The Martian", "Andy Weir"));
+
+            handler.handleNewFolderAudiobook(1L, Path.of("/library/W/Weir, Andy/The Martian"));
+
+            verify(existingBookAttacher).attach(eq(10L), eq(Kind.FILELESS), anyList());
         }
 
         @Test

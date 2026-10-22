@@ -57,10 +57,6 @@ public final class FilelessShellIndex {
         }
     }
 
-    public synchronized boolean contains(long bookId) {
-        return byId.containsKey(bookId);
-    }
-
     public synchronized int size() {
         return byId.size();
     }

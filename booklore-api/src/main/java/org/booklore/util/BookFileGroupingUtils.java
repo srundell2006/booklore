@@ -2,7 +2,6 @@ package org.booklore.util;
 
 import lombok.experimental.UtilityClass;
 import lombok.extern.slf4j.Slf4j;
-import org.apache.commons.text.similarity.FuzzyScore;
 import org.booklore.model.dto.settings.LibraryFile;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.service.library.matching.NameContext;
@@ -17,117 +16,11 @@ import java.util.Locale;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeSet;
-import java.util.regex.Matcher;
-import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
 @UtilityClass
 @Slf4j
 public class BookFileGroupingUtils {
-
-    private static final Pattern FORMAT_INDICATOR_PATTERN = Pattern.compile(
-            "[\\(\\[]\\s*(?:pdf|epub|mobi|azw3?|fb2|cbz|cbr|cb7|m4b|m4a|mp3|audiobook|audio)\\s*[\\)\\]]",
-            Pattern.CASE_INSENSITIVE
-    );
-
-    private static final Pattern WHITESPACE_PATTERN = Pattern.compile("\\s+");
-
-    private static final Pattern UNDERSCORE_PATTERN = Pattern.compile("_");
-
-    // Matches trailing author: " - J.R.R. Tolkien", " - George Orwell", " - J.K. Rowling"
-    private static final Pattern TRAILING_AUTHOR_PATTERN = Pattern.compile(
-            "\\s*[-–—]\\s+(?:[A-Z](?:\\.[A-Z])*\\.\\s+)?[A-Z][a-z]+(?:\\s+[A-Z](?:\\.[A-Z])*\\.?)?(?:\\s+[A-Z][a-z]+)*\\s*$"
-    );
-
-    // Matches ", The" or ", A" or ", An" at end
-    private static final Pattern ARTICLE_SUFFIX_PATTERN = Pattern.compile(
-            ",\\s*(The|A|An)\\s*$", Pattern.CASE_INSENSITIVE
-    );
-
-    // Part/disc indicators: "(part 1)", "[pt 2]", "- disc 1", "cd 3", etc.
-    // "part" requires brackets or dash prefix to avoid conflict with series labels ("Part 1" = series entry).
-    // "pt", "disc", "disk", "cd" are unambiguous and can be matched bare.
-    private static final Pattern PART_INDICATOR_PATTERN = Pattern.compile(
-            "\\s*(?:" +
-                    "[\\(\\[]\\s*(?:part|pt|dis[ck]|cd)\\s*\\d+\\s*[\\)\\]]" +
-                    "|-\\s*(?:part|pt|dis[ck]|cd)\\s*\\d+" +
-                    "|(?:pt|dis[ck]|cd)\\s*\\d+" +
-                    ")\\s*$",
-            Pattern.CASE_INSENSITIVE
-    );
-
-    // Known book file extensions - only strip these, not arbitrary dots in folder names
-    private static final Set<String> KNOWN_EXTENSIONS = Set.of(
-            "pdf", "epub", "cbz", "cbr", "cb7", "mobi", "azw3", "azw", "fb2",
-            "m4b", "m4a", "mp3"
-    );
-
-    /**
-     * The key the rescan's and the watcher's matching against existing books still compare names by, until that
-     * matching moves to {@link TitleKey}. New files are no longer grouped by it: it drops any " - Capitalised Words"
-     * as an author, so "Assignment - Karachi" and "KING - Las Vegas Bad Boys" read as "assignment" and "king".
-     */
-    @Deprecated
-    public String extractGroupingKey(String fileName) {
-        if (fileName == null || fileName.isEmpty()) {
-            return "";
-        }
-
-        int lastDot = fileName.lastIndexOf('.');
-        String baseName;
-        if (lastDot > 0) {
-            String possibleExtension = fileName.substring(lastDot + 1).toLowerCase();
-            // Only strip if it's a known book file extension
-            if (KNOWN_EXTENSIONS.contains(possibleExtension)) {
-                baseName = fileName.substring(0, lastDot);
-            } else {
-                baseName = fileName;
-            }
-        } else {
-            baseName = fileName;
-        }
-
-        // Convert underscores to spaces
-        baseName = UNDERSCORE_PATTERN.matcher(baseName).replaceAll(" ");
-
-        baseName = FORMAT_INDICATOR_PATTERN.matcher(baseName).replaceAll("");
-
-        // Strip part/disc indicators (e.g., "(part 1)", "[cd 2]")
-        baseName = PART_INDICATOR_PATTERN.matcher(baseName).replaceAll("");
-
-        // Strip trailing author names (after dash)
-        baseName = TRAILING_AUTHOR_PATTERN.matcher(baseName).replaceAll("");
-
-        // Reposition articles ("Hobbit, The" -> "The Hobbit")
-        Matcher articleMatcher = ARTICLE_SUFFIX_PATTERN.matcher(baseName);
-        if (articleMatcher.find()) {
-            String article = articleMatcher.group(1);
-            baseName = article + " " + baseName.substring(0, articleMatcher.start());
-        }
-
-        baseName = WHITESPACE_PATTERN.matcher(baseName.trim()).replaceAll(" ");
-
-        return baseName.toLowerCase().trim();
-    }
-
-    /**
-     * The prefix-biased fuzzy score the rescan's and the watcher's matching against existing books still use, until
-     * that matching moves to {@link TitleKey}. It must not decide whether two names are one book: names that differ
-     * only in a volume number score above 0.9 ("A Dangerous Universe 3" and "5").
-     */
-    @Deprecated
-    public double calculateSimilarity(String s1, String s2) {
-        if (s1 == null || s2 == null || s1.isEmpty() || s2.isEmpty()) {
-            return 0;
-        }
-        FuzzyScore fuzzyScore = new FuzzyScore(Locale.ENGLISH);
-        int score = fuzzyScore.fuzzyScore(s1, s2);
-        int maxScore = Math.max(
-                fuzzyScore.fuzzyScore(s1, s1),
-                fuzzyScore.fuzzyScore(s2, s2)
-        );
-        return maxScore > 0 ? (double) score / maxScore : 0;
-    }
 
     /**
      * Groups new files into books, folder by folder (library path and sub path, the root included). Files of one

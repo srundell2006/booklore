@@ -44,12 +44,9 @@ public class FilelessShells {
         return watcherIndexes.get(libraryId, this::load);
     }
 
-    /** Takes a book that just got a file out of the watcher's index. */
-    public void claimed(long libraryId, long bookId) {
-        FilelessShellIndex index = watcherIndexes.getIfPresent(libraryId);
-        if (index != null) {
-            index.remove(bookId);
-        }
+    /** Takes a book that got a file, or is gone, out of the watcher's index. */
+    public void notFileless(long bookId) {
+        watcherIndexes.asMap().values().forEach(index -> index.remove(bookId));
     }
 
     /** One candidate per book, from rows that come one per author, in book id order. */

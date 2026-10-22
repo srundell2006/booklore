@@ -123,32 +123,6 @@ class BookFileGroupingUtilsTest {
         assertThat(groups.values().iterator().next()).containsExactlyInAnyOrder(epub, pdf);
     }
 
-    @Test
-    void calculateSimilarity_shouldReturnHighScoreForSimilarStrings() {
-        double similarity = BookFileGroupingUtils.calculateSimilarity("the hobbit", "the hobit");
-        assertThat(similarity).isGreaterThan(0.8);
-    }
-
-    @Test
-    void calculateSimilarity_shouldReturnPerfectScoreForIdenticalStrings() {
-        double similarity = BookFileGroupingUtils.calculateSimilarity("the hobbit", "the hobbit");
-        assertThat(similarity).isEqualTo(1.0);
-    }
-
-    @Test
-    void calculateSimilarity_shouldReturnLowScoreForDifferentStrings() {
-        double similarity = BookFileGroupingUtils.calculateSimilarity("the hobbit", "1984");
-        assertThat(similarity).isLessThan(0.5);
-    }
-
-    @Test
-    void calculateSimilarity_shouldHandleNullAndEmptyStrings() {
-        assertThat(BookFileGroupingUtils.calculateSimilarity(null, "test")).isEqualTo(0);
-        assertThat(BookFileGroupingUtils.calculateSimilarity("test", null)).isEqualTo(0);
-        assertThat(BookFileGroupingUtils.calculateSimilarity("", "test")).isEqualTo(0);
-        assertThat(BookFileGroupingUtils.calculateSimilarity("test", "")).isEqualTo(0);
-    }
-
     // ========== Grouping Tests ==========
 
     @Test

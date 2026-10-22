@@ -150,6 +150,8 @@ class ExistingBookAttacherTest {
         verify(bookAdditionalFileRepository, never()).save(any());
         verifyNoInteractions(fileAsBookProcessor);
         assertThat(book.getBookFiles()).hasSize(1);
+        // The watcher's index must not offer it again
+        verify(filelessShells).notFileless(14L);
     }
 
     @Test
@@ -164,7 +166,7 @@ class ExistingBookAttacherTest {
         assertThat(shell.getLibraryPath()).isSameAs(path);
         assertThat(shell.getBookCoverHash()).isEqualTo("curated");
         verifyNoInteractions(fileAsBookProcessor);
-        verify(filelessShells).claimed(1L, 15L);
+        verify(filelessShells).notFileless(15L);
     }
 
     @Test

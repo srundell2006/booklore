@@ -31,6 +31,7 @@ import org.booklore.service.library.importer.ParallelBookImporter;
 import org.booklore.service.metadata.BookMetadataUpdater;
 import org.booklore.service.reader.FfprobeService;
 import org.booklore.service.task.TaskCronService;
+import org.booklore.service.watcher.BookFileTransactionalHandler;
 import jakarta.persistence.EntityManagerFactory;
 import org.hibernate.SessionFactory;
 import org.hibernate.stat.Statistics;
@@ -163,6 +164,8 @@ class LibraryScalingIT {
     private BookMetadataUpdater bookMetadataUpdater;
     @Autowired
     private BookFileDetachmentService bookFileDetachmentService;
+    @Autowired
+    private BookFileTransactionalHandler bookFileTransactionalHandler;
 
     @TempDir
     Path tempDir;
@@ -224,7 +227,29 @@ class LibraryScalingIT {
         assertSameCost(empty, large);
     }
 
+    @Test
+    void attachingAWatchedFileToAFilelessBookCostsTheSameAmongManyFilelessBooks() throws Exception {
+        // The seeded books have no files. The watcher read every fileless book of the library for every new file,
+        // and then each one's metadata on its own
+        Cost empty = attachWatchedFile(library("watcher-shell-empty", 0));
+        Cost large = attachWatchedFile(library("watcher-shell-large", EXISTING));
+
+        assertSameCost(empty, large);
+    }
+
     // ========== the measured work ==========
+
+    private Cost attachWatchedFile(Library library) throws IOException {
+        long shellId = filelessBook(library, "The Martian", "Andy Weir");
+        Path file = Files.createDirectories(library.root().resolve("W/Weir, Andy")).resolve("The Martian.epub");
+        Files.writeString(file, "The Martian of " + library.entity().getName());
+
+        Cost cost = measure(() -> bookFileTransactionalHandler.handleNewBookFile(library.entity().getId(), file));
+
+        Integer files = tx.execute(status -> bookRepository.findById(shellId).orElseThrow().getBookFiles().size());
+        assertThat(files).isEqualTo(1);
+        return cost;
+    }
 
     private Cost importInParallel(Library library) throws IOException {
         Map<String, List<LibraryFile>> groups = new LinkedHashMap<>();
@@ -394,6 +419,23 @@ class LibraryScalingIT {
             metadata.getMoods().add(moodRepository.findByName(library.mood()).orElseThrow());
             metadata.setTags(new HashSet<>());
             metadata.getTags().add(tagRepository.findByName(library.tag()).orElseThrow());
+            book.setMetadata(metadata);
+            return bookRepository.save(book).getId();
+        });
+    }
+
+    /** A book without files, with its own cover, by an author of its own. */
+    private long filelessBook(Library library, String title, String author) {
+        return tx.execute(status -> {
+            BookEntity book = BookEntity.builder()
+                    .library(libraryRepository.findById(library.entity().getId()).orElseThrow())
+                    .addedOn(Instant.now())
+                    .bookCoverHash("cover")
+                    .build();
+            BookMetadataEntity metadata = BookMetadataEntity.builder().book(book).title(title).build();
+            metadata.setAuthors(new ArrayList<>());
+            metadata.getAuthors().add(authorRepository.findByName(author)
+                    .orElseGet(() -> authorRepository.save(AuthorEntity.builder().name(author).build())));
             book.setMetadata(metadata);
             return bookRepository.save(book).getId();
         });

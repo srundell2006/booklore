@@ -298,7 +298,7 @@ class LibraryScanRepositoryTest {
         }
 
         @Test
-        void filelessBookRowsAreTheGroupByQuerysBooksOneRowPerAuthorInOneStatement() {
+        void filelessBookRowsComeOneRowPerAuthorInOneStatement() {
             AuthorEntity weir = author("Andy Weir");
             AuthorEntity leigh = author("Lora Leigh");
             AuthorEntity rowan = author("Michelle Rowan");
@@ -325,14 +325,12 @@ class LibraryScanRepositoryTest {
             metadata(book(otherLibrary, null, false), "Elsewhere", weir);
             clear();
 
-            List<Long> expected = bookRepository.findFilelessBooksByLibraryId(library.getId()).stream()
-                    .map(BookEntity::getId).sorted().toList();
-            clear();
-
             List<FilelessBookRow> rows = bookRepository.findFilelessBookRowsByLibraryId(library.getId());
 
             assertThat(statistics().getPrepareStatementCount()).isEqualTo(1);
-            assertThat(rows.stream().map(FilelessBookRow::bookId).distinct().toList()).containsExactlyElementsOf(expected);
+            // In book id order; a book with only a non-book file has a file all the same
+            assertThat(rows.stream().map(FilelessBookRow::bookId).distinct().toList())
+                    .containsExactly(physical.getId(), anthology.getId(), withoutAuthors.getId());
             assertThat(rows).extracting(FilelessBookRow::bookId, FilelessBookRow::libraryPathId, FilelessBookRow::physical,
                             FilelessBookRow::bookCoverHash, FilelessBookRow::audiobookCoverHash, FilelessBookRow::title,
                             FilelessBookRow::subtitle, FilelessBookRow::seriesNumber, FilelessBookRow::authorName)

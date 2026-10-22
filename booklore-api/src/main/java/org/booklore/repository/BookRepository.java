@@ -213,16 +213,6 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     @Query("SELECT COUNT(b) FROM BookEntity b WHERE b.library.id = :libraryId")
     long countIncludingDeletedByLibraryId(@Param("libraryId") Long libraryId);
 
-    @Query("""
-            SELECT b FROM BookEntity b
-            LEFT JOIN b.bookFiles bf
-            WHERE b.library.id = :libraryId
-            AND (b.deleted IS NULL OR b.deleted = false)
-            GROUP BY b
-            HAVING COUNT(bf) = 0
-            """)
-    List<BookEntity> findFilelessBooksByLibraryId(@Param("libraryId") Long libraryId);
-
     /**
      * The fileless books of the library that are not deleted, one row per author, in book id order: what matching a
      * new file against them needs, for the whole library in one query and without entities. Books without metadata
