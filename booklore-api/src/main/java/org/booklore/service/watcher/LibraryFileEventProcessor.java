@@ -2,6 +2,7 @@ package org.booklore.service.watcher;
 
 import org.booklore.exception.ApiError;
 import org.booklore.model.entity.BookEntity;
+import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.dto.settings.LibraryFile;
@@ -342,10 +343,10 @@ public class LibraryFileEventProcessor {
                     continue;
                 }
 
-                Optional<BookEntity> existing = bookRepository.findByCurrentHashIncludingRecentlyDeleted(
-                        hash, Instant.now().minus(60, ChronoUnit.SECONDS));
-                if (existing.isPresent()) {
-                    bookFilePersistenceService.updatePathIfChanged(existing.get(), library, p, hash);
+                Optional<BookFileEntity> movedFrom = bookFilePersistenceService.findMovedFile(
+                        hash, p, Instant.now().minus(60, ChronoUnit.SECONDS));
+                if (movedFrom.isPresent()) {
+                    bookFilePersistenceService.updatePathIfChanged(movedFrom.get(), library, p);
                     log.info("[FOLDER_CREATE] File '{}' recognized as moved file, updated existing book's path", p);
                 } else {
                     unmatched.add(p);

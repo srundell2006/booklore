@@ -117,9 +117,9 @@ public class BookFileTransactionalHandler {
             return;
         }
 
-        Optional<BookEntity> existingByHash = bookRepository.findByCurrentHashIncludingRecentlyDeleted(currentHash, Instant.now().minus(60, ChronoUnit.SECONDS));
-        if (existingByHash.isPresent()) {
-            bookFilePersistenceService.updatePathIfChanged(existingByHash.get(), libraryEntity, path, currentHash);
+        Optional<BookFileEntity> movedFrom = bookFilePersistenceService.findMovedFile(currentHash, path, Instant.now().minus(60, ChronoUnit.SECONDS));
+        if (movedFrom.isPresent()) {
+            bookFilePersistenceService.updatePathIfChanged(movedFrom.get(), libraryEntity, path);
             log.info("[CREATE] File '{}' recognized as moved file, updated existing book's path", filePath);
             notificationService.sendMessageToPermissions(Topic.LOG, LogNotification.info("Finished processing file: " + filePath), Set.of(ADMIN, MANAGE_LIBRARY));
             return;

@@ -31,12 +31,13 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     Optional<BookEntity> findByCurrentHash(@Param("currentHash") String currentHash);
 
     /**
-     * The book with a book format of this hash that is not deleted, or was deleted after the cutoff. Looks the hash up
-     * in alt_format_current_hash, which holds the current hash of exactly the book formats and is indexed, where
-     * current_hash is not: the watcher runs this for every new file.
+     * The book formats of this hash, with their books, of books not deleted or deleted after the cutoff. Looks the hash
+     * up in alt_format_current_hash, which holds the current hash of exactly the book formats and is indexed, where
+     * current_hash is not: the watcher runs this for every new file. Files of several books can have one content, as
+     * a copy of a file does, so this is a list.
      */
-    @Query("SELECT b FROM BookEntity b JOIN FETCH b.bookFiles bf WHERE bf.altFormatCurrentHash = :currentHash AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false OR b.deletedAt > :cutoff)")
-    Optional<BookEntity> findByCurrentHashIncludingRecentlyDeleted(@Param("currentHash") String currentHash, @Param("cutoff") Instant cutoff);
+    @Query("SELECT bf FROM BookFileEntity bf JOIN FETCH bf.book b WHERE bf.altFormatCurrentHash = :currentHash AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false OR b.deletedAt > :cutoff)")
+    List<BookFileEntity> findBookFormatsByCurrentHashIncludingRecentlyDeleted(@Param("currentHash") String currentHash, @Param("cutoff") Instant cutoff);
 
     Optional<BookEntity> findByBookCoverHash(String bookCoverHash);
 

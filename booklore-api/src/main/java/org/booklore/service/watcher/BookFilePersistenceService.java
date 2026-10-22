@@ -18,6 +18,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Instant;
@@ -37,18 +38,66 @@ public class BookFilePersistenceService {
     private final NotificationService notificationService;
     private final BookMapper bookMapper;
 
+    /**
+     * The stored file that a new file at {@code path} with this hash was moved from, if it was moved and not copied.
+     * That is the one book format of this hash, of the one book with a book format of it that is not deleted or was
+     * deleted after the cutoff, which is no longer at its old path, or whose book was deleted after the cutoff (its
+     * file went first, then came back). A copy leaves its original where it was, and files of one content in two
+     * books do not say which of them moved: the new file is then a file of its own, matched as any other new file.
+     * Rebinding the original to a copy instead moved the book off a file that is still there, and as the copy and the
+     * original both had the hash, the lookup threw for two books.
+     */
+    @Transactional(readOnly = true)
+    public Optional<BookFileEntity> findMovedFile(String hash, Path path, Instant cutoff) {
+        List<BookFileEntity> withHash = bookRepository.findBookFormatsByCurrentHashIncludingRecentlyDeleted(hash, cutoff);
+        if (withHash.isEmpty()) {
+            return Optional.empty();
+        }
+        Set<Long> books = new TreeSet<>();
+        withHash.forEach(file -> books.add(file.getBook().getId()));
+        if (books.size() > 1) {
+            log.info("[FILE_CREATE] '{}' has the content of files of books {}; taken for a new file, not a move", path, books);
+            return Optional.empty();
+        }
+        List<BookFileEntity> moved = withHash.stream()
+                .filter(file -> Boolean.TRUE.equals(file.getBook().getDeleted()) || isGone(file))
+                .toList();
+        if (moved.isEmpty()) {
+            log.info("[FILE_CREATE] '{}' has the content of a file of book id={} that is still where it was; taken for a copy",
+                    path, books.iterator().next());
+            return Optional.empty();
+        }
+        if (moved.size() > 1) {
+            log.info("[FILE_CREATE] '{}' has the content of {} files of book id={} that are gone; taken for a new file",
+                    path, moved.size(), books.iterator().next());
+            return Optional.empty();
+        }
+        return Optional.of(moved.getFirst());
+    }
+
+    /** Whether a stored file is no longer at its path. One whose path cannot be told is taken as still there. */
+    private static boolean isGone(BookFileEntity file) {
+        try {
+            return !Files.exists(file.getFullFilePath());
+        } catch (IllegalStateException e) {
+            return false;
+        }
+    }
+
+    /**
+     * Moves a stored file, found by {@link #findMovedFile}, to the path a file with its content appeared at, and
+     * undeletes its book.
+     */
     @Transactional
-    public void updatePathIfChanged(BookEntity book, LibraryEntity libraryEntity, Path path, String currentHash) {
+    public void updatePathIfChanged(BookFileEntity movedFile, LibraryEntity libraryEntity, Path path) {
+        BookFileEntity matchedFile = bookFileRepository.findById(movedFile.getId())
+                .orElseThrow(() -> new IllegalStateException("BookFile not found: " + movedFile.getId()));
+        BookEntity book = matchedFile.getBook();
         LibraryPathEntity newLibraryPath = getLibraryPathEntityForFile(libraryEntity, path.toString());
         newLibraryPath = entityManager.merge(newLibraryPath);
 
         String newSubPath = FileUtils.getRelativeSubPath(newLibraryPath.getPath(), path);
         String newFileName = path.getFileName().toString();
-
-        BookFileEntity matchedFile = book.getBookFiles().stream()
-                .filter(bf -> currentHash.equals(bf.getCurrentHash()))
-                .findFirst()
-                .orElse(book.getPrimaryBookFile());
 
         boolean changed = !Objects.equals(newSubPath, matchedFile.getFileSubPath())
                 || !Objects.equals(newFileName, matchedFile.getFileName())
@@ -62,9 +111,9 @@ public class BookFilePersistenceService {
             book.setDeleted(Boolean.FALSE);
             book.setDeletedAt(null);
             bookRepository.save(book);
-            log.info("[FILE_CREATE] Updated path / undeleted existing book with hash '{}': '{}'", currentHash, path);
+            log.info("[FILE_CREATE] Updated path / undeleted existing book with hash '{}': '{}'", matchedFile.getCurrentHash(), path);
         } else {
-            log.info("[FILE_CREATE] Book with hash '{}' already exists at same path. Skipping update.", currentHash);
+            log.info("[FILE_CREATE] Book with hash '{}' already exists at same path. Skipping update.", matchedFile.getCurrentHash());
         }
         notificationService.sendMessageToPermissions(Topic.BOOK_ADD, bookMapper.toBookWithDescription(book, false), Set.of(ADMIN, MANAGE_LIBRARY));
     }

@@ -383,27 +383,41 @@ class LibraryScanRepositoryTest {
         }
 
         @Test
-        void findsTheBookWhoseBookFormatHasTheHashIfItIsNotDeletedOrWasDeletedAfterTheCutoff() {
+        void findsTheBookFormatsWithTheHashOfBooksNotDeletedOrDeletedAfterTheCutoff() {
             Instant now = Instant.now();
             BookEntity live = book(library, libraryPath, false);
             BookFileEntity liveEpub = hashed(live, "Live.epub", "h-live", true);
+            hashed(live, "Other.epub", "h-other", true);
             hashed(live, "cover.jpg", "h-cover", false);
             BookEntity justDeleted = deletedAt(now.minusSeconds(10));
-            hashed(justDeleted, "Just Deleted.epub", "h-recent", true);
+            BookFileEntity justDeletedEpub = hashed(justDeleted, "Just Deleted.epub", "h-recent", true);
             BookEntity longDeleted = deletedAt(now.minusSeconds(600));
             hashed(longDeleted, "Long Deleted.epub", "h-old", true);
             clear();
 
             Instant cutoff = now.minusSeconds(60);
-            assertThat(bookRepository.findByCurrentHashIncludingRecentlyDeleted("h-live", cutoff)).get()
-                    .satisfies(book -> {
-                        assertThat(book.getId()).isEqualTo(live.getId());
-                        assertThat(book.getBookFiles()).extracting(BookFileEntity::getId).containsExactly(liveEpub.getId());
+            assertThat(bookRepository.findBookFormatsByCurrentHashIncludingRecentlyDeleted("h-live", cutoff)).singleElement()
+                    .satisfies(file -> {
+                        assertThat(file.getId()).isEqualTo(liveEpub.getId());
+                        assertThat(file.getBook().getId()).isEqualTo(live.getId());
                     });
-            assertThat(bookRepository.findByCurrentHashIncludingRecentlyDeleted("h-recent", cutoff)).get()
-                    .extracting(BookEntity::getId).isEqualTo(justDeleted.getId());
-            assertThat(bookRepository.findByCurrentHashIncludingRecentlyDeleted("h-old", cutoff)).isEmpty();
-            assertThat(bookRepository.findByCurrentHashIncludingRecentlyDeleted("h-cover", cutoff)).isEmpty();
+            assertThat(bookRepository.findBookFormatsByCurrentHashIncludingRecentlyDeleted("h-recent", cutoff))
+                    .extracting(BookFileEntity::getId).containsExactly(justDeletedEpub.getId());
+            assertThat(bookRepository.findBookFormatsByCurrentHashIncludingRecentlyDeleted("h-old", cutoff)).isEmpty();
+            assertThat(bookRepository.findBookFormatsByCurrentHashIncludingRecentlyDeleted("h-cover", cutoff)).isEmpty();
+        }
+
+        @Test
+        void filesOfSeveralBooksWithTheHashAllComeBack() {
+            // A copy has its original's hash; the Optional this was threw for two books
+            BookEntity original = book(library, libraryPath, false);
+            BookFileEntity originalEpub = hashed(original, "Title.epub", "h-same", true);
+            BookEntity copy = book(library, libraryPath, false);
+            BookFileEntity copyEpub = hashed(copy, "Title (1).epub", "h-same", true);
+            clear();
+
+            assertThat(bookRepository.findBookFormatsByCurrentHashIncludingRecentlyDeleted("h-same", Instant.now().minusSeconds(60)))
+                    .extracting(BookFileEntity::getId).containsExactlyInAnyOrder(originalEpub.getId(), copyEpub.getId());
         }
 
         @Test

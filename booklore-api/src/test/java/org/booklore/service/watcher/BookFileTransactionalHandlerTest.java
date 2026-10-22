@@ -230,20 +230,36 @@ class BookFileTransactionalHandlerTest {
             when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
 
             BookEntity existingBook = buildBook(10L, false);
-            when(bookRepository.findByCurrentHashIncludingRecentlyDeleted(eq("hash123"), any()))
-                    .thenReturn(Optional.of(existingBook));
+            BookFileEntity movedFile = buildBookFile(100L, existingBook, "moved.epub", "hash123");
+            when(bookFilePersistenceService.findMovedFile(eq("hash123"), eq(Path.of("/library/sub/test.epub")), any()))
+                    .thenReturn(Optional.of(movedFile));
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/test.epub"));
 
-            verify(bookFilePersistenceService).updatePathIfChanged(eq(existingBook), eq(library), any(), eq("hash123"));
+            verify(bookFilePersistenceService).updatePathIfChanged(eq(movedFile), eq(library), eq(Path.of("/library/sub/test.epub")));
             verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
+        }
+
+        @Test
+        void noExistingAtPath_aCopyOfAStoredFileIsANewFile() {
+            // Before, the book of the file with this hash was moved to the copy, off its file that is still there
+            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), anyString(), anyString()))
+                    .thenReturn(Optional.empty());
+            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
+            when(bookFilePersistenceService.findMovedFile(eq("hash123"), any(), any())).thenReturn(Optional.empty());
+            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(anyLong(), anyString())).thenReturn(List.of());
+
+            handler.handleNewBookFile(1L, Path.of("/library/sub/test.epub"));
+
+            verify(bookFilePersistenceService, never()).updatePathIfChanged(any(), any(), any());
+            verify(libraryProcessingService).processLibraryFiles(anyList(), eq(library));
         }
 
         private void noEarlierMatch() {
             when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), any(), anyString()))
                     .thenReturn(Optional.empty());
             when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
-            when(bookRepository.findByCurrentHashIncludingRecentlyDeleted(anyString(), any())).thenReturn(Optional.empty());
+            when(bookFilePersistenceService.findMovedFile(anyString(), any(), any())).thenReturn(Optional.empty());
         }
 
         @Test
