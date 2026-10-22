@@ -49,19 +49,16 @@ public class BookFilePersistenceService {
      */
     @Transactional(readOnly = true)
     public Optional<BookFileEntity> findMovedFile(String hash, Path path, Instant cutoff) {
-        List<BookFileEntity> withHash = bookRepository.findBookFormatsByCurrentHashIncludingRecentlyDeleted(hash, cutoff);
-        if (withHash.isEmpty()) {
+        Origin origin = origin(hash, cutoff);
+        Set<Long> books = origin.books();
+        if (books.isEmpty()) {
             return Optional.empty();
         }
-        Set<Long> books = new TreeSet<>();
-        withHash.forEach(file -> books.add(file.getBook().getId()));
         if (books.size() > 1) {
             log.info("[FILE_CREATE] '{}' has the content of files of books {}; taken for a new file, not a move", path, books);
             return Optional.empty();
         }
-        List<BookFileEntity> moved = withHash.stream()
-                .filter(file -> Boolean.TRUE.equals(file.getBook().getDeleted()) || isGone(file))
-                .toList();
+        List<BookFileEntity> moved = origin.moved();
         if (moved.isEmpty()) {
             log.info("[FILE_CREATE] '{}' has the content of a file of book id={} that is still where it was; taken for a copy",
                     path, books.iterator().next());
@@ -73,6 +70,36 @@ public class BookFilePersistenceService {
             return Optional.empty();
         }
         return Optional.of(moved.getFirst());
+    }
+
+    /**
+     * The book whose file a new file with this hash copies, when {@link #findMovedFile} takes it for a copy: the one
+     * book with book formats of this hash, not deleted, whose files of it are all still where they were. A mover that
+     * writes the destination before it removes the source makes such a copy until the source is gone.
+     */
+    @Transactional(readOnly = true)
+    public Optional<Long> findBookCopied(String hash, Instant cutoff) {
+        Origin origin = origin(hash, cutoff);
+        return origin.books().size() == 1 && origin.moved().isEmpty()
+                ? Optional.of(origin.books().iterator().next())
+                : Optional.empty();
+    }
+
+    /**
+     * @param books the books with a book format of the hash, not deleted or deleted after the cutoff
+     * @param moved those book formats that are gone from their path, or whose book was deleted
+     */
+    private record Origin(Set<Long> books, List<BookFileEntity> moved) {
+    }
+
+    private Origin origin(String hash, Instant cutoff) {
+        List<BookFileEntity> withHash = bookRepository.findBookFormatsByCurrentHashIncludingRecentlyDeleted(hash, cutoff);
+        Set<Long> books = new TreeSet<>();
+        withHash.forEach(file -> books.add(file.getBook().getId()));
+        List<BookFileEntity> moved = withHash.stream()
+                .filter(file -> Boolean.TRUE.equals(file.getBook().getDeleted()) || isGone(file))
+                .toList();
+        return new Origin(books, moved);
     }
 
     /** Whether a stored file is no longer at its path. One whose path cannot be told is taken as still there. */

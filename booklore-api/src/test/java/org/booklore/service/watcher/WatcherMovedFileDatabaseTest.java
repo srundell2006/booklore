@@ -31,10 +31,13 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardWatchEventKinds;
+import java.nio.file.attribute.FileTime;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
 import java.util.Map;
+import java.util.concurrent.ScheduledFuture;
 import java.util.zip.ZipEntry;
 import java.util.zip.ZipOutputStream;
 
@@ -46,7 +49,8 @@ import static org.mockito.Mockito.mock;
  * A watched file with the content of a stored file is that file moved only when the stored file is gone from its path
  * and no other book has a file of that content. A copy, such as "Title (1).epub" next to or away from its original,
  * is a new file; before, the original's book was moved onto the copy, and two books holding the content made the
- * lookup throw. Runs the watcher's handler against H2 with the files on disk.
+ * lookup throw. A copy whose stored file goes soon after, as a mover that writes the destination before it removes
+ * the source leaves it, is that file moved. Runs the watcher against H2 with the files on disk.
  */
 @SpringBootTest(classes = {
         BookloreApplication.class
@@ -98,6 +102,12 @@ class WatcherMovedFileDatabaseTest {
     private BookAdditionalFileRepository bookAdditionalFileRepository;
     @Autowired
     private BookFileTransactionalHandler bookFileTransactionalHandler;
+    @Autowired
+    private BookFilePersistenceService bookFilePersistenceService;
+    @Autowired
+    private PendingDeletionPool pendingDeletionPool;
+    @Autowired
+    private LibraryFileEventProcessor libraryFileEventProcessor;
 
     @TempDir
     Path tempDir;
@@ -180,7 +190,99 @@ class WatcherMovedFileDatabaseTest {
         assertThat(bookIdAt("Inbox", "Foundation.epub")).isNotNull().isNotIn(first, second);
     }
 
+    @Test
+    void aFileMovedByCopyingThenRemovingTheSourceMovesTheBook() throws Exception {
+        // A mover that writes the destination first and removes the source after the watcher saw the destination
+        Path source = epub(root.resolve("Asimov/Foundation.epub"), "Foundation " + System.nanoTime());
+        long bookId = storedBook("Asimov", "Foundation.epub", FileFingerprint.generateHash(source), false);
+        Path destination = Files.copy(source, Files.createDirectories(root.resolve("Moved")).resolve("Foundation.epub"));
+        // Written a while ago, so the watcher does not wait for it to settle
+        Files.setLastModifiedTime(destination, FileTime.from(Instant.now().minusSeconds(60)));
+
+        libraryFileEventProcessor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, library.getId(), destination, false);
+        // The watcher has seen the destination, with its source still there
+        Thread.sleep(2000);
+        assertThat(bookIdAt("Moved", "Foundation.epub")).isNull();
+        Files.delete(source);
+        libraryFileEventProcessor.processEvent(StandardWatchEventKinds.ENTRY_DELETE, library.getId(), source, false);
+
+        long deadline = System.currentTimeMillis() + 15000;
+        while (!pathsOf(bookId).equals(List.of("Moved/Foundation.epub")) && System.currentTimeMillis() < deadline) {
+            Thread.sleep(100);
+        }
+        assertThat(pathsOf(bookId)).containsExactly("Moved/Foundation.epub");
+        assertThat(bookRepository.countIncludingDeletedByLibraryId(library.getId())).isEqualTo(1);
+        // Past the grace period of the source's deletion, the book is still there
+        Thread.sleep(9000);
+        tx.executeWithoutResult(status -> assertThat(bookRepository.findById(bookId).orElseThrow().getDeleted()).isFalse());
+    }
+
+    @Test
+    void aCopyWaitingForItsSourceToGoTakesTheBookWhenTheSourcesDeletionComesIn() throws IOException {
+        Path source = epub(root.resolve("Asimov/Foundation.epub"), "Foundation " + System.nanoTime());
+        long bookId = storedBook("Asimov", "Foundation.epub", FileFingerprint.generateHash(source), false);
+        Path destination = Files.copy(source, Files.createDirectories(root.resolve("Moved")).resolve("Foundation.epub"));
+
+        assertThat(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(library.getId(), destination))
+                .hasValueSatisfying(copy -> assertThat(copy.bookId()).isEqualTo(bookId));
+        assertThat(bookIdAt("Moved", "Foundation.epub")).isNull();
+        Files.delete(source);
+        sourceDeletionComesIn(source, "Asimov", "Foundation.epub");
+        // The copy is handed back once the source's deletion is in
+        bookFileTransactionalHandler.handleNewBookFile(library.getId(), destination);
+
+        assertThat(pathsOf(bookId)).containsExactly("Moved/Foundation.epub");
+        assertThat(bookRepository.countIncludingDeletedByLibraryId(library.getId())).isEqualTo(1);
+        tx.executeWithoutResult(status -> assertThat(bookRepository.findById(bookId).orElseThrow().getDeleted()).isFalse());
+    }
+
+    @Test
+    void aCopyWaitingForItsSourceToGoTakesTheBookBackWhenTheSourcesDeletionExpiredFirst() throws IOException {
+        Path source = epub(root.resolve("Asimov/Foundation.epub"), "Foundation " + System.nanoTime());
+        long bookId = storedBook("Asimov", "Foundation.epub", FileFingerprint.generateHash(source), false);
+        Path destination = Files.copy(source, Files.createDirectories(root.resolve("Moved")).resolve("Foundation.epub"));
+
+        assertThat(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(library.getId(), destination)).isPresent();
+        Files.delete(source);
+        sourceDeletionComesIn(source, "Asimov", "Foundation.epub");
+        pendingDeletionPool.expireFileDeletion(source);
+        bookFileTransactionalHandler.handleNewBookFile(library.getId(), destination);
+
+        assertThat(pathsOf(bookId)).containsExactly("Moved/Foundation.epub");
+        assertThat(bookRepository.countIncludingDeletedByLibraryId(library.getId())).isEqualTo(1);
+        tx.executeWithoutResult(status -> assertThat(bookRepository.findById(bookId).orElseThrow().getDeleted()).isFalse());
+    }
+
+    @Test
+    void aCopyWhoseSourceStaysIsANewBookOnceItIsHandedBack() throws IOException {
+        Path original = epub(root.resolve("Asimov/Foundation.epub"), "Foundation " + System.nanoTime());
+        long bookId = storedBook("Asimov", "Foundation.epub", FileFingerprint.generateHash(original), false);
+        Path copy = Files.copy(original, Files.createDirectories(root.resolve("Inbox")).resolve("Foundation.epub"));
+
+        assertThat(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(library.getId(), copy)).isPresent();
+        bookFileTransactionalHandler.handleNewBookFile(library.getId(), copy);
+
+        assertThat(pathsOf(bookId)).containsExactly("Asimov/Foundation.epub");
+        assertThat(bookIdAt("Inbox", "Foundation.epub")).isNotNull().isNotEqualTo(bookId);
+    }
+
+    @Test
+    void aFileWithoutAStoredFileOfItsContentIsNotLeftWaiting() throws IOException {
+        Path file = epub(root.resolve("Inbox/Dune.epub"), "Dune " + System.nanoTime());
+
+        assertThat(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(library.getId(), file)).isEmpty();
+
+        assertThat(bookIdAt("Inbox", "Dune.epub")).isNotNull();
+    }
+
     // ========== fixture ==========
+
+    /** What the watcher does with the deletion of a stored file: the pool holds its book for a grace period. */
+    private void sourceDeletionComesIn(Path source, String subPath, String fileName) {
+        BookFileEntity file = bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(
+                libraryPath.getId(), subPath, fileName).orElseThrow();
+        pendingDeletionPool.addFileDeletion(source, library.getId(), file, file.getBook(), mock(ScheduledFuture.class));
+    }
 
     private long storedBook(String subPath, String fileName, String hash, boolean deleted) {
         return tx.execute(status -> {

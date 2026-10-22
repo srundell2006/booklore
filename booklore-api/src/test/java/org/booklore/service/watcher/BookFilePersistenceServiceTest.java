@@ -224,6 +224,33 @@ class BookFilePersistenceServiceTest {
         }
 
         @Test
+        void oneBooksFileGoneAndAnotherBooksStillThere_noMove() throws IOException {
+            // Two books hold the content: the one whose file went may have been deleted, not moved
+            withHash(stored(1, "Title.epub", false, false), stored(2, "Title (1).epub", true, false));
+
+            assertThat(service.findMovedFile("h", NEW_PATH, CUTOFF)).isEmpty();
+        }
+
+        @Test
+        void theOneBooksFileStillAtItsPath_isTheBookCopied() throws IOException {
+            withHash(stored(1, "Title.epub", true, false));
+
+            assertThat(service.findBookCopied("h", CUTOFF)).contains(1L);
+        }
+
+        @Test
+        void noBookIsCopiedWhenItsFileIsGoneItIsDeletedOrTwoBooksHoldTheContent() throws IOException {
+            withHash();
+            assertThat(service.findBookCopied("h", CUTOFF)).isEmpty();
+            withHash(stored(1, "Gone.epub", false, false));
+            assertThat(service.findBookCopied("h", CUTOFF)).isEmpty();
+            withHash(stored(2, "Deleted.epub", true, true));
+            assertThat(service.findBookCopied("h", CUTOFF)).isEmpty();
+            withHash(stored(3, "One.epub", true, false), stored(4, "Two.epub", true, false));
+            assertThat(service.findBookCopied("h", CUTOFF)).isEmpty();
+        }
+
+        @Test
         void twoFilesOfOneBookWithTheHash_movesTheOneThatIsGone() throws IOException {
             BookFileEntity there = stored(1, "Title.epub", true, false);
             BookFileEntity gone = buildBookFile(11L, there.getBook(), "Title (1).epub", "h");

@@ -12,6 +12,7 @@ import org.booklore.service.library.LibraryProcessingService;
 import org.booklore.util.FileUtils;
 import org.junit.jupiter.api.*;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.MockitoAnnotations;
@@ -298,6 +299,92 @@ class LibraryFileEventProcessorTest {
     }
 
     @Nested
+    class CopiesOfStoredFiles {
+
+        private Path settledFile(String name) throws IOException {
+            Path file = Files.writeString(tempDir.resolve(name), "content");
+            // Written a while ago, so the processor does not wait for it to settle
+            Files.setLastModifiedTime(file, java.nio.file.attribute.FileTime.from(java.time.Instant.now().minusSeconds(60)));
+            return file;
+        }
+
+        @Test
+        void aNewFileThatIsNoCopyIsHandledOnce() throws Exception {
+            Path file = settledFile("new.epub");
+            when(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(1L, file)).thenReturn(Optional.empty());
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, file, false);
+
+            verify(bookFileTransactionalHandler, timeout(3000)).handleNewBookFileUnlessCopy(1L, file);
+            Thread.sleep(500);
+            verify(bookFileTransactionalHandler, never()).handleNewBookFile(anyLong(), any());
+        }
+
+        @Test
+        void aCopyWhoseSourceStaysIsHandedBackOnceTheWaitIsOver() throws Exception {
+            processor.setCopySourceWaitMs(1500);
+            Path copy = settledFile("copy.epub");
+            when(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(1L, copy))
+                    .thenReturn(Optional.of(new BookFileTransactionalHandler.CopyOfAStoredFile(7L, "hash")));
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, copy, false);
+
+            verify(bookFileTransactionalHandler, timeout(3000)).handleNewBookFileUnlessCopy(1L, copy);
+            verify(bookFileTransactionalHandler, never()).handleNewBookFile(anyLong(), any());
+            verify(bookFileTransactionalHandler, timeout(5000)).handleNewBookFile(1L, copy);
+            Thread.sleep(2000);
+            verify(bookFileTransactionalHandler, times(1)).handleNewBookFile(1L, copy);
+            verify(bookFileTransactionalHandler, times(1)).handleNewBookFileUnlessCopy(1L, copy);
+        }
+
+        @Test
+        void aCopyIsHandedBackAtOnceWhenItsSourcesDeletionComesIn() throws Exception {
+            processor.setCopySourceWaitMs(60000);
+            Path copy = settledFile("moved.epub");
+            Path source = tempDir.resolve("source").resolve("moved.epub");
+            when(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(1L, copy))
+                    .thenReturn(Optional.of(new BookFileTransactionalHandler.CopyOfAStoredFile(7L, "hash")));
+            BookEntity book = BookEntity.builder().id(7L).library(library).libraryPath(libraryPath).build();
+            BookFileEntity stored = BookFileEntity.builder().id(70L).book(book).fileSubPath("source").fileName("moved.epub")
+                    .currentHash("hash").isBookFormat(true).bookType(BookFileType.EPUB).build();
+            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(1L, "source", "moved.epub"))
+                    .thenReturn(Optional.of(stored));
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, copy, false);
+            verify(bookFileTransactionalHandler, timeout(3000)).handleNewBookFileUnlessCopy(1L, copy);
+            processor.processEvent(StandardWatchEventKinds.ENTRY_DELETE, 1L, source, false);
+
+            verify(pendingDeletionPool, timeout(3000)).addFileDeletion(eq(source), eq(1L), eq(stored), eq(book), any());
+            // Then the pool, holding the source's book, hands it the copy
+            InOrder order = inOrder(pendingDeletionPool, bookFileTransactionalHandler);
+            order.verify(pendingDeletionPool, timeout(3000)).addFileDeletion(eq(source), eq(1L), eq(stored), eq(book), any());
+            order.verify(bookFileTransactionalHandler, timeout(3000)).handleNewBookFile(1L, copy);
+        }
+
+        @Test
+        void aWaitingCopyIsNotHandedBackForTheDeletionOfAnotherFile() throws Exception {
+            processor.setCopySourceWaitMs(60000);
+            Path copy = settledFile("copy.epub");
+            Path other = tempDir.resolve("other.epub");
+            when(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(1L, copy))
+                    .thenReturn(Optional.of(new BookFileTransactionalHandler.CopyOfAStoredFile(7L, "hash")));
+            BookEntity book = BookEntity.builder().id(8L).library(library).libraryPath(libraryPath).build();
+            BookFileEntity stored = BookFileEntity.builder().id(80L).book(book).fileSubPath("").fileName("other.epub")
+                    .currentHash("another hash").isBookFormat(true).bookType(BookFileType.EPUB).build();
+            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(1L, "", "other.epub"))
+                    .thenReturn(Optional.of(stored));
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, copy, false);
+            verify(bookFileTransactionalHandler, timeout(3000)).handleNewBookFileUnlessCopy(1L, copy);
+            processor.processEvent(StandardWatchEventKinds.ENTRY_DELETE, 1L, other, false);
+
+            verify(pendingDeletionPool, timeout(3000)).addFileDeletion(eq(other), eq(1L), eq(stored), eq(book), any());
+            Thread.sleep(500);
+            verify(bookFileTransactionalHandler, never()).handleNewBookFile(anyLong(), any());
+        }
+    }
+
+    @Nested
     class FolderDeleteHandling {
 
         @Test
@@ -442,7 +529,7 @@ class LibraryFileEventProcessorTest {
             // then event goes to queue and is processed by virtual thread
             Thread.sleep(7000);
 
-            verify(bookFileTransactionalHandler).handleNewBookFile(eq(1L), any());
+            verify(bookFileTransactionalHandler).handleNewBookFileUnlessCopy(eq(1L), any());
         }
     }
 
