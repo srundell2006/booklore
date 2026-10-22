@@ -28,6 +28,7 @@ import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.*;
+import java.util.concurrent.atomic.AtomicReference;
 
 @Slf4j
 @Service
@@ -65,6 +66,8 @@ public class LibraryFileEventProcessor {
     private final ConcurrentMap<Path, ScheduledFuture<?>> pendingDeletes = new ConcurrentHashMap<>();
     private final ConcurrentMap<Path, ScheduledFuture<?>> pendingFolderCreates = new ConcurrentHashMap<>();
     private final Set<Path> filesFromPendingFolder = ConcurrentHashMap.newKeySet();
+    /** New files whose stability check has not found them written in full yet. */
+    private final Set<Path> settlingFiles = ConcurrentHashMap.newKeySet();
     /**
      * What copies a stored file still there, by path, until that file goes or the wait is over: a new file, a folder
      * audiobook, or the new files of a BOOK_PER_FOLDER folder, which wait as one. Changed under {@link #copyLock}, so a
@@ -163,15 +166,18 @@ public class LibraryFileEventProcessor {
     }
 
     /**
-     * Queues a folder's create once the delay is over, unless something puts it off again first. It leaves the pending
-     * folders before it is queued, so a create that puts the folder off again while it is handled is not undone.
+     * Queues a folder's create once the delay is over, unless something puts it off again first. It is queued before it
+     * leaves the pending folders, so a drain always finds it in one or the other, and it leaves them only as itself, so
+     * a create that puts the folder off again while it is handled stays pending.
      */
     private void scheduleFolderCreate(long libraryId, Path folderPath, long delayMs, Wait waited, long since) {
-        ScheduledFuture<?> previous = pendingFolderCreates.put(folderPath, scheduler.schedule(() -> {
-            pendingFolderCreates.remove(folderPath);
+        AtomicReference<ScheduledFuture<?>> timer = new AtomicReference<>();
+        timer.set(scheduler.schedule(() -> {
             filesFromPendingFolder.removeIf(f -> f.startsWith(folderPath));
             eventQueue.offer(new FileEvent(StandardWatchEventKinds.ENTRY_CREATE, libraryId, folderPath, true, waited, since));
+            pendingFolderCreates.remove(folderPath, timer.get());
         }, delayMs, TimeUnit.MILLISECONDS));
+        ScheduledFuture<?> previous = pendingFolderCreates.put(folderPath, timer.get());
         if (previous != null) {
             previous.cancel(false);
         }
@@ -294,14 +300,15 @@ public class LibraryFileEventProcessor {
         }
     }
 
-    /** Hands a waiting copy back to the queue, once. */
+    /** Hands a waiting copy back to the queue, once. It is queued before it stops waiting, for a drain to find. */
     private void handBack(Path path, Wait waited) {
         synchronized (copyLock) {
-            PendingCopy pending = pendingCopies.remove(path);
+            PendingCopy pending = pendingCopies.get(path);
             if (pending != null) {
                 pending.recheck().cancel(false);
                 eventQueue.offer(new FileEvent(StandardWatchEventKinds.ENTRY_CREATE, pending.libraryId(), path,
                         pending.folder(), waited, pending.since()));
+                pendingCopies.remove(path);
             }
         }
     }
@@ -778,7 +785,13 @@ public class LibraryFileEventProcessor {
     }
 
     private void scheduleWithStabilityCheck(long libraryId, Path path, Runnable onStable) {
-        scheduler.schedule(() -> checkStability(libraryId, path, onStable, System.currentTimeMillis()), 0, TimeUnit.MILLISECONDS);
+        settlingFiles.add(path);
+        // Queued before it leaves the settling files, so a drain always finds it in one or the other
+        Runnable queue = () -> {
+            onStable.run();
+            settlingFiles.remove(path);
+        };
+        scheduler.schedule(() -> checkStability(libraryId, path, queue, System.currentTimeMillis()), 0, TimeUnit.MILLISECONDS);
     }
 
     private void checkStability(long libraryId, Path path, Runnable onStable, long startTime) {
@@ -818,6 +831,12 @@ public class LibraryFileEventProcessor {
         log.info("Shutting down LibraryFileEventProcessor...");
     }
 
+    /**
+     * Whether the watcher still has work on a path under one of these: an event queued or debounced, a new file
+     * settling, a new file or folder waiting as a copy, or a deletion held in the pool. An in-app move waits for these
+     * first: a copy handed back while the move has moved a book's file but not yet stored its new path would find that
+     * file gone, and take the book for its own.
+     */
     public boolean hasPendingEventsForPaths(Set<Path> paths) {
         boolean inQueue = eventQueue.stream()
                 .anyMatch(e -> paths.stream().anyMatch(p -> e.fullPath().startsWith(p)));
@@ -825,8 +844,12 @@ public class LibraryFileEventProcessor {
                 .anyMatch(p -> paths.stream().anyMatch(p::startsWith));
         boolean inFolderCreates = pendingFolderCreates.keySet().stream()
                 .anyMatch(p -> paths.stream().anyMatch(p::startsWith));
+        boolean settling = settlingFiles.stream()
+                .anyMatch(p -> paths.stream().anyMatch(p::startsWith));
+        boolean inCopies = pendingCopies.keySet().stream()
+                .anyMatch(p -> paths.stream().anyMatch(p::startsWith));
         boolean inPool = pendingDeletionPool.hasPendingForPaths(paths);
-        return inQueue || inDeletes || inFolderCreates || inPool;
+        return inQueue || inDeletes || inFolderCreates || settling || inCopies || inPool;
     }
 
     /**

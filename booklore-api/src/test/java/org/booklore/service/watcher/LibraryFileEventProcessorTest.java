@@ -94,6 +94,14 @@ class LibraryFileEventProcessorTest {
         mocks.close();
     }
 
+    private static void waitUntil(BooleanSupplier condition) throws InterruptedException {
+        long deadline = System.currentTimeMillis() + 5000;
+        while (!condition.getAsBoolean() && System.currentTimeMillis() < deadline) {
+            Thread.sleep(50);
+        }
+        assertThat(condition.getAsBoolean()).isTrue();
+    }
+
     @Test
     void handlesEventsOnAPlatformDaemonThread() throws Exception {
         CompletableFuture<Thread> handledOn = new CompletableFuture<>();
@@ -123,6 +131,36 @@ class LibraryFileEventProcessorTest {
             when(pendingDeletionPool.hasPendingForPaths(any())).thenReturn(true);
 
             assertThat(processor.hasPendingEventsForPaths(Set.of(tempDir))).isTrue();
+        }
+
+        @Test
+        void countsAFileWaitingAsACopyOfAStoredFile() throws Exception {
+            processor.setCopySourceWaitMs(60000);
+            Path copy = Files.writeString(tempDir.resolve("copy.epub"), "content");
+            Files.setLastModifiedTime(copy, FileTime.from(Instant.now().minusSeconds(60)));
+            when(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(1L, copy))
+                    .thenReturn(Optional.of(new BookFileTransactionalHandler.CopyOfAStoredFile(7L, "hash")));
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, copy, false);
+            waitUntil(() -> processor.waitsAsCopy(copy));
+
+            // An in-app move waits for it: handed back while the move has moved a book's file but not yet stored its
+            // new path, it would find that file gone and take the book
+            assertThat(processor.hasPendingEventsForPaths(Set.of(tempDir))).isTrue();
+            assertThat(processor.hasPendingEventsForPaths(Set.of(tempDir.resolve("elsewhere")))).isFalse();
+        }
+
+        @Test
+        void countsANewFileStillBeingWritten() throws Exception {
+            Path file = Files.writeString(tempDir.resolve("arriving.epub"), "content");
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, file, false);
+            Thread.sleep(500);
+
+            verify(bookFileTransactionalHandler, never()).handleNewBookFileUnlessCopy(anyLong(), any());
+            assertThat(processor.hasPendingEventsForPaths(Set.of(tempDir))).isTrue();
+            verify(bookFileTransactionalHandler, timeout(8000)).handleNewBookFileUnlessCopy(1L, file);
+            waitUntil(() -> !processor.hasPendingEventsForPaths(Set.of(tempDir)));
         }
     }
 
@@ -472,14 +510,6 @@ class LibraryFileEventProcessorTest {
             when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(1L, subPath, fileName))
                     .thenReturn(Optional.of(stored));
             processor.processEvent(StandardWatchEventKinds.ENTRY_DELETE, 1L, tempDir.resolve(subPath).resolve(fileName), false);
-        }
-
-        private void waitUntil(BooleanSupplier condition) throws InterruptedException {
-            long deadline = System.currentTimeMillis() + 5000;
-            while (!condition.getAsBoolean() && System.currentTimeMillis() < deadline) {
-                Thread.sleep(50);
-            }
-            assertThat(condition.getAsBoolean()).isTrue();
         }
 
         @ParameterizedTest
