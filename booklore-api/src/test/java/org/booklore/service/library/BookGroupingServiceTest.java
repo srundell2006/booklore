@@ -1101,6 +1101,20 @@ class BookGroupingServiceTest {
     }
 
     @Test
+    void rescan_aNumberTooLongForAnAudiobookPartDoesNotStopTheRescan() {
+        // Parsed as an int, "Part 9780261102217" threw for every new file of the library, on every rescan
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        LibraryFile hobbit = newFile(lib, path, "Tolkien", "The Hobbit.epub");
+        LibraryFile odd = newFile(lib, path, "Misc", "The Hobbit (Part 9780261102217).m4b");
+
+        var result = rescan(lib, hobbit, odd);
+
+        assertThat(newBooks(result)).containsExactlyInAnyOrder(
+                List.of("The Hobbit.epub"), List.of("The Hobbit (Part 9780261102217).m4b"));
+    }
+
+    @Test
     void rescan_lookupsAreScopedToOneCall() {
         var path = pathEntity(1L, "/books");
         var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);

@@ -1162,6 +1162,12 @@ class BookFileGroupingUtilsTest {
         }
 
         @Test
+        void groupsANameWithANumberTooLongForAPartWithoutThrowing() {
+            assertThat(partition("Tolkien", "The Hobbit (Part 9780261102217).m4b", "The Hobbit.epub")).hasSize(2);
+            assertThat(partition("Misc", "Interview cd 20231015120000.mp3")).hasSize(1);
+        }
+
+        @Test
         void keysEveryGroupByLibraryPathFolderAndIdentity() {
             Map<String, List<LibraryFile>> groups = BookFileGroupingUtils.groupByBaseName(List.of(
                     file(null, "01 - The Lightning Thief.m4b"),

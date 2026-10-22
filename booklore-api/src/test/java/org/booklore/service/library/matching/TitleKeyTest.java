@@ -329,6 +329,22 @@ class TitleKeyTest {
             assertThat(key("", "The Lost Hero (part 1).epub").part()).isNull();
         }
 
+        @ParameterizedTest(name = "{0}")
+        @CsvSource(delimiter = '|', textBlock = """
+                The Hobbit (Part 9780261102217).m4b | hobbit #9780261102217
+                The Hobbit - Disc 3000000000.mp3    | hobbit disc #3000000000
+                The Hobbit pt 2147483648.mp3        | hobbit #2147483648
+                Interview cd 20231015120000.mp3     | interview cd #20231015120000
+                """)
+        void readsANumberTooLongForAPartAsPartOfTheName(String name, String identity) {
+            // Parsed as a part, these threw and stopped the whole scan
+            TitleKey key = key("", name);
+
+            assertThat(key.part()).isNull();
+            assertThat(key.identity()).isEqualTo(identity);
+            assertThat(FileEvidence.of(1L, "", name, true).readings()).isNotEmpty();
+        }
+
         @Test
         void keepsAPartOrDiscWordWithoutANumber() {
             assertThat(key("", "Disc Jockey.m4b").identity()).isEqualTo("disc jockey");

@@ -66,10 +66,14 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
     private static final Pattern YEAR = Pattern.compile("(?:1[5-9]|20)\\d{2}");
     /** "(v5.0)", "[v2]": a release's revision, not a volume. */
     private static final Pattern RELEASE_TAG = Pattern.compile("v\\d+(?:\\.\\d+)*", Pattern.CASE_INSENSITIVE);
+    /**
+     * "Part 2", "disc 1 of 3". At most four digits: a longer number ("Part 9780261102217") is no part of a book split
+     * over files, and would not fit an int.
+     */
     private static final Pattern PART_CONTENT = Pattern.compile(
-            "(?:part|pt|dis[ck]|cd)\\s*\\.?\\s*(\\d+)(?:\\s*of\\s*\\d+)?", Pattern.CASE_INSENSITIVE);
+            "(?:part|pt|dis[ck]|cd)\\s*\\.?\\s*(\\d{1,4})(?:\\s*of\\s*\\d+)?", Pattern.CASE_INSENSITIVE);
     private static final Pattern TRAILING_PART = Pattern.compile(
-            "\\s*(?:[-\u2013\u2014]\\s*|\\s)(?:part|pt|dis[ck]|cd)\\s*\\.?\\s*(\\d+)(?:\\s*of\\s*\\d+)?$", Pattern.CASE_INSENSITIVE);
+            "\\s*(?:[-\u2013\u2014]\\s*|\\s)(?:part|pt|dis[ck]|cd)\\s*\\.?\\s*(\\d{1,4})(?:\\s*of\\s*\\d+)?$", Pattern.CASE_INSENSITIVE);
 
     /** " - ", " – ", " — " and ": ". Spaced dashes only: "Spider-Man" and "Catch-22" are one word. */
     private static final Pattern SEGMENT_SEPARATOR = Pattern.compile("\\s+[-\u2013\u2014]\\s+|\\s*:\\s+");
