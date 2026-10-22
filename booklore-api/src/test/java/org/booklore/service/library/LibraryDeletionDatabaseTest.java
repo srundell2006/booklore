@@ -47,10 +47,12 @@ import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.Mockito.mock;
 
 /**
- * Deleting a library against H2, with the real service, repositories and cover folders. The library no longer maps
- * its books, so the books go through the database's foreign keys rather than through Hibernate: these tests hold the
- * entities' on-delete cascades to what the Flyway schema declares, and the cover folders to every book the library
- * had. Nothing here runs in a test transaction, as deleting a library opens its own.
+ * Deleting a library, and a library's removed books, against H2 with the real services, repositories and cover
+ * folders. The library no longer maps its books, so its books go through the database's foreign keys rather than
+ * through Hibernate: these tests hold the entities' on-delete cascades to what the Flyway schema declares, and the
+ * cover folders to every book the library had. With those cascades declared, Hibernate may leave a deleted book's
+ * files and metadata to the database too, so a book deleted on its own is checked as well. Nothing here runs in a
+ * test transaction, as each deletion opens its own.
  */
 @SpringBootTest(classes = {
         BookloreApplication.class
@@ -104,6 +106,8 @@ class LibraryDeletionDatabaseTest {
 
     @Autowired
     private LibraryService libraryService;
+    @Autowired
+    private BookDeletionService bookDeletionService;
     @Autowired
     private LibraryRepository libraryRepository;
     @Autowired
@@ -166,6 +170,28 @@ class LibraryDeletionDatabaseTest {
         assertThat(authorRepository.findByName("Shared Writer")).isPresent();
         assertThat(categoryRepository.findByName("Shared Genre")).isPresent();
         assertThat(Path.of(fileService.getImagesFolder(other))).isDirectory();
+    }
+
+    @Test
+    void deletingRemovedBooksDeletesTheirFilesMetadataAndLinksAndLeavesTheRest() throws IOException {
+        LibraryEntity library = library("Rescanned", "/rescanned");
+        LibraryPathEntity path = library.getLibraryPaths().getFirst();
+        long removed = book(library, path, false, false, "Removed", "Removed.epub", "Removed.pdf");
+        long remaining = book(library, path, false, false, "Remaining", "Remaining.epub");
+        cover(removed);
+
+        bookDeletionService.deleteRemovedBooks(List.of(removed));
+
+        assertThat(rowsOf("book", "id", List.of(removed))).isZero();
+        assertThat(rowsOf("book_file", "book_id", List.of(removed))).isZero();
+        assertThat(rowsOf("book_metadata", "book_id", List.of(removed))).isZero();
+        assertThat(rowsOf("book_metadata_author_mapping", "book_id", List.of(removed))).isZero();
+        assertThat(rowsOf("book_metadata_category_mapping", "book_id", List.of(removed))).isZero();
+        assertThat(Path.of(fileService.getImagesFolder(removed))).doesNotExist();
+        assertThat(rowsOf("book", "id", List.of(remaining))).isOne();
+        assertThat(rowsOf("book_file", "book_id", List.of(remaining))).isOne();
+        assertThat(rowsOf("book_metadata_author_mapping", "book_id", List.of(remaining))).isOne();
+        assertThat(authorRepository.findByName("Shared Writer")).isPresent();
     }
 
     @Test
