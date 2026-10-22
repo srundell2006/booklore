@@ -225,4 +225,33 @@ class LibraryRescanDatabaseTest {
         assertThat(filesSeenByCoverDecision).containsExactly("Title.m4b", "Title.epub");
         assertThat(primarySeenByCoverDecision[0]).isEqualTo(BookFileType.EPUB);
     }
+
+    @Test
+    void newFilesByTheFoldersAuthorBecomeOneBookEach() throws IOException {
+        // Production: in "B/Dale Brown", "Shadow Command" and "Warrior Class" were imported as more formats of
+        // "Battle Born", because the folder's name was part of every file's name
+        BookEntity other = book("Other", "Other.epub");
+        when(libraryFileHelper.scanAllLibraryFiles(any())).thenAnswer(inv -> {
+            LibraryEntity walked = inv.getArgument(0);
+            return new LibraryScanResult(List.of(
+                    onDisk(walked, "Other", "Other.epub", BookFileType.EPUB),
+                    onDisk(walked, "B/Dale Brown", "Battle Born by Dale Brown.epub", BookFileType.EPUB),
+                    onDisk(walked, "B/Dale Brown", "Shadow Command by Dale Brown.epub", BookFileType.EPUB),
+                    onDisk(walked, "B/Dale Brown", "Warrior Class by Dale Brown.epub", BookFileType.EPUB)), Set.of());
+        });
+        List<List<String>> newBooks = new ArrayList<>();
+        doAnswer(inv -> {
+            java.util.Map<String, List<LibraryFile>> groups = inv.getArgument(0);
+            groups.values().forEach(group -> newBooks.add(group.stream().map(LibraryFile::getFileName).toList()));
+            return null;
+        }).when(fileAsBookProcessor).processLibraryFilesGrouped(any(), any());
+
+        rescan();
+
+        assertThat(newBooks).containsExactlyInAnyOrder(
+                List.of("Battle Born by Dale Brown.epub"),
+                List.of("Shadow Command by Dale Brown.epub"),
+                List.of("Warrior Class by Dale Brown.epub"));
+        assertThat(fileNamesOf(other)).containsExactly("Other/Other.epub");
+    }
 }

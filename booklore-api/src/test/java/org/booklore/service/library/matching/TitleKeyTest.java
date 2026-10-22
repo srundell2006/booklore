@@ -59,9 +59,30 @@ class TitleKeyTest {
                 Audiobook The Hobbit.epub                    | hobbit
                 The Martian (v5.0).epub                      | martian
                 Saga 001 (2012) (Digital).cbz                | saga #1
+                The Hobbit (m4b).m4b                         | hobbit
+                The Hobbit [audiobook].m4b                   | hobbit
+                The Hobbit (audio).m4b                       | hobbit
                 """)
         void dropsOnlyWhatAClosedVocabularyNames(String name, String identity) {
             assertThat(key("", name).identity()).isEqualTo(identity);
+        }
+
+        @ParameterizedTest(name = "{0} -> {1}")
+        @CsvSource(delimiter = '|', textBlock = """
+                1. American Gods - Neil Gaiman (2011) | american gods neil gaiman #1
+                Vol. 1 - Adventures (2020)            | adventures #1
+                Dr. Seuss Collection                  | dr seuss collection
+                U.S.A. History                        | u s a history
+                """)
+        void readsADotThatIsNoBookExtensionAsPartOfTheName(String folderName, String identity) {
+            // A folder audiobook's name has no extension, and the dot in "1." is no extension either
+            assertThat(TitleKey.ofFileName(folderName, true, NameContext.NONE).identity()).isEqualTo(identity);
+        }
+
+        @Test
+        void readsNoNameAsAnEmptyKey() {
+            assertThat(TitleKey.ofFileName(null, false, NameContext.NONE).identity()).isEmpty();
+            assertThat(TitleKey.ofFileName("", false, null).identity()).isEmpty();
         }
 
         @ParameterizedTest(name = "{0} -> {1}")
