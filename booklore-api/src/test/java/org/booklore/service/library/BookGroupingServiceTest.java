@@ -1230,6 +1230,107 @@ class BookGroupingServiceTest {
     }
 
     @Test
+    void rescan_bookPerFolder_aFolderAudiobookIsTheBookOfItsOwnFolderNotOfTheFolderAboveIt() {
+        // "Author/Book One/" was imported as a folder audiobook: its row is in "Author", named "Book One"
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
+        rows.add(new BookFileScanRow(5000L, 500L, 1L, "/books", "Author", "Book One", true, BookFileType.AUDIOBOOK, false, true));
+        LibraryFile bookTwo = folderAudiobook(path, "Author", "Book Two");
+        LibraryFile inBookOne = newFile(lib, path, "Author/Book One", "Book One.epub");
+
+        var result = rescan(lib, bookTwo, inBookOne);
+
+        assertThat(attached(result)).containsExactly(Map.entry(500L, List.of(inBookOne)));
+        assertThat(newBooks(result)).containsExactly(List.of("Book Two"));
+    }
+
+    @Test
+    void rescan_bookPerFolder_anAudiobookBelowTwoBooksWithEbooksAttachesToNeither() {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
+        bookIn(10, path, "Author/Series", "Book One.epub");
+        bookIn(20, path, "Author/Series", "Book Two.epub");
+        LibraryFile audio = newFile(lib, path, "Author/Series/audio", "Book Two.m4b");
+
+        var result = rescan(lib, audio);
+
+        assertThat(attached(result)).isEmpty();
+        assertThat(newBooks(result)).containsExactly(List.of("Book Two.m4b"));
+    }
+
+    @Test
+    void rescan_bookPerFolder_aFileAtTheRootIsABookOfItsOwn() {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
+        bookIn(10, path, "", "Dune.epub");
+        LibraryFile other = newFile(lib, path, "", "Neuromancer.epub");
+
+        var result = rescan(lib, other);
+
+        assertThat(attached(result)).isEmpty();
+        assertThat(newBooks(result)).containsExactly(List.of("Neuromancer.epub"));
+    }
+
+    @Test
+    void rescan_bookPerFile_aNewFileIsNeverAttachedToABookWithFiles() {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FILE, path);
+        bookIn(10, path, "Frank Herbert", "Dune.epub");
+        LibraryFile pdf = newFile(lib, path, "Frank Herbert", "Dune.pdf");
+
+        var result = rescan(lib, pdf);
+
+        assertThat(attached(result)).isEmpty();
+        assertThat(newBooks(result)).containsExactly(List.of("Dune.pdf"));
+    }
+
+    @Test
+    void rescan_autoDetect_aFileTwoBooksOfItsFolderReadAsIsNotGivenToAFilelessBookEither() {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        bookIn(10, path, "Frank Herbert", "Dune.epub");
+        bookIn(20, path, "Frank Herbert", "Dune.mobi");
+        shell(300, "Dune", "Frank Herbert");
+        LibraryFile pdf = newFile(lib, path, "Frank Herbert", "Dune.pdf");
+        List<LibraryFile> askedFileless = new ArrayList<>();
+
+        var result = rescan(lib, new BookGroupingService.DecisionListener() {
+            @Override
+            public void fileless(LibraryFile file, org.booklore.service.library.matching.ExistingBookMatcher.Decision decision) {
+                askedFileless.add(file);
+            }
+        }, pdf);
+
+        assertThat(attached(result)).isEmpty();
+        assertThat(newBooks(result)).containsExactly(List.of("Dune.pdf"));
+        assertThat(askedFileless).isEmpty();
+    }
+
+    @Test
+    void rescan_autoDetect_filesOfOneNewBookThatMatchDifferentBooksBecomeANewBook() {
+        // "The Lost Hero (Part 1)" as an epub reads as volume 1, as an m4b as part 1 of "The Lost Hero"; they share a
+        // base name, so they are one new book (D10), yet each matches another book of the folder
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        bookIn(10, path, "Rick Riordan", "The Lost Hero 1.epub");
+        bookIn(20, path, "Rick Riordan", "The Lost Hero.m4b");
+        LibraryFile epub = newFile(lib, path, "Rick Riordan", "The Lost Hero (Part 1).epub");
+        LibraryFile m4b = newFile(lib, path, "Rick Riordan", "The Lost Hero (Part 1).m4b");
+        List<java.util.Set<Long>> splits = new ArrayList<>();
+
+        var result = rescan(lib, new BookGroupingService.DecisionListener() {
+            @Override
+            public void groupSplit(List<LibraryFile> files, java.util.Set<Long> bookIds) {
+                splits.add(bookIds);
+            }
+        }, epub, m4b);
+
+        assertThat(attached(result)).isEmpty();
+        assertThat(newBooks(result)).containsExactly(List.of("The Lost Hero (Part 1).epub", "The Lost Hero (Part 1).m4b"));
+        assertThat(splits).containsExactly(java.util.Set.of(10L, 20L));
+    }
+
+    @Test
     void rescan_lookupsAreScopedToOneCall() {
         var path = pathEntity(1L, "/books");
         var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);

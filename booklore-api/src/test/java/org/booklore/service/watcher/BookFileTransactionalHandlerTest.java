@@ -7,6 +7,7 @@ import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
 import org.booklore.service.NotificationService;
 import org.booklore.service.file.FileFingerprint;
+import org.booklore.repository.projection.BookFileScanRow;
 import org.booklore.repository.projection.FilelessBookRow;
 import org.booklore.service.library.ExistingBookAttacher;
 import org.booklore.service.library.FilelessShells;
@@ -116,6 +117,24 @@ class BookFileTransactionalHandlerTest {
                 .isBookFormat(true)
                 .bookType(BookFileType.EPUB)
                 .build();
+    }
+
+    /** The books the folder queries find for {@code folder}: every book format of theirs, as the collation might. */
+    private void inFolder(String folder, BookEntity... books) {
+        List<BookFileScanRow> rows = new ArrayList<>();
+        for (BookEntity book : books) {
+            for (BookFileEntity bf : book.getBookFiles()) {
+                rows.add(new BookFileScanRow(bf.getId(), book.getId(), 1L, "/library", bf.getFileSubPath(), bf.getFileName(),
+                        bf.isBookFormat(), bf.getBookType(), book.getDeleted(), bf.isFolderBased()));
+            }
+        }
+        when(bookRepository.findBookFormatRowsInFolder(1L, folder)).thenReturn(rows);
+        when(bookRepository.findBookFormatRowsOwnedByFolder(eq(1L), eq(folder), anyString(), anyString())).thenReturn(rows);
+    }
+
+    private void verifyNoFolderLookup() {
+        verify(bookRepository, never()).findBookFormatRowsInFolder(anyLong(), any());
+        verify(bookRepository, never()).findBookFormatRowsOwnedByFolder(anyLong(), any(), any(), any());
     }
 
     /** The file's sub path below the library path, as FileUtils.getRelativeSubPath gives it. */
@@ -247,7 +266,6 @@ class BookFileTransactionalHandlerTest {
                     .thenReturn(Optional.empty());
             when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
             when(bookFilePersistenceService.findMovedFile(eq("hash123"), any(), any())).thenReturn(Optional.empty());
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(anyLong(), anyString())).thenReturn(List.of());
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/test.epub"));
 
@@ -331,7 +349,7 @@ class BookFileTransactionalHandlerTest {
             BookEntity existingBook = buildBook(20L, false);
             BookFileEntity primaryFile = buildBookFile(200L, existingBook, "test.epub", "otherhash");
             existingBook.setBookFiles(new ArrayList<>(List.of(primaryFile)));
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "sub")).thenReturn(List.of(existingBook));
+            inFolder("sub", existingBook);
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/test.pdf"));
 
@@ -342,7 +360,6 @@ class BookFileTransactionalHandlerTest {
         @Test
         void autoDetect_noMatch_createsNewBook() {
             noEarlierMatch();
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(anyLong(), anyString())).thenReturn(List.of());
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/test.epub"));
 
@@ -357,7 +374,7 @@ class BookFileTransactionalHandlerTest {
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/test.epub"));
 
-            verify(bookRepository, never()).findAllByLibraryPathIdAndFileSubPath(anyLong(), anyString());
+            verifyNoFolderLookup();
             verify(libraryProcessingService).processLibraryFiles(anyList(), eq(library));
         }
 
@@ -371,7 +388,7 @@ class BookFileTransactionalHandlerTest {
             handler.handleNewBookFile(1L, Path.of("/library/Frank Herbert/Dune.epub"));
 
             verify(existingBookAttacher).attach(eq(10L), eq(Kind.FILELESS), anyList());
-            verify(bookRepository, never()).findAllByLibraryPathIdAndFileSubPath(anyLong(), anyString());
+            verifyNoFolderLookup();
         }
 
         @Test
@@ -382,7 +399,7 @@ class BookFileTransactionalHandlerTest {
             BookEntity existingBook = buildBook(20L, false);
             BookFileEntity primaryFile = buildBookFile(200L, existingBook, "existing.epub", "otherhash");
             existingBook.setBookFiles(new ArrayList<>(List.of(primaryFile)));
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "sub")).thenReturn(List.of(existingBook));
+            inFolder("sub", existingBook);
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/new.pdf"));
 
@@ -399,7 +416,7 @@ class BookFileTransactionalHandlerTest {
             BookFileEntity file = buildBookFile(200L, otherFolder, "existing.epub", "otherhash");
             file.setFileSubPath("Sub");
             otherFolder.setBookFiles(new ArrayList<>(List.of(file)));
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "sub")).thenReturn(List.of(otherFolder));
+            inFolder("sub", otherFolder);
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/new.pdf"));
 
@@ -414,7 +431,7 @@ class BookFileTransactionalHandlerTest {
             BookFileEntity file = buildBookFile(200L, otherFolder, "test.epub", "otherhash");
             file.setFileSubPath("SUB");
             otherFolder.setBookFiles(new ArrayList<>(List.of(file)));
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "sub")).thenReturn(List.of(otherFolder));
+            inFolder("sub", otherFolder);
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/test.pdf"));
 
@@ -426,7 +443,7 @@ class BookFileTransactionalHandlerTest {
         void bookPerFolder_noBookInFolder_createsNew() {
             library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
             noEarlierMatch();
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "sub")).thenReturn(List.of());
+            inFolder("sub");
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/test.epub"));
 
@@ -438,14 +455,14 @@ class BookFileTransactionalHandlerTest {
             library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
             subPath("author/book/audio");
             noEarlierMatch();
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "author/book/audio")).thenReturn(List.of());
+            inFolder("author/book/audio");
 
             BookEntity parentBook = buildBook(30L, false);
             BookFileEntity ebookFile = buildBookFile(300L, parentBook, "book.epub", "ebookhash");
             ebookFile.setBookType(BookFileType.EPUB);
             ebookFile.setFileSubPath("author/book");
             parentBook.setBookFiles(new ArrayList<>(List.of(ebookFile)));
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "author/book")).thenReturn(List.of(parentBook));
+            inFolder("author/book", parentBook);
 
             handler.handleNewBookFile(1L, Path.of("/library/author/book/audio/chapter1.m4b"));
 
@@ -453,11 +470,89 @@ class BookFileTransactionalHandlerTest {
         }
 
         @Test
+        void bookPerFolder_audiobookBelowTwoBooksWithEbooksAttachesToNeither() {
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
+            subPath("author/series/audio");
+            noEarlierMatch();
+            BookEntity one = buildBook(30L, false);
+            BookFileEntity oneEpub = buildBookFile(300L, one, "one.epub", "h1");
+            oneEpub.setFileSubPath("author/series");
+            one.setBookFiles(new ArrayList<>(List.of(oneEpub)));
+            BookEntity two = buildBook(31L, false);
+            BookFileEntity twoEpub = buildBookFile(310L, two, "two.epub", "h2");
+            twoEpub.setFileSubPath("author/series");
+            two.setBookFiles(new ArrayList<>(List.of(twoEpub)));
+            inFolder("author/series", one, two);
+
+            handler.handleNewBookFile(1L, Path.of("/library/author/series/audio/two.m4b"));
+
+            verifyNoInteractions(existingBookAttacher);
+            verify(libraryProcessingService).processLibraryFiles(anyList(), eq(library));
+        }
+
+        @Test
+        void bookPerFolder_aFileAtTheRootIsABookOfItsOwn() {
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
+            subPath("");
+            noEarlierMatch();
+            BookEntity dune = buildBook(30L, false);
+            BookFileEntity duneEpub = buildBookFile(300L, dune, "Dune.epub", "h1");
+            duneEpub.setFileSubPath("");
+            dune.setBookFiles(new ArrayList<>(List.of(duneEpub)));
+            inFolder("", dune);
+
+            handler.handleNewBookFile(1L, Path.of("/library/Neuromancer.epub"));
+
+            verifyNoInteractions(existingBookAttacher);
+            verify(libraryProcessingService).processLibraryFiles(anyList(), eq(library));
+        }
+
+        @Test
+        void autoDetect_aFileTwoBooksOfItsFolderReadAsIsNotGivenToAFilelessBookEither() {
+            subPath("H/Herbert, Frank");
+            noEarlierMatch();
+            BookEntity epub = buildBook(20L, false);
+            BookFileEntity epubFile = buildBookFile(200L, epub, "Dune.epub", "h1");
+            epubFile.setFileSubPath("H/Herbert, Frank");
+            epub.setBookFiles(new ArrayList<>(List.of(epubFile)));
+            BookEntity mobi = buildBook(21L, false);
+            BookFileEntity mobiFile = buildBookFile(201L, mobi, "Dune.mobi", "h2");
+            mobiFile.setFileSubPath("H/Herbert, Frank");
+            mobi.setBookFiles(new ArrayList<>(List.of(mobiFile)));
+            inFolder("H/Herbert, Frank", epub, mobi);
+            shells(shellRow(10L, null, "Dune", "Frank Herbert"));
+
+            handler.handleNewBookFile(1L, Path.of("/library/H/Herbert, Frank/Dune.pdf"));
+
+            verifyNoInteractions(existingBookAttacher);
+            verify(bookRepository, never()).findFilelessBookRowsByLibraryId(anyLong());
+            verify(libraryProcessingService).processLibraryFiles(anyList(), eq(library));
+        }
+
+        @Test
+        void autoDetect_theFoldersBooksAreReadInTwoQueriesWhateverTheirNumber() {
+            // Before, each book of the folder cost a query for its files, its metadata and its authors
+            noEarlierMatch();
+            List<BookEntity> books = new ArrayList<>();
+            for (long id = 1; id <= 50; id++) {
+                BookEntity book = buildBook(id, false);
+                book.setBookFiles(new ArrayList<>(List.of(buildBookFile(id * 10, book, "Book " + id + ".epub", "h" + id))));
+                books.add(book);
+            }
+            inFolder("sub", books.toArray(BookEntity[]::new));
+
+            handler.handleNewBookFile(1L, Path.of("/library/sub/Book 7.pdf"));
+
+            verify(existingBookAttacher).attach(eq(7L), eq(Kind.SAME_FOLDER), anyList());
+            verify(bookRepository).findBookFormatRowsInFolder(1L, "sub");
+            verify(bookRepository).findAuthorNamesByBookIds(argThat(ids -> ids.size() == 50));
+        }
+
+        @Test
         void autoDetect_filelessBook_wrongLibraryPath_skipped() {
             subPath("W/Weir, Andy");
             noEarlierMatch();
             shells(shellRow(10L, 99L, "The Martian", "Andy Weir"));
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(anyLong(), anyString())).thenReturn(List.of());
 
             handler.handleNewBookFile(1L, Path.of("/library/W/Weir, Andy/The Martian.epub"));
 
@@ -478,7 +573,7 @@ class BookFileTransactionalHandlerTest {
             BookFileEntity file2 = buildBookFile(201L, book2, "otherbook.epub", "h2");
             book2.setBookFiles(new ArrayList<>(List.of(file2)));
 
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "sub")).thenReturn(List.of(book1, book2));
+            inFolder("sub", book1, book2);
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/mybook.pdf"));
 
@@ -491,7 +586,7 @@ class BookFileTransactionalHandlerTest {
             noEarlierMatch();
             BookEntity five = buildBook(20L, false);
             five.setBookFiles(new ArrayList<>(List.of(buildBookFile(200L, five, "A Dangerous Universe 5.epub", "h1"))));
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "sub")).thenReturn(List.of(five));
+            inFolder("sub", five);
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/A Dangerous Universe 3.epub"));
 
@@ -506,7 +601,7 @@ class BookFileTransactionalHandlerTest {
 
             handler.handleNewBookFile(1L, Path.of("/library/test.epub"));
 
-            verify(bookRepository, never()).findAllByLibraryPathIdAndFileSubPath(anyLong(), any());
+            verifyNoFolderLookup();
             verify(libraryProcessingService).processLibraryFiles(anyList(), eq(library));
         }
 
@@ -525,7 +620,7 @@ class BookFileTransactionalHandlerTest {
             BookFileEntity f3 = buildBookFile(202L, bigBook, "b.pdf", "h3");
             bigBook.setBookFiles(new ArrayList<>(List.of(f2, f3)));
 
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "sub")).thenReturn(List.of(smallBook, bigBook));
+            inFolder("sub", smallBook, bigBook);
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/new.mobi"));
 
@@ -553,12 +648,11 @@ class BookFileTransactionalHandlerTest {
         void nullOrganizationMode_defaultsToAutoDetect() {
             library.setOrganizationMode(null);
             noEarlierMatch();
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(anyLong(), anyString())).thenReturn(List.of());
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/test.epub"));
 
             // AUTO_DETECT: the folder's books, then the fileless books
-            verify(bookRepository).findAllByLibraryPathIdAndFileSubPath(1L, "sub");
+            verify(bookRepository).findBookFormatRowsInFolder(1L, "sub");
             verify(bookRepository).findFilelessBookRowsByLibraryId(1L);
         }
 
@@ -569,7 +663,7 @@ class BookFileTransactionalHandlerTest {
             BookEntity deletedBook = buildBook(20L, true);
             BookFileEntity file = buildBookFile(200L, deletedBook, "test.epub", "h1");
             deletedBook.setBookFiles(new ArrayList<>(List.of(file)));
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "sub")).thenReturn(List.of(deletedBook));
+            inFolder("sub", deletedBook);
 
             handler.handleNewBookFile(1L, Path.of("/library/sub/test.pdf"));
 
@@ -610,7 +704,7 @@ class BookFileTransactionalHandlerTest {
             BookEntity existingBook = buildBook(20L, false);
             BookFileEntity primaryFile = buildBookFile(200L, existingBook, "audiobook.epub", "h1");
             existingBook.setBookFiles(new ArrayList<>(List.of(primaryFile)));
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "sub")).thenReturn(List.of(existingBook));
+            inFolder("sub", existingBook);
 
             handler.handleNewFolderAudiobook(1L, Path.of("/library/sub/audiobook"));
 
@@ -618,6 +712,45 @@ class BookFileTransactionalHandlerTest {
                     && files.getFirst().isFolderBased() && files.getFirst().getBookFileType() == BookFileType.AUDIOBOOK
                     && files.getFirst().getFileName().equals("audiobook")));
             verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
+        }
+
+        @Test
+        void bookPerFolder_aFolderAudiobookIsNotTheBookOfTheFolderAudiobookNextToIt() {
+            // "sub/Book One/" is a folder audiobook already: its row is in "sub", named "Book One"
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
+            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
+            BookEntity bookOne = buildBook(20L, false);
+            BookFileEntity folder = buildBookFile(200L, bookOne, "Book One", "h1");
+            folder.setBookType(BookFileType.AUDIOBOOK);
+            folder.setFolderBased(true);
+            bookOne.setBookFiles(new ArrayList<>(List.of(folder)));
+            inFolder("sub", bookOne);
+
+            handler.handleNewFolderAudiobook(1L, Path.of("/library/sub/Book Two"));
+
+            verifyNoInteractions(existingBookAttacher);
+            verify(libraryProcessingService).processLibraryFiles(anyList(), eq(library));
+        }
+
+        @Test
+        void bookPerFolder_aFileInAFolderAudiobooksFolderIsThatBooks() {
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
+            subPath("sub/Book One");
+            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(anyLong(), any(), anyString()))
+                    .thenReturn(Optional.empty());
+            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
+            when(bookFilePersistenceService.findMovedFile(anyString(), any(), any())).thenReturn(Optional.empty());
+            BookEntity bookOne = buildBook(20L, false);
+            BookFileEntity folder = buildBookFile(200L, bookOne, "Book One", "h1");
+            folder.setBookType(BookFileType.AUDIOBOOK);
+            folder.setFolderBased(true);
+            bookOne.setBookFiles(new ArrayList<>(List.of(folder)));
+            inFolder("sub/Book One", bookOne);
+
+            handler.handleNewBookFile(1L, Path.of("/library/sub/Book One/Book One.epub"));
+
+            verify(existingBookAttacher).attach(eq(20L), eq(Kind.SAME_FOLDER), anyList());
+            verify(bookRepository).findBookFormatRowsOwnedByFolder(1L, "sub/Book One", "sub", "Book One");
         }
 
         @Test
@@ -634,7 +767,6 @@ class BookFileTransactionalHandlerTest {
         @Test
         void noMatch_createsNewFolderAudiobook() {
             when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(anyLong(), anyString())).thenReturn(List.of());
 
             handler.handleNewFolderAudiobook(1L, Path.of("/library/sub/audiobook"));
 
@@ -649,7 +781,7 @@ class BookFileTransactionalHandlerTest {
             BookEntity deletedBook = buildBook(20L, true);
             BookFileEntity file = buildBookFile(200L, deletedBook, "audiobook.epub", "h1");
             deletedBook.setBookFiles(new ArrayList<>(List.of(file)));
-            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(anyLong(), anyString())).thenReturn(List.of(deletedBook));
+            inFolder("sub", deletedBook);
 
             handler.handleNewFolderAudiobook(1L, Path.of("/library/sub/audiobook"));
 

@@ -2,7 +2,6 @@ package org.booklore.service.watcher;
 
 import org.booklore.exception.ApiError;
 import org.booklore.model.dto.settings.LibraryFile;
-import org.booklore.model.entity.AuthorEntity;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.LibraryEntity;
@@ -14,6 +13,8 @@ import org.booklore.model.websocket.LogNotification;
 import org.booklore.model.websocket.Topic;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
+import org.booklore.repository.projection.BookAuthorRow;
+import org.booklore.repository.projection.BookFileScanRow;
 import org.booklore.service.NotificationService;
 import org.booklore.service.file.FileFingerprint;
 import org.booklore.service.library.ExistingBookAttacher;
@@ -38,7 +39,11 @@ import java.nio.file.Path;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
 import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -209,7 +214,7 @@ public class BookFileTransactionalHandler {
 
         Decision inFolder = switch (mode) {
             case AUTO_DETECT -> ExistingBookMatcher.matchInFolder(evidence, booksInFolder(libraryPathId, subPath));
-            case BOOK_PER_FOLDER -> bookOfFolder(libraryPathId, subPath, file.getBookFileType());
+            case BOOK_PER_FOLDER -> bookOfFolder(libraryPathId, file);
             case BOOK_PER_FILE -> null;
         };
         if (inFolder instanceof Match match) {
@@ -236,61 +241,61 @@ public class BookFileTransactionalHandler {
     }
 
     /**
-     * The books with book files in the folder, with those files and their authors. The database finds the folder through
-     * its collation, which ignores case and possibly accents; a book with files only in a folder that compares equal is
-     * in another folder.
+     * The books with book files in the folder, with those files and their authors: two queries whatever the number of
+     * books there. The database finds the folder through its collation, which ignores case and possibly accents; a
+     * book with files only in a folder that compares equal is in another folder.
      */
     private BooksInFolder booksInFolder(Long libraryPathId, String subPath) {
         if (subPath == null) {
             return BooksInFolder.EMPTY;
         }
-        List<FolderBook> books = new ArrayList<>();
-        for (BookEntity book : bookRepository.findAllByLibraryPathIdAndFileSubPath(libraryPathId, subPath)) {
-            if (Boolean.TRUE.equals(book.getDeleted())) {
-                continue;
+        Map<Long, List<FolderFile>> filesByBook = new LinkedHashMap<>();
+        for (BookFileScanRow row : bookRepository.findBookFormatRowsInFolder(libraryPathId, subPath)) {
+            if (!row.isBookDeleted() && subPath.equals(row.fileSubPath())) {
+                filesByBook.computeIfAbsent(row.bookId(), id -> new ArrayList<>())
+                        .add(new FolderFile(row.fileName(), row.bookType() == BookFileType.AUDIOBOOK));
             }
-            List<FolderFile> files = book.getBookFiles().stream()
-                    .filter(bf -> bf.isBookFormat() && subPath.equals(bf.getFileSubPath()))
-                    .map(bf -> new FolderFile(bf.getFileName(), bf.getBookType() == BookFileType.AUDIOBOOK))
-                    .toList();
-            if (files.isEmpty()) {
-                continue;
-            }
-            List<String> authors = book.getMetadata() == null || book.getMetadata().getAuthors() == null
-                    ? List.of()
-                    : book.getMetadata().getAuthors().stream().map(AuthorEntity::getName).toList();
-            books.add(new FolderBook(book.getId(), files, authors));
         }
+        if (filesByBook.isEmpty()) {
+            return BooksInFolder.EMPTY;
+        }
+        Map<Long, List<String>> authorsByBook = new HashMap<>();
+        for (BookAuthorRow row : bookRepository.findAuthorNamesByBookIds(filesByBook.keySet())) {
+            authorsByBook.computeIfAbsent(row.bookId(), id -> new ArrayList<>()).add(row.authorName());
+        }
+        List<FolderBook> books = new ArrayList<>(filesByBook.size());
+        filesByBook.forEach((bookId, files) -> books.add(new FolderBook(bookId, files, authorsByBook.getOrDefault(bookId, List.of()))));
         return BooksInFolder.of(subPath, books);
     }
 
     /**
-     * BOOK_PER_FOLDER, as the rescan decides it: the one book with files in the folder, none when there are several,
-     * and for an audiobook in a folder without books the one book with an ebook in the nearest folder above. Files at
-     * the library's root are books of their own.
+     * BOOK_PER_FOLDER, as the rescan decides it: the one book with files in the file's own folder (a folder
+     * audiobook's own folder is itself), none when there are several, and for an audiobook in a folder without books
+     * the one book with an ebook in the nearest folder above. Files at the library's root are books of their own.
      */
-    private Decision bookOfFolder(Long libraryPathId, String subPath, BookFileType fileType) {
-        if (subPath == null || subPath.isEmpty()) {
+    private Decision bookOfFolder(Long libraryPathId, LibraryFile file) {
+        if (file.getFileSubPath() == null || file.getFileSubPath().isEmpty()) {
             return null;
         }
-        List<Long> inFolder = activeBookIds(bookRepository.findAllByLibraryPathIdAndFileSubPath(libraryPathId, subPath), subPath, false);
+        String folder = BookFileScanRow.ownFolder(file.getFileSubPath(), file.getFileName(), file.isFolderBased());
+        List<Long> inFolder = activeBookIds(libraryPathId, folder, false);
         if (inFolder.size() == 1) {
             return new Match(inFolder.getFirst(), Kind.SAME_FOLDER, "the book of its folder");
         }
         if (inFolder.size() > 1) {
             return new Ambiguous(inFolder, inFolder.size() + " books have files in its folder");
         }
-        if (fileType != BookFileType.AUDIOBOOK) {
+        if (file.getBookFileType() != BookFileType.AUDIOBOOK) {
             return null;
         }
-        String current = subPath;
+        String current = folder;
         while (true) {
             int lastSep = Math.max(current.lastIndexOf('/'), current.lastIndexOf('\\'));
             if (lastSep <= 0) {
                 return null;
             }
             current = current.substring(0, lastSep);
-            List<Long> withEbook = activeBookIds(bookRepository.findAllByLibraryPathIdAndFileSubPath(libraryPathId, current), current, true);
+            List<Long> withEbook = activeBookIds(libraryPathId, current, true);
             if (withEbook.size() == 1) {
                 log.debug("BOOK_PER_FOLDER: audiobook absorbed by book id={} at '{}'", withEbook.getFirst(), current);
                 return new Match(withEbook.getFirst(), Kind.SAME_FOLDER, "the book with an ebook in '" + current + "'");
@@ -302,17 +307,21 @@ public class BookFileTransactionalHandler {
     }
 
     /**
-     * The books, not deleted, with a book format in exactly this folder, and with an ebook if asked. The folder lookup
-     * compares through the database's collation, so it can also return books of a folder that only compares equal.
+     * The books, not deleted, with a book format whose own folder is exactly this one (a file stored in it, or a
+     * folder audiobook that is it), and with an ebook there if asked. The folder lookup compares through the
+     * database's collation, so it can also return files of a folder that only compares equal.
      */
-    private static List<Long> activeBookIds(List<BookEntity> books, String folder, boolean withAnEbook) {
-        return books.stream()
-                .filter(book -> !Boolean.TRUE.equals(book.getDeleted()))
-                .filter(book -> book.getBookFiles().stream()
-                        .anyMatch(bf -> bf.isBookFormat() && folder.equals(bf.getFileSubPath())))
-                .filter(book -> !withAnEbook || book.getBookFiles().stream()
-                        .anyMatch(bf -> bf.isBookFormat() && bf.getBookType() != BookFileType.AUDIOBOOK))
-                .map(BookEntity::getId)
-                .toList();
+    private List<Long> activeBookIds(Long libraryPathId, String folder, boolean withAnEbook) {
+        int lastSep = Math.max(folder.lastIndexOf('/'), folder.lastIndexOf('\\'));
+        String parent = lastSep < 0 ? "" : folder.substring(0, lastSep);
+        String leaf = folder.substring(lastSep + 1);
+        Set<Long> ids = new LinkedHashSet<>();
+        for (BookFileScanRow row : bookRepository.findBookFormatRowsOwnedByFolder(libraryPathId, folder, parent, leaf)) {
+            if (!row.isBookDeleted() && folder.equals(row.ownFolder())
+                    && (!withAnEbook || row.bookType() != BookFileType.AUDIOBOOK)) {
+                ids.add(row.bookId());
+            }
+        }
+        return List.copyOf(ids);
     }
 }

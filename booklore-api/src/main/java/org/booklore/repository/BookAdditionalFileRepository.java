@@ -48,7 +48,8 @@ public interface BookAdditionalFileRepository extends JpaRepository<BookFileEnti
      */
     @Query("""
             SELECT new org.booklore.repository.projection.BookFileScanRow(
-                bf.id, b.id, lp.id, lp.path, bf.fileSubPath, bf.fileName, bf.isBookFormat, bf.bookType, b.deleted)
+                bf.id, b.id, lp.id, lp.path, bf.fileSubPath, bf.fileName, bf.isBookFormat, bf.bookType, b.deleted,
+                bf.folderBased)
             FROM BookFileEntity bf
             JOIN bf.book b
             LEFT JOIN b.libraryPath lp

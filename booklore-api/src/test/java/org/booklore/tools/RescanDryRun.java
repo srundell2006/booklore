@@ -388,8 +388,10 @@ public final class RescanDryRun {
             List<BookFileScanRow> rows = new ArrayList<>(existing.size());
             long id = 0;
             for (ExistingFile file : existing) {
+                // As for a new file, a name without a book extension is a folder audiobook
+                boolean folderBased = BookFileExtension.fromFileName(file.fileName()).isEmpty();
                 rows.add(new BookFileScanRow(++id, file.bookId(), file.libraryPathId(), "/library-path-" + file.libraryPathId(),
-                        file.fileSubPath(), file.fileName(), true, file.bookType(), false));
+                        file.fileSubPath(), file.fileName(), true, file.bookType(), false, folderBased));
             }
             return new LibraryBookFiles(rows);
         }

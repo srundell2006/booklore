@@ -5,6 +5,7 @@ import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.projection.BookAuthorRow;
+import org.booklore.repository.projection.BookFileScanRow;
 import org.booklore.repository.projection.BookCoverUpdateProjection;
 import org.booklore.repository.projection.FilelessBookRow;
 import jakarta.transaction.Transactional;
@@ -51,8 +52,43 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     @Query("SELECT DISTINCT b FROM BookEntity b JOIN b.bookFiles bf WHERE b.libraryPath.id = :libraryPathId AND (bf.fileSubPath = :fileSubPathPrefix OR bf.fileSubPath LIKE CONCAT(:fileSubPathPrefix, '/%')) AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false)")
     List<BookEntity> findAllByLibraryPathIdAndFileSubPathStartingWith(@Param("libraryPathId") Long libraryPathId, @Param("fileSubPathPrefix") String fileSubPathPrefix);
 
-    @Query("SELECT DISTINCT b FROM BookEntity b JOIN b.bookFiles bf WHERE b.libraryPath.id = :libraryPathId AND bf.fileSubPath = :fileSubPath AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false)")
-    List<BookEntity> findAllByLibraryPathIdAndFileSubPath(@Param("libraryPathId") Long libraryPathId, @Param("fileSubPath") String fileSubPath);
+    /**
+     * The book formats stored in one folder of a library path, soft-deleted books' included, as plain rows: what the
+     * watcher matches a new file against, in one query whatever the number of books in the folder. The folder is
+     * compared through the column's collation, which on MariaDB ignores case and possibly accents; callers compare
+     * it exactly.
+     */
+    @Query("""
+            SELECT new org.booklore.repository.projection.BookFileScanRow(
+                bf.id, b.id, lp.id, lp.path, bf.fileSubPath, bf.fileName, bf.isBookFormat, bf.bookType, b.deleted,
+                bf.folderBased)
+            FROM BookFileEntity bf
+            JOIN bf.book b
+            LEFT JOIN b.libraryPath lp
+            WHERE b.libraryPath.id = :libraryPathId AND bf.fileSubPath = :fileSubPath AND bf.isBookFormat = true
+            """)
+    List<BookFileScanRow> findBookFormatRowsInFolder(@Param("libraryPathId") Long libraryPathId,
+                                                     @Param("fileSubPath") String fileSubPath);
+
+    /**
+     * The book formats whose own folder is {@code parent/leaf}: the files stored in it, and a folder audiobook that is
+     * that folder. As {@link #findBookFormatRowsInFolder}, compared through the columns' collation.
+     */
+    @Query("""
+            SELECT new org.booklore.repository.projection.BookFileScanRow(
+                bf.id, b.id, lp.id, lp.path, bf.fileSubPath, bf.fileName, bf.isBookFormat, bf.bookType, b.deleted,
+                bf.folderBased)
+            FROM BookFileEntity bf
+            JOIN bf.book b
+            LEFT JOIN b.libraryPath lp
+            WHERE b.libraryPath.id = :libraryPathId AND bf.isBookFormat = true
+            AND ((bf.fileSubPath = :folder AND bf.folderBased = false)
+                 OR (bf.folderBased = true AND bf.fileSubPath = :parent AND bf.fileName = :leaf))
+            """)
+    List<BookFileScanRow> findBookFormatRowsOwnedByFolder(@Param("libraryPathId") Long libraryPathId,
+                                                          @Param("folder") String folder,
+                                                          @Param("parent") String parent,
+                                                          @Param("leaf") String leaf);
 
     @Query("SELECT b.id FROM BookEntity b WHERE b.libraryPath.id IN :libraryPathIds AND (b.deleted IS NULL OR b.deleted = false)")
     List<Long> findAllBookIdsByLibraryPathIdIn(@Param("libraryPathIds") Collection<Long> libraryPathIds);

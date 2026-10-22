@@ -389,8 +389,10 @@ public class BookGroupingService {
      */
     private final class FoldersOfBooks {
 
+        /** By the folder holding each file, a folder audiobook by the folder holding it: how AUTO_DETECT names them. */
         private final Map<String, Map<Long, List<BookFileScanRow>>> rowsByFolder = new HashMap<>();
-        private final Set<Long> booksWithAnEbook = new HashSet<>();
+        /** By each file's own folder, a folder audiobook by its own folder: the folders BOOK_PER_FOLDER makes books of. */
+        private final Map<String, Map<Long, List<BookFileScanRow>>> rowsByOwnFolder = new HashMap<>();
         private final Map<Long, List<String>> authorsByBook = new HashMap<>();
         private final Map<String, BooksInFolder> indexes = new HashMap<>();
 
@@ -401,9 +403,8 @@ public class BookGroupingService {
                 }
                 rowsByFolder.computeIfAbsent(folderKey(row.libraryPathId(), row.fileSubPath()), k -> new LinkedHashMap<>())
                         .computeIfAbsent(row.bookId(), id -> new ArrayList<>()).add(row);
-                if (row.bookType() != BookFileType.AUDIOBOOK) {
-                    booksWithAnEbook.add(row.bookId());
-                }
+                rowsByOwnFolder.computeIfAbsent(folderKey(row.libraryPathId(), row.ownFolder()), k -> new LinkedHashMap<>())
+                        .computeIfAbsent(row.bookId(), id -> new ArrayList<>()).add(row);
             }
         }
 
@@ -413,6 +414,10 @@ public class BookGroupingService {
 
         private Map<Long, List<BookFileScanRow>> rowsIn(Long libraryPathId, String subPath) {
             return rowsByFolder.getOrDefault(folderKey(libraryPathId, subPath), Map.of());
+        }
+
+        private Map<Long, List<BookFileScanRow>> rowsInOwnFolder(Long libraryPathId, String folder) {
+            return rowsByOwnFolder.getOrDefault(folderKey(libraryPathId, folder), Map.of());
         }
 
         /** Reads the authors of the books in the new files' folders, a batch of books per query. */
@@ -452,14 +457,15 @@ public class BookGroupingService {
          * BOOK_PER_FOLDER: a folder is one book, so a new file belongs to the one book with files in its folder. With
          * several there, which one is a guess, and it belongs to none. An audiobook in a folder without books belongs
          * to the one book with an ebook in the nearest folder above that has one ("Title/audio/01.mp3" to the book of
-         * "Title/Title.epub"). Files at the library's root are books of their own.
+         * "Title/Title.epub"). Files at the library's root are books of their own. A folder audiobook's folder is its
+         * own: "Author/Book Two" is not the book of the folder audiobook "Author/Book One" next to it.
          */
         Decision folderBook(LibraryFile file) {
-            String subPath = subPath(file);
-            if (subPath.isEmpty()) {
+            if (subPath(file).isEmpty()) {
                 return null;
             }
-            Set<Long> inFolder = rowsIn(pathId(file), subPath).keySet();
+            String subPath = BookFileScanRow.ownFolder(subPath(file), file.getFileName(), file.isFolderBased());
+            Set<Long> inFolder = rowsInOwnFolder(pathId(file), subPath).keySet();
             if (inFolder.size() == 1) {
                 return new Match(inFolder.iterator().next(), Kind.SAME_FOLDER, "the book of its folder");
             }
@@ -471,7 +477,10 @@ public class BookGroupingService {
             }
             String current = subPath;
             while ((current = parent(current)) != null) {
-                List<Long> withEbook = rowsIn(pathId(file), current).keySet().stream().filter(booksWithAnEbook::contains).toList();
+                List<Long> withEbook = rowsInOwnFolder(pathId(file), current).entrySet().stream()
+                        .filter(book -> book.getValue().stream().anyMatch(row -> row.bookType() != BookFileType.AUDIOBOOK))
+                        .map(Map.Entry::getKey)
+                        .toList();
                 if (withEbook.size() == 1) {
                     return new Match(withEbook.getFirst(), Kind.SAME_FOLDER, "the book with an ebook in '" + current + "'");
                 }
