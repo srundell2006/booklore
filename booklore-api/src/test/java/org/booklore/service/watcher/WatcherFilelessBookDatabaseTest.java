@@ -30,6 +30,7 @@ import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.TestPropertySource;
 import org.springframework.test.context.bean.override.mockito.MockitoSpyBean;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 import org.springframework.transaction.support.TransactionTemplate;
 
 import javax.sql.DataSource;
@@ -228,10 +229,15 @@ class WatcherFilelessBookDatabaseTest {
         epub("Weir, Andy/The Martian.epub");
         epub("Andy Weir/The Martian.epub");
 
+        // The watcher's event runs in a transaction that has read the database before it attaches. On MariaDB, at its
+        // default REPEATABLE READ, that transaction's reads then see the data as it was at its first read. H2's
+        // REPEATABLE READ still sees rows other transactions add since, and its SERIALIZABLE does not, as MariaDB's
+        // REPEATABLE READ does not: an attach that joined the event's transaction would miss the rescan's file here
+        TransactionTemplate eventTx = new TransactionTemplate(transactionManager);
+        eventTx.setIsolationLevel(TransactionDefinition.ISOLATION_SERIALIZABLE);
         ExecutorService threads = Executors.newSingleThreadExecutor();
         try {
-            List<LibraryFile> inEvent = tx.execute(status -> {
-                // The event's transaction has read the database: on MariaDB its reads now see the data as it was then
+            List<LibraryFile> inEvent = eventTx.execute(status -> {
                 bookRepository.count();
                 try {
                     assertThat(threads.submit(() -> existingBookAttacher.attach(shell, Kind.FILELESS,
