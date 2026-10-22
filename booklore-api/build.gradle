@@ -138,6 +138,17 @@ test {
     finalizedBy jacocoTestReport
 }
 
+// Says what a rescan would decide for a library's new files, from TSV exports of the library, without a database.
+// The tool is a test class, so it is not part of the application's jar; its header says how to export and run it.
+tasks.register('dryRunRescan', JavaExec) {
+    group = 'verification'
+    description = "Prints a rescan's decisions for new files from TSV exports: --args='--dir <exports> [--mode AUTO_DETECT] [--out <file>]'"
+    dependsOn testClasses
+    classpath = sourceSets.test.runtimeClasspath
+    mainClass = 'org.booklore.tools.RescanDryRun'
+    maxHeapSize = '2g'
+}
+
 jacocoTestReport {
     dependsOn test
     reports {

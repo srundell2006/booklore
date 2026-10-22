@@ -57,6 +57,32 @@ public class BookGroupingService {
     public record GroupingResult(List<Attachment> filesToAttach, Map<String, List<LibraryFile>> newBookGroups) {
     }
 
+    /**
+     * What {@link #groupForRescan} decided for each new file on its way to the result, and why. The rescan only logs it;
+     * a dry run of the rules over an export of a library reports it per file.
+     */
+    public interface DecisionListener {
+
+        DecisionListener NONE = new DecisionListener() {
+        };
+
+        /** The file against the books with files in its folder; not called in BOOK_PER_FILE, which never looks there. */
+        default void inFolder(LibraryFile file, Decision decision) {
+        }
+
+        /** The file against the library's fileless books, when its folder gave it no book. */
+        default void fileless(LibraryFile file, Decision decision) {
+        }
+
+        /** A fileless book that files matched but gets none of them, the files and why. */
+        default void claimsRejected(long bookId, List<LibraryFile> files, String why) {
+        }
+
+        /** Files that would be one new book but matched different books, and so become a new book. */
+        default void groupSplit(List<LibraryFile> files, Set<Long> bookIds) {
+        }
+    }
+
     public Map<String, List<LibraryFile>> groupForInitialScan(List<LibraryFile> newFiles, LibraryEntity libraryEntity) {
         return newBookGroups(getOrganizationMode(libraryEntity), newFiles);
     }
@@ -84,6 +110,12 @@ public class BookGroupingService {
      * other), and a group whose files matched different books becomes a new book instead.
      */
     public GroupingResult groupForRescan(List<LibraryFile> newFiles, LibraryEntity libraryEntity, LibraryBookFiles bookFiles) {
+        return groupForRescan(newFiles, libraryEntity, bookFiles, DecisionListener.NONE);
+    }
+
+    /** {@link #groupForRescan(List, LibraryEntity, LibraryBookFiles)}, telling {@code listener} what it decides. */
+    public GroupingResult groupForRescan(List<LibraryFile> newFiles, LibraryEntity libraryEntity, LibraryBookFiles bookFiles,
+                                         DecisionListener listener) {
         if (newFiles.isEmpty()) {
             return new GroupingResult(List.of(), Map.of());
         }
@@ -111,6 +143,9 @@ public class BookGroupingService {
                 case BOOK_PER_FOLDER -> folders.folderBook(file);
                 case BOOK_PER_FILE -> null;
             };
+            if (inFolder != null) {
+                listener.inFolder(file, inFolder);
+            }
             if (inFolder instanceof Match match) {
                 targets[i] = match.bookId();
                 kinds.put(match.bookId(), Kind.SAME_FOLDER);
@@ -123,6 +158,7 @@ public class BookGroupingService {
                 continue;
             }
             Decision fileless = ExistingBookMatcher.matchShell(evidence, shells);
+            listener.fileless(file, fileless);
             if (fileless instanceof Match match) {
                 boolean oneFilePerBook = mode == LibraryOrganizationMode.BOOK_PER_FILE;
                 claims.add(new Claim<>(i, file.getFileName(), match.bookId(), evidence.folderKey(),
@@ -136,8 +172,11 @@ public class BookGroupingService {
         }
 
         ClaimResolution<Integer> resolution = ExistingBookMatcher.resolveShellClaims(claims);
-        resolution.rejected().forEach((bookId, why) ->
-                log.info("Fileless book#{} is left as it is: {}; those files become new books", bookId, why));
+        resolution.rejected().forEach((bookId, why) -> {
+            log.info("Fileless book#{} is left as it is: {}; those files become new books", bookId, why);
+            listener.claimsRejected(bookId, claims.stream().filter(claim -> claim.bookId() == bookId)
+                    .map(claim -> newFiles.get(claim.file())).toList(), why);
+        });
         resolution.accepted().forEach((bookId, indexes) -> {
             indexes.forEach(i -> targets[i] = bookId);
             kinds.put(bookId, Kind.FILELESS);
@@ -160,6 +199,7 @@ public class BookGroupingService {
             if (groupTargets.size() > 1) {
                 log.info("New files {} read as one book but match different books {}; they become a new book",
                         group.stream().map(LibraryFile::getFileName).toList(), groupTargets);
+                listener.groupSplit(group, groupTargets);
                 group.forEach(file -> targets[indexOf.get(file)] = null);
             }
             newBookGroups.put(key, group);
