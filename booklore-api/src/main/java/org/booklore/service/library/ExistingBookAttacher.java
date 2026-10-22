@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.booklore.model.dto.settings.LibraryFile;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
+import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
@@ -34,7 +35,10 @@ import java.util.Set;
  * <ul>
  *   <li>A book that had no files keeps the cover it has, which is likely one its owner chose; only a book with no
  *       cover at all gets one, from the attached files, as a new book would.</li>
- *   <li>A book with files gets a cover only when an ebook meets an audiobook, of the attached file's kind, as before.</li>
+ *   <li>A book with files gets a cover of an attached file's kind only when that file is an ebook for an audiobook,
+ *       or an audiobook for an ebook, and the book has no cover of that kind yet. One it has came from an earlier
+ *       file, a metadata fetch or its owner, and a scan does not replace it.</li>
+ *   <li>A kind of cover its owner locked is never written.</li>
  * </ul>
  */
 @Service
@@ -143,19 +147,38 @@ public class ExistingBookAttacher {
     /** The cover of the file that is now the book's primary, and one of the other kind from a file of that kind. */
     private void coverAsForANewBook(BookEntity book, List<LibraryFile> attached) {
         LibraryFile primary = ImportGroups.findBestPrimaryFile(attached, book.getLibrary()).orElse(attached.getFirst());
-        fileAsBookProcessor.writeCoverFromFile(book, primary);
+        if (!isLocked(book, coverKind(primary))) {
+            fileAsBookProcessor.writeCoverFromFile(book, primary);
+        }
         crossTypeCovers(book, primary.getBookFileType(), attached.stream().filter(file -> file != primary).toList());
     }
 
-    /** A cover of an attached file's kind when it is an ebook for an audiobook or the other way round, once per kind. */
+    /**
+     * A cover of an attached file's kind when it is an ebook for an audiobook or the other way round, once per kind,
+     * and only when the book has no cover of that kind and its owner did not lock that kind.
+     */
     private void crossTypeCovers(BookEntity book, BookFileType primaryType, List<LibraryFile> files) {
         Set<CoverKind> written = EnumSet.noneOf(CoverKind.class);
         for (LibraryFile file : files) {
             CoverKind kind = ImportGroups.crossTypeCover(primaryType, file.getBookFileType());
-            if (kind != null && written.add(kind)) {
+            if (kind != null && !hasCover(book, kind) && !isLocked(book, kind) && written.add(kind)) {
                 fileAsBookProcessor.writeCoverFromFile(book, file);
             }
         }
+    }
+
+    private static CoverKind coverKind(LibraryFile file) {
+        return file.getBookFileType() == BookFileType.AUDIOBOOK ? CoverKind.AUDIOBOOK : CoverKind.BOOK;
+    }
+
+    private static boolean hasCover(BookEntity book, CoverKind kind) {
+        return (kind == CoverKind.AUDIOBOOK ? book.getAudiobookCoverHash() : book.getBookCoverHash()) != null;
+    }
+
+    private static boolean isLocked(BookEntity book, CoverKind kind) {
+        BookMetadataEntity metadata = book.getMetadata();
+        return metadata != null
+                && Boolean.TRUE.equals(kind == CoverKind.AUDIOBOOK ? metadata.getAudiobookCoverLocked() : metadata.getCoverLocked());
     }
 
     /** How log lines name the book a file went to: its id and title, not one of its files. */

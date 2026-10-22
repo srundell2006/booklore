@@ -200,6 +200,58 @@ class ExistingBookAttacherTest {
     }
 
     @Test
+    void aLockedEbookCoverOfAnAudiobookIsNotWrittenByAnAttachedEpub() throws IOException {
+        // The owner locked the ebook cover of an audiobook that has none: a rescan or the watcher attaches an epub
+        BookEntity book = book(21, path, null, BookFileType.AUDIOBOOK);
+        book.getMetadata().setCoverLocked(true);
+        LibraryFile epub = onDisk("A", "Title.epub", BookFileType.EPUB);
+
+        assertThat(attacher.attach(21, Kind.SAME_FOLDER, List.of(epub))).containsExactly(epub);
+
+        verify(fileAsBookProcessor, never()).writeCoverFromFile(any(), any());
+    }
+
+    @Test
+    void aLockedAudiobookCoverOfAnEbookIsNotWrittenByAnAttachedAudiobook() throws IOException {
+        BookEntity book = book(22, path, "h", BookFileType.EPUB);
+        book.getMetadata().setAudiobookCoverLocked(true);
+        LibraryFile audio = onDisk("A", "Title.m4b", BookFileType.AUDIOBOOK);
+
+        assertThat(attacher.attach(22, Kind.SAME_FOLDER, List.of(audio))).containsExactly(audio);
+
+        verify(fileAsBookProcessor, never()).writeCoverFromFile(any(), any());
+    }
+
+    @Test
+    void aCoverOfTheAttachedFilesKindTheBookHasIsKept() throws IOException {
+        // An audiobook with an ebook cover (from its owner or a metadata fetch), and an ebook with an audiobook cover
+        BookEntity audiobook = book(23, path, "chosen", BookFileType.AUDIOBOOK);
+        BookEntity ebook = book(24, path, "h", BookFileType.EPUB);
+        ebook.setAudiobookCoverHash("chosen");
+        LibraryFile epub = onDisk("A", "Title.epub", BookFileType.EPUB);
+        LibraryFile audio = onDisk("B", "Title.m4b", BookFileType.AUDIOBOOK);
+
+        assertThat(attacher.attach(23, Kind.SAME_FOLDER, List.of(epub))).containsExactly(epub);
+        assertThat(attacher.attach(24, Kind.SAME_FOLDER, List.of(audio))).containsExactly(audio);
+
+        verify(fileAsBookProcessor, never()).writeCoverFromFile(any(), any());
+        assertThat(audiobook.getBookCoverHash()).isEqualTo("chosen");
+    }
+
+    @Test
+    void aFilelessBookWithoutACoverGetsNoneOfAKindItsOwnerLocked() throws IOException {
+        BookEntity shell = book(25, null, null, new BookFileType[0]);
+        shell.getMetadata().setCoverLocked(true);
+        LibraryFile epub = onDisk("W", "The Martian.epub", BookFileType.EPUB);
+        LibraryFile audio = onDisk("W", "The Martian.m4b", BookFileType.AUDIOBOOK);
+
+        assertThat(attacher.attach(25, Kind.FILELESS, List.of(epub, audio))).containsExactly(epub, audio);
+
+        verify(fileAsBookProcessor, never()).writeCoverFromFile(any(), eq(epub));
+        verify(fileAsBookProcessor).writeCoverFromFile(shell, audio);
+    }
+
+    @Test
     void aFileAlreadyStoredOrInAnotherLibraryPathIsSkipped() throws IOException {
         BookEntity book = book(18, path, null, BookFileType.EPUB);
         LibraryFile stored = onDisk("A", "Stored.pdf", BookFileType.PDF);
