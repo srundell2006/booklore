@@ -211,6 +211,23 @@ class LibraryRescanDatabaseTest {
     }
 
     @Test
+    void aNewFormatNextToABookTheSameRescanRestoresGoesToThatBook() throws IOException {
+        // A book soft-deleted while its share was away, whose file is back, and a pdf of it added meanwhile
+        Path dir = Files.createDirectories(libraryRoot.resolve("Herbert/Dune"));
+        Files.writeString(dir.resolve("Dune.epub"), "epub");
+        Files.writeString(dir.resolve("Dune.pdf"), "pdf");
+        BookEntity dune = book("Herbert/Dune", "Dune.epub", BookFileType.EPUB, true);
+        walkFinds("Herbert/Dune/Dune.epub", "Herbert/Dune/Dune.pdf");
+        List<List<String>> newBooks = newBooksOfTheRescan();
+
+        rescan();
+
+        assertThat(bookRepository.findById(dune.getId()).orElseThrow().getDeleted()).isFalse();
+        assertThat(newBooks).isEmpty();
+        assertThat(fileNamesOf(dune)).containsExactlyInAnyOrder("Herbert/Dune/Dune.epub", "Herbert/Dune/Dune.pdf");
+    }
+
+    @Test
     void anEbookAttachedToAnAudiobookMakesItsEbookCoverFromThePrimaryTheBookHadBefore() throws IOException {
         // Changed deliberately: the cover decision saw the book with the epub already added and taken as its primary,
         // so an epub never gave an audiobook its ebook cover on a rescan, while the importer gives a new one

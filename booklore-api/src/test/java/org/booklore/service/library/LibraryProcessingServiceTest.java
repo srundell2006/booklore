@@ -526,6 +526,24 @@ class LibraryProcessingServiceTest {
     }
 
     @Test
+    void rescanLibrary_reloadsRowsAfterARestoreSoGroupingSeesTheRestoredBookLive() throws IOException {
+        givenLibrary();
+        givenScan(libraryFile("Dune", "Dune.epub"), libraryFile("Dune", "Dune.pdf", BookFileType.PDF));
+        List<BookFileScanRow> deleted = List.of(row(1, 11, "Dune", "Dune.epub", BookFileType.EPUB, true, true));
+        List<BookFileScanRow> restored = List.of(row(1, 11, "Dune", "Dune.epub"));
+        when(bookAdditionalFileRepository.findScanRowsByLibraryId(LIBRARY_ID)).thenReturn(deleted, deleted, restored);
+        when(bookRestorationService.restoreDeletedBooks(eq(libraryEntity), any(), anySet(), any())).thenReturn(true);
+        givenNothingToGroup();
+
+        rescan();
+
+        ArgumentCaptor<LibraryBookFiles> groupingRows = ArgumentCaptor.forClass(LibraryBookFiles.class);
+        verify(bookGroupingService).groupForRescan(anyList(), eq(libraryEntity), groupingRows.capture());
+        assertThat(groupingRows.getValue().rows()).extracting(BookFileScanRow::isBookDeleted).containsExactly(false);
+        assertThat(filesPassedToRescanGrouping()).extracting(LibraryFile::getFileName).containsExactly("Dune.pdf");
+    }
+
+    @Test
     void rescanLibrary_reloadsRowsAfterAPurgeBeforeDetectingNewFiles() throws IOException {
         LibraryFile main = libraryFile("", "main.epub");
         LibraryFile notes = libraryFile("", "notes.pdf", BookFileType.PDF);

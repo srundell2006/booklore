@@ -152,9 +152,11 @@ public class LibraryProcessingService {
             bookFiles = loadBookFiles(libraryEntity);
         }
 
-        // Restoring only flips book.deleted, which neither the purge nor new-file detection
-        // reads, so the rows stay current across it.
-        bookRestorationService.restoreDeletedBooks(libraryEntity, bookFiles, currentFullPaths, coverage);
+        // A restored book is live again, and grouping below matches new files only to live books: a new
+        // format next to it must go to it, not become a second book.
+        if (bookRestorationService.restoreDeletedBooks(libraryEntity, bookFiles, currentFullPaths, coverage)) {
+            bookFiles = loadBookFiles(libraryEntity);
+        }
         if (bookDeletionService.purgeDisallowedFormats(libraryEntity, bookFiles)) {
             bookFiles = loadBookFiles(libraryEntity);
         }
