@@ -10,6 +10,7 @@ import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
+import org.booklore.service.file.FileFingerprint;
 import org.booklore.service.library.matching.ExistingBookMatcher.Kind;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -321,6 +322,24 @@ class ExistingBookAttacherTest {
 
         assertThat(attacher.attach(29, Kind.FILELESS, List.of(bare))).isEmpty();
         assertThat(attacher.attach(29, Kind.FILELESS, List.of(named, bare))).containsExactly(named, bare);
+    }
+
+    @Test
+    void aFolderAudiobookIsStoredWithItsFolderHashAndSize() throws IOException {
+        shell(30, "curated");
+        Path dir = Files.createDirectories(root.resolve(WEIR).resolve("The Martian"));
+        Files.write(dir.resolve("01.mp3"), new byte[4096]);
+        Files.write(dir.resolve("02.mp3"), new byte[4096]);
+        LibraryFile folder = LibraryFile.builder().libraryEntity(library).libraryPathEntity(path)
+                .fileSubPath(WEIR).fileName("The Martian").bookFileType(BookFileType.AUDIOBOOK).folderBased(true).build();
+
+        assertThat(attacher.attach(30, Kind.FILELESS, List.of(folder))).containsExactly(folder);
+
+        BookFileEntity stored = saved(1).getFirst();
+        assertThat(stored.isFolderBased()).isTrue();
+        assertThat(stored.getCurrentHash()).isEqualTo(FileFingerprint.generateFolderHash(dir));
+        assertThat(stored.getInitialHash()).isEqualTo(stored.getCurrentHash());
+        assertThat(stored.getFileSizeKb()).isEqualTo(8L);
     }
 
     @Test

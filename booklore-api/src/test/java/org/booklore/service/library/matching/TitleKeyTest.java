@@ -131,6 +131,8 @@ class TitleKeyTest {
                 The Expanse - Book Two.epub                         | 2
                 The Expanse Book 2.epub                             | 2
                 Rocky III.epub                                      | 3
+                Book XIV.epub                                       | 14
+                2nd Chance.epub                                     | 2
                 Henry IV Part 2.epub                                | 4,2
                 Star Wars Episode V - The Empire Strikes Back.epub  | 5
                 Part I - The Beginning.epub                         | 1

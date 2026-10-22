@@ -164,6 +164,20 @@ class ExistingBookMatcherTest {
         }
 
         @Test
+        void aNovellaNumberedTwoAndAHalfIsNotNumberTwo() {
+            // D6: 2.5 sits between two volumes; it is no whole number, so "02 - Title" is not it
+            ShellCandidate novella = shellNumber(54, "Edge of Dawn", 2.5f, "Jane Doe");
+            assertThat(novella.seriesNumber()).isNull();
+            assertThat(shellMatch(file("D/Doe, Jane/Dawn", "02 - Edge of Dawn.epub"), novella)).isInstanceOf(NoMatch.class);
+        }
+
+        @Test
+        void aYearIsNoSeriesNumber() {
+            // A leading number of four digits is a title ("1984") or a year, never a place in a series
+            assertThat(file("O/Orwell, George", "1984 - George Orwell.epub").seriesReadings()).isEmpty();
+        }
+
+        @Test
         void anotherLibraryPathDoesNotMatch() {
             ShellCandidate elsewhere = ShellCandidate.of(24, 2L, false, true, "The Martian", null, null, List.of("Andy Weir"));
             assertThat(shellMatch(file("W/Weir, Andy", "The Martian.epub"), elsewhere)).isInstanceOf(NoMatch.class);
@@ -381,6 +395,13 @@ class ExistingBookMatcherTest {
                     book(7, "A Quiver Full of Arrows.epub"))).isInstanceOf(NoMatch.class);
             assertThat(folderMatch(file("A/Aarons, Edward S", "Assignment - Karachi.epub"),
                     book(8, List.of("Edward S. Aarons"), "Assignment.epub"))).isInstanceOf(NoMatch.class);
+        }
+
+        @Test
+        void aNameThatIsOnlyItsOwnFolderAndANumberIsNotAnotherBookOfThatNumber() {
+            // Without its folder's name "01 - Kane and Abel" is only "1", as "Book 1.epub" is
+            assertThat(folderMatch(file("A/Archer, Jeffrey/Kane and Abel", "01 - Kane and Abel.epub"), book(11, "Book 1.epub")))
+                    .isNotInstanceOf(Match.class);
         }
 
         @Test
