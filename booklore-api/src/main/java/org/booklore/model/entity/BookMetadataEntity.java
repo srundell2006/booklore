@@ -6,6 +6,8 @@ import jakarta.persistence.*;
 import lombok.*;
 import org.hibernate.annotations.Fetch;
 import org.hibernate.annotations.FetchMode;
+import org.hibernate.annotations.OnDelete;
+import org.hibernate.annotations.OnDeleteAction;
 
 import java.time.Instant;
 import java.time.LocalDate;
@@ -388,9 +390,12 @@ public class BookMetadataEntity {
         return trimmed.isEmpty() ? null : trimmed;
     }
 
+    // The cascades below are the Flyway schema's: deleting a book deletes its metadata and the metadata's links to
+    // authors, categories, moods and tags. They let H2's generated schema delete a library the same way.
     @OneToOne(fetch = FetchType.LAZY)
     @MapsId
     @JoinColumn(name = "book_id")
+    @OnDelete(action = OnDeleteAction.CASCADE)
     @JsonIgnore
     private BookEntity book;
 
@@ -403,6 +408,7 @@ public class BookMetadataEntity {
             name = "book_metadata_author_mapping",
             joinColumns = @JoinColumn(name = "book_id"),
             inverseJoinColumns = @JoinColumn(name = "author_id"))
+    @OnDelete(action = OnDeleteAction.CASCADE)
     @Fetch(FetchMode.SUBSELECT)
     @OrderColumn(name = "sort_order")
     private List<AuthorEntity> authors;
@@ -413,6 +419,7 @@ public class BookMetadataEntity {
             joinColumns = @JoinColumn(name = "book_id"),
             inverseJoinColumns = @JoinColumn(name = "category_id")
     )
+    @OnDelete(action = OnDeleteAction.CASCADE)
     @Fetch(FetchMode.SUBSELECT)
     private Set<CategoryEntity> categories;
 
@@ -422,6 +429,7 @@ public class BookMetadataEntity {
             joinColumns = @JoinColumn(name = "book_id"),
             inverseJoinColumns = @JoinColumn(name = "mood_id")
     )
+    @OnDelete(action = OnDeleteAction.CASCADE)
     @Fetch(FetchMode.SUBSELECT)
     private Set<MoodEntity> moods;
 
@@ -431,6 +439,7 @@ public class BookMetadataEntity {
             joinColumns = @JoinColumn(name = "book_id"),
             inverseJoinColumns = @JoinColumn(name = "tag_id")
     )
+    @OnDelete(action = OnDeleteAction.CASCADE)
     @Fetch(FetchMode.SUBSELECT)
     private Set<TagEntity> tags;
 

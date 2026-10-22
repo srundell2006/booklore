@@ -280,7 +280,13 @@ public class BookMetadataUpdater {
     private void updateAuthorsIfNeeded(BookMetadata m, BookMetadataEntity e, MetadataClearFlags clear, boolean merge, MetadataReplaceMode replaceMode) {
         if (Boolean.TRUE.equals(e.getAuthorsLocked())) return;
 
-        e.setAuthors(Optional.ofNullable(e.getAuthors()).orElseGet(ArrayList::new));
+        // Only ever set to a new, empty list. With association management, setting the list adds this metadata to
+        // the list of books of each author in it, which loads every one of that author's books first; changing the
+        // list's contents is not intercepted. The same goes for categories, moods and tags below, where one category
+        // can hold most of a library.
+        if (e.getAuthors() == null) {
+            e.setAuthors(new ArrayList<>());
+        }
 
         if (clear.isAuthors()) {
             e.getAuthors().clear();
@@ -326,7 +332,9 @@ public class BookMetadataUpdater {
     private void updateCategoriesIfNeeded(BookMetadata m, BookMetadataEntity e, MetadataClearFlags clear, boolean merge, MetadataReplaceMode replaceMode) {
         if (Boolean.TRUE.equals(e.getCategoriesLocked())) return;
 
-        e.setCategories(Optional.ofNullable(e.getCategories()).orElseGet(HashSet::new));
+        if (e.getCategories() == null) {
+            e.setCategories(new HashSet<>());
+        }
 
         if (clear.isCategories()) {
             e.getCategories().clear();
@@ -361,7 +369,9 @@ public class BookMetadataUpdater {
     private void updateMoodsIfNeeded(BookMetadata m, BookMetadataEntity e, MetadataClearFlags clear, boolean merge, MetadataReplaceMode replaceMode) {
         if (Boolean.TRUE.equals(e.getMoodsLocked())) return;
 
-        e.setMoods(Optional.ofNullable(e.getMoods()).orElseGet(HashSet::new));
+        if (e.getMoods() == null) {
+            e.setMoods(new HashSet<>());
+        }
 
         if (clear.isMoods()) {
             e.getMoods().clear();
@@ -396,7 +406,9 @@ public class BookMetadataUpdater {
     private void updateTagsIfNeeded(BookMetadata m, BookMetadataEntity e, MetadataClearFlags clear, boolean merge, MetadataReplaceMode replaceMode) {
         if (Boolean.TRUE.equals(e.getTagsLocked())) return;
 
-        e.setTags(Optional.ofNullable(e.getTags()).orElseGet(HashSet::new));
+        if (e.getTags() == null) {
+            e.setTags(new HashSet<>());
+        }
 
         if (clear.isTags()) {
             e.getTags().clear();

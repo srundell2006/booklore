@@ -161,17 +161,24 @@ public class BookFileDetachmentService {
         copy.setAgeRating(source.getAgeRating());
         copy.setContentRating(source.getContentRating());
 
+        // Each collection is set empty and then filled: with association management, setting one that already holds
+        // the source's authors or categories would add the copy to each of their lists of books, loading every book
+        // of that author or category first. Filling the collection is not intercepted.
         if (source.getAuthors() != null) {
-            copy.setAuthors(new ArrayList<>(source.getAuthors()));
+            copy.setAuthors(new ArrayList<>());
+            copy.getAuthors().addAll(source.getAuthors());
         }
         if (source.getCategories() != null) {
-            copy.setCategories(new HashSet<>(source.getCategories()));
+            copy.setCategories(new HashSet<>());
+            copy.getCategories().addAll(source.getCategories());
         }
         if (source.getMoods() != null) {
-            copy.setMoods(new HashSet<>(source.getMoods()));
+            copy.setMoods(new HashSet<>());
+            copy.getMoods().addAll(source.getMoods());
         }
         if (source.getTags() != null) {
-            copy.setTags(new HashSet<>(source.getTags()));
+            copy.setTags(new HashSet<>());
+            copy.getTags().addAll(source.getTags());
         }
 
         return copy;

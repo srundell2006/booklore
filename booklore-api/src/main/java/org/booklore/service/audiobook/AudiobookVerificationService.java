@@ -165,12 +165,13 @@ public class AudiobookVerificationService {
                                 }))
                         .toList();
 
+                // Set empty, then filled: with association management, setting a list that holds the authors would load
+                // all of each author's books first
                 if (metadata.getAuthors() == null) {
-                    metadata.setAuthors(new ArrayList<>(resolvedAuthors));
-                } else {
-                    metadata.getAuthors().clear();
-                    metadata.getAuthors().addAll(resolvedAuthors);
+                    metadata.setAuthors(new ArrayList<>());
                 }
+                metadata.getAuthors().clear();
+                metadata.getAuthors().addAll(resolvedAuthors);
             }
 
             // Accepting the detected values — flip status to VERIFIED, clear mismatch reason

@@ -270,7 +270,9 @@ public class LibraryService {
         LibraryEntity library = libraryRepository.findById(id)
                 .orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(id));
         libraryWatchService.unregisterLibrary(id);
-        Set<Long> bookIds = library.getBookEntities().stream().map(BookEntity::getId).collect(Collectors.toSet());
+        // Read before the delete, which takes the books' rows with it: the database deletes the books of a deleted
+        // library or path, and everything under them, through its foreign keys, without a book being loaded
+        Set<Long> bookIds = bookRepository.findAllBookIdsIncludingDeletedByLibraryId(id);
         fileService.deleteBookCovers(bookIds);
         String libraryName = library.getName();
         libraryRepository.deleteById(id);

@@ -5,6 +5,8 @@ import lombok.*;
 import org.booklore.convertor.AudioFileChapterListConverter;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.util.ArchiveUtils;
+import org.hibernate.annotations.OnDelete;
+import org.hibernate.annotations.OnDeleteAction;
 
 import java.util.List;
 
@@ -27,8 +29,10 @@ public class BookFileEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    // As in the Flyway schema: deleting a book, or a library and with it its books, deletes the book's files
     @ManyToOne
     @JoinColumn(name = "book_id", nullable = false)
+    @OnDelete(action = OnDeleteAction.CASCADE)
     private BookEntity book;
 
     @Column(name = "file_name", length = 1000, nullable = false)

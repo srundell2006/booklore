@@ -6,6 +6,8 @@ import org.booklore.convertor.BookRecommendationIdsListConverter;
 import org.booklore.model.dto.BookRecommendationLite;
 import org.booklore.model.enums.BookFileType;
 import org.hibernate.annotations.DynamicUpdate;
+import org.hibernate.annotations.OnDelete;
+import org.hibernate.annotations.OnDeleteAction;
 
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -43,12 +45,19 @@ public class BookEntity {
     @Column(name = "metadata_for_write_updated_at")
     private Instant metadataForWriteUpdatedAt;
 
+    // The library keeps no collection of its books, and must not get one back: with association management, giving a
+    // book its library adds the book to that collection, which loads every book of the library first. That ran once
+    // per new book, so an import slowed to seconds per book in a library of 129k. Deleting a library deletes its books
+    // through these foreign keys, as the Flyway schema declares them; the annotations give H2's generated schema the
+    // same.
     @ManyToOne
     @JoinColumn(name = "library_id", nullable = false)
+    @OnDelete(action = OnDeleteAction.CASCADE)
     private LibraryEntity library;
 
     @ManyToOne
     @JoinColumn(name = "library_path_id")
+    @OnDelete(action = OnDeleteAction.CASCADE)
     private LibraryPathEntity libraryPath;
 
     @Column(name = "is_physical")
