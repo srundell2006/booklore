@@ -67,6 +67,9 @@ final class TitleWords {
     static final Set<String> SERIES_KEYWORDS = Set.of(
             "book", "bk", "vol", "volume", "part", "pt", "episode", "ep", "chapter", "issue", "season", "no", "number", "#");
 
+    /** The keywords a comic's issue number follows ("#1", "Issue 1", "No. 1"); after the others it is a volume. */
+    static final Set<String> ISSUE_KEYWORDS = Set.of("#", "issue", "no", "number", "episode", "ep", "chapter");
+
     /** The keywords after which a number may also be written as a word or a one-letter Roman numeral ("Book One", "Part I"). */
     private static final Set<String> WORD_NUMBER_KEYWORDS = Set.of(
             "book", "bk", "vol", "volume", "part", "pt", "episode", "ep", "chapter", "issue", "season");
@@ -92,8 +95,19 @@ final class TitleWords {
     /** I to XXXIX: enough for any volume, and "mix" or "civil" never match. */
     private static final Pattern ROMAN = Pattern.compile("x{0,3}(?:ix|iv|v?i{0,3})");
 
+    /**
+     * Descriptor words that name a different collection of a comic, not an edition of one: "Saga Volume 1 (Deluxe
+     * Edition)" collects eighteen issues, "Saga Volume 1" six.
+     */
+    private static final Set<String> COMIC_COLLECTIONS = Set.of("deluxe");
+
     static boolean isDescriptor(String word) {
         return DESCRIPTORS.contains(word) || ORDINAL.matcher(word).matches();
+    }
+
+    /** {@link #isDescriptor(String)}, for a comic's name when {@code comic}. */
+    static boolean isDescriptor(String word, boolean comic) {
+        return isDescriptor(word) && !(comic && COMIC_COLLECTIONS.contains(word));
     }
 
     static boolean isAnchor(String word) {
@@ -146,6 +160,11 @@ final class TitleWords {
         }
         Integer value = NUMBER_WORDS.get(word);
         return value == null ? null : String.valueOf(value);
+    }
+
+    /** A release-style number ("v01"): a comic's volume. */
+    static boolean isReleaseNumber(String word) {
+        return RELEASE_NUMBER.matcher(word).matches();
     }
 
     private static String withoutLeadingZeros(String digits) {

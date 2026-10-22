@@ -149,6 +149,14 @@ class ExistingBookMatcherTest {
         }
 
         @Test
+        void aComicsIssueIsNotTheVolumeCollectingIt() {
+            ShellCandidate volume = shell(80, "Saga, Volume 1", "Brian K. Vaughan");
+            assertThat(shellMatch(file("Brian K. Vaughan/Saga", "Saga 001.cbz"), volume)).isInstanceOf(NoMatch.class);
+            assertThat(shellMatch(file("Brian K. Vaughan/Saga", "Saga #1.cbz"), volume)).isInstanceOf(NoMatch.class);
+            assertThat(matchedId(shellMatch(file("Brian K. Vaughan/Saga", "Saga Vol. 1.cbz"), volume))).isEqualTo(80);
+        }
+
+        @Test
         void aSeriesPrefixOnlyCountsForThatSeriesNumber() {
             FileEvidence kaneAndAbel = file("A/Archer, Jeffrey/Kane and Abel", "01 - Kane and Abel.epub");
             assertThat(shellMatch(kaneAndAbel, shellNumber(50, "Kane and Abel", 2, "Jeffrey Archer"))).isInstanceOf(NoMatch.class);

@@ -1,6 +1,7 @@
 package org.booklore.service.library.matching;
 
 import org.booklore.model.enums.BookFileExtension;
+import org.booklore.model.enums.BookFileType;
 
 import java.text.Normalizer;
 import java.util.ArrayList;
@@ -42,9 +43,13 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
      * " (1)" as a browser names a second download, or " - Copy" / "(copy)" as a file manager names a duplicate.
      *
      * @param number the n of " (n)", or null for " - Copy" and "(copy)"
+     * @param issue  whether n, when it is no copy after all, is a comic's issue number rather than a volume's
      */
-    public record CopyMarker(Integer number) {
+    public record CopyMarker(Integer number, boolean issue) {
     }
+
+    /** What an issue number of a comic is marked with in an identity: "saga #i1" is issue 1, "saga #1" volume 1. */
+    private static final String ISSUE = "i";
 
     private static final Pattern MARKS = Pattern.compile("\\p{M}+");
     private static final Pattern WHITESPACE = Pattern.compile("\\s+");
@@ -108,13 +113,13 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
      *              as one book split over several files rather than as a second volume
      */
     public static TitleKey ofFileName(String fileName, boolean audio, NameContext context) {
-        Prepared prepared = prepare(baseName(fileName), true, audio);
+        Prepared prepared = prepare(baseName(fileName), true, audio, isComic(fileName));
         return prepared.read(context == null ? NameContext.NONE : context);
     }
 
     /** The key of a book's title as its metadata has it: no extension, no copy marker, no audio parts. */
     public static TitleKey ofTitle(String title, NameContext context) {
-        return prepare(title, false, false).read(context == null ? NameContext.NONE : context);
+        return prepare(title, false, false, false).read(context == null ? NameContext.NONE : context);
     }
 
     /**
@@ -124,7 +129,7 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
      * {@link #droppedName} itself, for instance against the authors of the one book it is comparing with.
      */
     public static List<TitleKey> readings(String fileName, boolean audio, NameContext context) {
-        Prepared prepared = prepare(baseName(fileName), true, audio);
+        Prepared prepared = prepare(baseName(fileName), true, audio, isComic(fileName));
         NameContext ctx = context == null ? NameContext.NONE : context;
         Map<String, TitleKey> readings = new LinkedHashMap<>();
         TitleKey chosen = prepared.read(ctx);
@@ -133,6 +138,16 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
             readings.putIfAbsent(reading.identity() + "|" + reading.droppedName(), reading);
         }
         return List.copyOf(readings.values());
+    }
+
+    /**
+     * A comic book archive: in its name a bare number, or one after "#", "Issue" or "No.", is an issue ("Saga 001",
+     * "Saga #1"), and a number after "Vol.", "v" or "Book" a volume collecting several issues ("Saga Vol. 1"). The two
+     * are different books. A metadata title's numbers are all read as volumes, so an issue never matches one.
+     */
+    private static boolean isComic(String fileName) {
+        return fileName != null && BookFileExtension.fromFileName(fileName)
+                .map(extension -> extension.getType() == BookFileType.CBX).orElse(false);
     }
 
     /** The file name without a book file extension; a folder audiobook's name, which has none, as it is. */
@@ -209,7 +224,7 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
     public String identity() {
         if (copy != null && copy.number() != null) {
             List<String> withCopy = new ArrayList<>(numbers);
-            withCopy.add(String.valueOf(copy.number()));
+            withCopy.add((copy.issue() ? ISSUE : "") + copy.number());
             return identity(title, withCopy);
         }
         return identity(title, numbers);
@@ -243,18 +258,18 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
     /**
      * A name with the closed vocabularies already taken out: what is left to read for a title and an author.
      */
-    private record Prepared(String text, Set<Integer> years, Integer part, CopyMarker copy) {
+    private record Prepared(String text, Set<Integer> years, Integer part, CopyMarker copy, boolean comic) {
 
         /** The reading the context supports: at most one part dropped, and only one it confirms as an author. */
         TitleKey read(NameContext ctx) {
             if (text.isEmpty() && part != null && !ctx.leafName().isEmpty()) {
                 // A disc and nothing else ("CD1" in "Tolkien/The Hobbit"): the disc of the book its folder names
-                TitleKey folder = prepare(ctx.leafName(), false, false).read(ctx);
+                TitleKey folder = prepare(ctx.leafName(), false, false, false).read(ctx);
                 Set<Integer> allYears = new TreeSet<>(years);
                 allYears.addAll(folder.years());
                 return new TitleKey(folder.title(), folder.numbers(), allYears, part, copy, null);
             }
-            List<String> segments = segments(text);
+            List<String> segments = segments(text, comic);
             List<String> beforeBy = beforeBy(segments);
             if (beforeBy != null) {
                 String name = byName(segments);
@@ -275,7 +290,7 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
         /** Each reading with one name-like part dropped, confirmed or not: the " by " side, the first or the last part. */
         List<TitleKey> nameReadings() {
             List<TitleKey> out = new ArrayList<>();
-            List<String> segments = segments(text);
+            List<String> segments = segments(text, comic);
             List<String> beforeBy = beforeBy(segments);
             if (beforeBy != null) {
                 out.add(finish(beforeBy, byName(segments)));
@@ -297,13 +312,13 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
             String joined = String.join(" ", segments.stream().map(TitleKey::articleToFront).toList());
             List<String> titleWords = new ArrayList<>();
             List<String> numbers = new ArrayList<>();
-            List<String> tokens = withoutDescriptorRuns(words(joined));
+            List<String> tokens = withoutDescriptorRuns(words(joined), comic);
             for (int i = 0; i < tokens.size(); i++) {
                 String token = tokens.get(i);
                 if (TitleWords.SERIES_KEYWORDS.contains(token) && i + 1 < tokens.size()) {
                     String number = TitleWords.numberAfter(token, tokens.get(i + 1));
                     if (number != null) {
-                        numbers.add(number);
+                        numbers.add(comic && TitleWords.ISSUE_KEYWORDS.contains(token) ? ISSUE + number : number);
                         i++;
                         continue;
                     }
@@ -313,7 +328,8 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
                 }
                 String number = TitleWords.number(token);
                 if (number != null) {
-                    numbers.add(number);
+                    // A comic's "v01" is its first volume; any other bare number its issue
+                    numbers.add(comic && !TitleWords.isReleaseNumber(token) ? ISSUE + number : number);
                 } else {
                     titleWords.add(token);
                 }
@@ -325,7 +341,7 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
         }
     }
 
-    private static Prepared prepare(String raw, boolean fileName, boolean audio) {
+    private static Prepared prepare(String raw, boolean fileName, boolean audio, boolean comic) {
         String s = collapse(foldAccents(raw == null ? "" : raw).replace('_', ' '));
 
         CopyMarker copy = null;
@@ -333,10 +349,10 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
             Matcher word = COPY_WORD.matcher(s);
             Matcher number = COPY_NUMBER.matcher(s);
             if (word.matches()) {
-                copy = new CopyMarker(null);
+                copy = new CopyMarker(null, comic);
                 s = word.group(1).trim();
             } else if (number.matches()) {
-                copy = new CopyMarker(Integer.parseInt(number.group(2)));
+                copy = new CopyMarker(Integer.parseInt(number.group(2)), comic);
                 s = number.group(1).trim();
             }
         }
@@ -358,7 +374,7 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
                 years.add(Integer.parseInt(inner));
             } else if (bracketPart != null) {
                 part = bracketPart;
-            } else if (!inner.isEmpty() && !RELEASE_TAG.matcher(inner).matches() && !isDescriptorGroup(words(inner))) {
+            } else if (!inner.isEmpty() && !RELEASE_TAG.matcher(inner).matches() && !isDescriptorGroup(words(inner), comic)) {
                 kept.append(inner).append(' ');
             }
             last = bracket.end();
@@ -378,7 +394,7 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
                 s = s.substring(0, trailingPart.start()).trim();
             }
         }
-        return new Prepared(s, years, part, copy);
+        return new Prepared(s, years, part, copy, comic);
     }
 
     /**
@@ -416,11 +432,11 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
     }
 
     /** The " - " or ": " separated parts, without a part made only of descriptors (" - Unabridged"). */
-    private static List<String> segments(String text) {
+    private static List<String> segments(String text, boolean comic) {
         List<String> segments = new ArrayList<>(Arrays.stream(SEGMENT_SEPARATOR.split(text)).map(String::trim)
                 .filter(segment -> !segment.isEmpty()).toList());
         if (segments.size() > 1) {
-            List<String> withoutDescriptors = segments.stream().filter(segment -> !isDescriptorGroup(words(segment))).toList();
+            List<String> withoutDescriptors = segments.stream().filter(segment -> !isDescriptorGroup(words(segment), comic)).toList();
             if (!withoutDescriptors.isEmpty()) {
                 segments = new ArrayList<>(withoutDescriptors);
             }
@@ -552,8 +568,9 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
     }
 
     /** A bracket group or " - " part made only of descriptor words, one of them an anchor ("(Illustrated Edition)"). */
-    private static boolean isDescriptorGroup(List<String> tokens) {
-        return !tokens.isEmpty() && tokens.stream().allMatch(TitleWords::isDescriptor) && tokens.stream().anyMatch(TitleWords::isAnchor);
+    private static boolean isDescriptorGroup(List<String> tokens, boolean comic) {
+        return !tokens.isEmpty() && tokens.stream().allMatch(word -> TitleWords.isDescriptor(word, comic))
+                && tokens.stream().anyMatch(TitleWords::isAnchor);
     }
 
     /**
@@ -562,9 +579,9 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
      * descriptor words or an anchor that is never a title word; a leading run needs an anchor such as "Audiobook",
      * since "The Illustrated Man" and "Digital Fortress" are titles.
      */
-    private static List<String> withoutDescriptorRuns(List<String> tokens) {
+    private static List<String> withoutDescriptorRuns(List<String> tokens, boolean comic) {
         int cut = tokens.size();
-        while (cut > 1 && TitleWords.isDescriptor(tokens.get(cut - 1))) {
+        while (cut > 1 && TitleWords.isDescriptor(tokens.get(cut - 1), comic)) {
             cut--;
         }
         List<String> trailing = tokens.subList(cut, tokens.size());
@@ -573,7 +590,7 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
             tokens = tokens.subList(0, cut);
         }
         int start = 0;
-        while (start < tokens.size() - 1 && TitleWords.isDescriptor(tokens.get(start))) {
+        while (start < tokens.size() - 1 && TitleWords.isDescriptor(tokens.get(start), comic)) {
             start++;
         }
         if (start > 0 && tokens.subList(0, start).stream().anyMatch(TitleWords::isLeadingAnchor)) {

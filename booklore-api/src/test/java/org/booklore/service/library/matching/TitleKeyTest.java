@@ -58,7 +58,7 @@ class TitleKeyTest {
                 The Hobbit e-book.epub                       | hobbit
                 Audiobook The Hobbit.epub                    | hobbit
                 The Martian (v5.0).epub                      | martian
-                Saga 001 (2012) (Digital).cbz                | saga #1
+                Saga 001 (2012) (Digital).cbz                | saga #i1
                 The Hobbit (m4b).m4b                         | hobbit
                 The Hobbit [audiobook].m4b                   | hobbit
                 The Hobbit (audio).m4b                       | hobbit
@@ -116,8 +116,8 @@ class TitleKeyTest {
                 A Dangerous Universe 3.epub                         | 3
                 Kokoro Connect Volume 4 - Michi Random.epub         | 4
                 Kokoro Connect Volume - Nise Random.epub            | ""
-                Saga 001 (2012) (Digital).cbz                       | 1
-                Saga #12.cbz                                        | 12
+                Saga 001 (2012) (Digital).cbz                       | i1
+                Saga #12.cbz                                        | i12
                 Saga v02.cbz                                        | 2
                 Saga Vol. 2.cbz                                     | 2
                 Saga Volume 2.cbz                                   | 2
@@ -157,7 +157,7 @@ class TitleKeyTest {
         void keepsBracketedYearsApartFromTheNumbers() {
             TitleKey saga = key("", "Saga 001 (2012) (Digital).cbz");
 
-            assertThat(saga.numbers()).containsExactly("1");
+            assertThat(saga.numbers()).containsExactly("i1");
             assertThat(saga.years()).containsExactly(2012);
             assertThat(key("", "Dune (1965).epub").identity()).isEqualTo(key("", "Dune.epub").identity());
         }
@@ -178,6 +178,36 @@ class TitleKeyTest {
                 """)
         void differentNumbersAreDifferentBooks(String a, String b) {
             assertThat(key("", a).identity()).isNotEqualTo(key("", b).identity());
+        }
+
+        @ParameterizedTest(name = "{0} -> {1}")
+        @CsvSource(delimiter = '|', textBlock = """
+                Saga Vol. 1.cbz                        | saga #1
+                Saga Volume 1.cbr                      | saga #1
+                Saga v01.cbz                           | saga #1
+                Saga Book One.cbz                      | saga #1
+                Saga 001.cbz                           | saga #i1
+                Saga #1.cbz                            | saga #i1
+                Saga Issue 1.cbz                       | saga #i1
+                Saga No. 1.cbz                         | saga #i1
+                Saga v01 #3.cbz                        | saga #1/i3
+                Saga Volume 1 (Deluxe Edition).cbz     | saga deluxe edition #1
+                Saga Volume 1 Deluxe Edition.cbr       | saga deluxe edition #1
+                Saga (Digital).cbz                     | saga
+                The Hobbit (Deluxe Edition).epub       | hobbit
+                Harry Potter 1.epub                    | harry potter #1
+                """)
+        void readsAComicsIssueApartFromItsVolume(String name, String identity) {
+            // "Saga 001" is the first issue, "Saga Vol. 1" the trade collecting issues 1 to 6, and its deluxe edition
+            // issues 1 to 18: three books. An ebook's bare number is its volume, as before.
+            assertThat(key("", name).identity()).isEqualTo(identity);
+        }
+
+        @Test
+        void readsAComicsIssueAsNoMetadataTitle() {
+            // A title does not say whether it is a comic's: its numbers are volumes, which an issue never matches
+            assertThat(TitleKey.ofTitle("Saga, Volume 1", NameContext.NONE).identity()).isEqualTo(key("", "Saga Vol. 1.cbz").identity());
+            assertThat(TitleKey.ofTitle("Saga #1", NameContext.NONE).identity()).isNotEqualTo(key("", "Saga 001.cbz").identity());
         }
 
         @ParameterizedTest(name = "{0} / {1}")
@@ -286,7 +316,7 @@ class TitleKeyTest {
                 Mort - Copy (2).epub                              | mort             | mort
                 Mort (copy).epub                                  | mort             | mort
                 Mass Casualties - Michael Anthony (2009) (1).epub | mass casualties michael anthony #1 | mass casualties michael anthony
-                Saga (12).cbz                                     | saga #12         | ""
+                Saga (12).cbz                                     | saga #i12        | ""
                 Mort-Copy.epub                                    | mort copy        | ""
                 """)
         void readsADuplicatesCopyMarker(String name, String identity, String original) {

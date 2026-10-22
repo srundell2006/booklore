@@ -1250,6 +1250,13 @@ class BookFileGroupingUtilsTest {
                 Saga                          | Saga v01.cbz                                      | Saga Vol. 1.cbr                                    | SAME
                 Saga                          | Saga 001 (2012) (Digital).cbz                     | Saga 001 (2012).cbr                                | SAME
                 Saga                          | Saga #12.cbz                                      | Saga #13.cbz                                       | DIFF
+                Comics/Saga                   | Saga Vol. 1.cbz                                   | Saga 001.cbz                                       | DIFF
+                Comics/Saga                   | Saga v01 (2012) (Digital).cbz                     | Saga 001 (2012) (Digital).cbz                      | DIFF
+                Comics/Saga                   | Saga #1.cbz                                       | Saga 001.cbz                                       | SAME
+                Comics/Saga                   | Saga Book One.cbz                                 | Saga #1.cbr                                        | DIFF
+                Comics/Batman                 | Batman 001.cbz                                    | Batman Vol. 1.cbz                                  | DIFF
+                Comics/Saga                   | Saga Volume 1 (Deluxe Edition).cbz                | Saga Volume 1.cbz                                  | DIFF
+                Comics/Saga                   | Saga Volume 1 (Deluxe Edition).cbz                | Saga Volume 1 (Deluxe Edition).pdf                 | SAME
                 Star Wars                     | Star Wars Episode IV - A New Hope.epub            | Star Wars Episode V - The Empire Strikes Back.epub | DIFF
                 Shakespeare                   | Henry IV Part 1.epub                              | Henry IV Part 2.epub                               | DIFF
                 Jack Reacher                  | Jack Reacher 01 - Killing Floor.epub              | Jack Reacher 02 - Die Trying.epub                  | DIFF
