@@ -59,7 +59,7 @@ import java.util.stream.Collectors;
  * <p>
  * <b>The exports</b>, tab-separated, one row per line, as {@code mariadb -B -N} writes them: NULL as {@code NULL},
  * and a tab, newline or backslash inside a value as {@code \t}, {@code \n} or {@code \\}. A first line naming the
- * columns is skipped. The SQL that writes them is in the dry-run README next to the diagnosis reports.
+ * columns is skipped. The SQL that writes them from MariaDB is in {@code README.md} next to this class.
  * <ul>
  *   <li>{@code shells.tsv}: the library's books without any book_file row, not deleted: id, library_path_id,
  *       is_physical, has_cover, title, subtitle, series_number, authors (joined with "; ").</li>
