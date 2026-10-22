@@ -356,9 +356,10 @@ public class ParallelBookImporter {
         PersistedBook persisted;
         try {
             persisted = requiresNew().execute(status -> {
-                // Hibernate's association management adds a new book to its library's lazily loaded books. The scan's
-                // library was loaded outside any session, where that collection can be neither loaded nor added to,
-                // so the book gets the library as this transaction's session has it.
+                // The scan's library was loaded outside any session and is shared by all of the scan's books, so each
+                // book gets the library as this transaction's session has it: whatever the save reads or changes
+                // through the book's library then happens in this session, not on the shared copy. One select by id;
+                // the library keeps no collection of its books, so loading it costs the same in a library of any size.
                 plan.primary().setLibraryEntity(ensureManaged(scan.library));
                 return prepared != null
                         ? ((PreparableBookFileProcessor) plan.processor()).persistPrepared(plan.primary(), prepared)
@@ -449,9 +450,8 @@ public class ParallelBookImporter {
 
     /** Attaches one additional format to the saved book, and writes the cover it made for a book of the other kind. */
     private void attach(PersistedBook persisted, LibraryFile file, PreparedAttachment prepared) {
-        Optional<BookFileEntity> existing = bookAdditionalFileRepository
-                .findByLibraryPath_IdAndFileSubPathAndFileName(
-                        file.getLibraryPathEntity().getId(), file.getFileSubPath(), file.getFileName());
+        Optional<BookFileEntity> existing = bookAdditionalFileRepository.findExactlyAt(
+                file.getLibraryPathEntity().getId(), file.getFileSubPath(), file.getFileName());
         if (existing.isPresent()) {
             log.debug("Additional file already exists: {}", file.getFileName());
             return;

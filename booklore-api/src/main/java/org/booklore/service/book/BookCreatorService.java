@@ -56,34 +56,52 @@ public class BookCreatorService {
     /**
      * A book's entity, and whether it was created for the file or was already there.
      *
-     * @param created false when a book for the file already existed and was updated instead
+     * @param created  false when the book already stored for the file's path was reused
+     * @param restored true when that book was deleted and the file brings it back
      */
-    public record ShellBook(BookEntity entity, boolean created) {
+    public record ShellBook(BookEntity entity, boolean created, boolean restored) {
+        /** A new book, or a reused one that was not deleted. */
+        public ShellBook(BookEntity entity, boolean created) {
+            this(entity, created, false);
+        }
     }
 
     /**
-     * The book for a new file: the book already stored for the file's path, given the file's new hash and size and
-     * undeleted, or else a new book saved with one file and empty metadata. Reads nothing from the file: its hash and
-     * size come from {@code facts}, computed once by whoever read the file.
+     * The book for a new file: the book already stored for exactly the file's path, with its file there given the new
+     * hash and size and the book undeleted, or else a new book saved with one file and empty metadata. Reads nothing
+     * from the file: its hash and size come from {@code facts}, computed once by whoever read the file.
+     * <p>
+     * The database finds stored paths through the columns' collation, which on MariaDB ignores case and possibly
+     * accents, while the walk that found the file new compares paths exactly. A book found at a path that only
+     * compares equal holds another file. Reusing it would overwrite that file's hash, undelete the book and give it
+     * this file's metadata and cover, and the new file, still without a row of its own, would be new again on every
+     * scan. So only a book with a file at exactly the path is reused; otherwise the file gets a book of its own.
      */
     public ShellBook createShellBook(LibraryFile libraryFile, BookFileType bookFileType, FileFacts facts) {
-        Optional<BookEntity> existingBookOpt = bookRepository.findByLibraryIdAndLibraryPathIdAndFileSubPathAndFileName(
-                libraryFile.getLibraryEntity().getId(),
-                libraryFile.getLibraryPathEntity().getId(),
-                libraryFile.getFileSubPath(),
-                libraryFile.getFileName());
+        String subPath = libraryFile.getFileSubPath();
+        String fileName = libraryFile.getFileName();
+        List<BookFileEntity> stored = bookRepository.findBookFormatsByLibraryIdAndLibraryPathIdAndFileSubPathAndFileName(
+                libraryFile.getLibraryEntity().getId(), libraryFile.getLibraryPathEntity().getId(), subPath, fileName);
+        Optional<BookFileEntity> atPath = stored.stream().filter(file -> file.isAt(subPath, fileName)).findFirst();
 
         long fileSizeKb = facts.sizeKb() != null ? facts.sizeKb() : 0L;
-        if (existingBookOpt.isPresent()) {
-            log.warn("Book already exists for file: {}", libraryFile.getFileName());
-            BookEntity existingBook = existingBookOpt.get();
-            BookFileEntity primaryFile = existingBook.getPrimaryBookFile();
-            primaryFile.setCurrentHash(facts.hash());
-            primaryFile.setInitialHash(facts.hash());
-            primaryFile.setFileSizeKb(fileSizeKb);
-            primaryFile.setFolderBased(libraryFile.isFolderBased());
+        if (atPath.isPresent()) {
+            // The file at the path, which need not be the book's primary
+            BookFileEntity file = atPath.get();
+            BookEntity existingBook = file.getBook();
+            boolean restored = Boolean.TRUE.equals(existingBook.getDeleted());
+            log.warn("Book already exists for file: {} (book#{}{})", fileName, existingBook.getId(), restored ? ", restored" : "");
+            file.setCurrentHash(facts.hash());
+            file.setInitialHash(facts.hash());
+            file.setFileSizeKb(fileSizeKb);
+            file.setFolderBased(libraryFile.isFolderBased());
             existingBook.setDeleted(false);
-            return new ShellBook(existingBook, false);
+            existingBook.setDeletedAt(null);
+            return new ShellBook(existingBook, false, restored);
+        }
+        for (BookFileEntity other : stored) {
+            log.warn("'{}' in '{}' gets a book of its own: book#{} has '{}' in '{}', which the database compares equal to it but is another path",
+                    fileName, subPath, other.getBook().getId(), other.getFileName(), other.getFileSubPath());
         }
 
         BookEntity bookEntity = BookEntity.builder()

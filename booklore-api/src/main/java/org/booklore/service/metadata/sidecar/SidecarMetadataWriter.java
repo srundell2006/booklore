@@ -14,9 +14,11 @@ import tools.jackson.databind.SerializationFeature;
 import tools.jackson.databind.json.JsonMapper;
 
 import java.io.IOException;
+import java.nio.file.FileAlreadyExistsException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.StandardCopyOption;
+import java.nio.file.StandardOpenOption;
 import java.util.Optional;
 
 @Slf4j
@@ -64,10 +66,17 @@ public class SidecarMetadataWriter {
      * A book's sidecar file and cover copy, worked out while the book's session is open so that only file work is
      * left for {@link #execute}.
      *
-     * @param coverSource the stored cover to copy next to the book, or null when the settings leave the cover out
-     * @param coverTarget where to copy it, or null as above
+     * @param coverSource  the stored cover to copy next to the book, or null when the settings leave the cover out
+     * @param coverTarget  where to copy it, or null as above
+     * @param keepExisting whether a sidecar file or cover copy already next to the book stays as it is, as a scan
+     *                     leaves it ({@link #prepareForScan})
      */
-    public record SidecarJob(Long bookId, Path bookPath, Path sidecarPath, String json, Path coverSource, Path coverTarget) {
+    public record SidecarJob(Long bookId, Path bookPath, Path sidecarPath, String json, Path coverSource, Path coverTarget,
+                             boolean keepExisting) {
+        /** A job that writes over what is there, as an update of the book's metadata does. */
+        public SidecarJob(Long bookId, Path bookPath, Path sidecarPath, String json, Path coverSource, Path coverTarget) {
+            this(bookId, bookPath, sidecarPath, json, coverSource, coverTarget, false);
+        }
     }
 
     /**
@@ -112,6 +121,20 @@ public class SidecarMetadataWriter {
         return Optional.of(new SidecarJob(book.getId(), bookPath, getSidecarPath(bookPath), json, coverSource, coverTarget));
     }
 
+    /**
+     * {@link #prepare} for a book a scan imports, whose sidecar must not replace one already next to its file.
+     * <p>
+     * Such a sidecar is the one thing that still says what the file was: a book whose file a scan imports as new may
+     * have been in the library before, with metadata its owner curated and the identifiers that tie it to its old
+     * book, written next to the file. Files that share a base name in a folder also share their sidecar, so the second
+     * format of a book, or another book's file of that name, would write over the first. A scan keeps what is there;
+     * updating the book's metadata, or exporting it, writes the sidecar as before.
+     */
+    public Optional<SidecarJob> prepareForScan(BookEntity book) {
+        return prepare(book).map(job -> new SidecarJob(job.bookId(), job.bookPath(), job.sidecarPath(), job.json(),
+                job.coverSource(), job.coverTarget(), true));
+    }
+
     /** The file part of {@link #writeSidecarMetadata}: copies the cover and writes the sidecar next to the book. */
     public void execute(SidecarJob job) {
         try {
@@ -124,7 +147,17 @@ public class SidecarMetadataWriter {
                 writeCoverFile(job);
             }
 
-            Files.writeString(job.sidecarPath(), job.json());
+            if (job.keepExisting()) {
+                // Created only if absent, in one step, so a sidecar written meanwhile is not replaced either
+                try {
+                    Files.writeString(job.sidecarPath(), job.json(), StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE);
+                } catch (FileAlreadyExistsException e) {
+                    log.info("Kept the sidecar metadata already at {} for book ID {}: a scan does not replace it", job.sidecarPath(), job.bookId());
+                    return;
+                }
+            } else {
+                Files.writeString(job.sidecarPath(), job.json());
+            }
 
             log.info("Wrote sidecar metadata to: {}", job.sidecarPath());
         } catch (IOException e) {
@@ -190,9 +223,15 @@ public class SidecarMetadataWriter {
     private void writeCoverFile(SidecarJob job) {
         try {
             if (Files.exists(job.coverSource())) {
-                Files.copy(job.coverSource(), job.coverTarget(), StandardCopyOption.REPLACE_EXISTING);
+                if (job.keepExisting()) {
+                    Files.copy(job.coverSource(), job.coverTarget());
+                } else {
+                    Files.copy(job.coverSource(), job.coverTarget(), StandardCopyOption.REPLACE_EXISTING);
+                }
                 log.info("Wrote cover file to: {}", job.coverTarget());
             }
+        } catch (FileAlreadyExistsException e) {
+            log.info("Kept the cover file already at {} for book ID {}: a scan does not replace it", job.coverTarget(), job.bookId());
         } catch (IOException e) {
             log.warn("Failed to write cover file for book ID {}: {}", job.bookId(), e.getMessage());
         }

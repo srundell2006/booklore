@@ -2,6 +2,7 @@ package org.booklore.service.watcher;
 
 import org.booklore.exception.ApiError;
 import org.booklore.model.entity.BookEntity;
+import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.dto.settings.LibraryFile;
@@ -342,10 +343,10 @@ public class LibraryFileEventProcessor {
                     continue;
                 }
 
-                Optional<BookEntity> existing = bookRepository.findByCurrentHashIncludingRecentlyDeleted(
-                        hash, Instant.now().minus(60, ChronoUnit.SECONDS));
-                if (existing.isPresent()) {
-                    bookFilePersistenceService.updatePathIfChanged(existing.get(), library, p, hash);
+                Optional<BookFileEntity> movedFrom = bookFilePersistenceService.findMovedFile(
+                        hash, p, Instant.now().minus(60, ChronoUnit.SECONDS));
+                if (movedFrom.isPresent()) {
+                    bookFilePersistenceService.updatePathIfChanged(movedFrom.get(), library, p);
                     log.info("[FOLDER_CREATE] File '{}' recognized as moved file, updated existing book's path", p);
                 } else {
                     unmatched.add(p);
@@ -469,7 +470,11 @@ public class LibraryFileEventProcessor {
             LibraryPathEntity libPathEntity = bookFilePersistenceService.getLibraryPathEntityForFile(library, libPath);
 
             String relativePrefix = Path.of(libPathEntity.getPath()).relativize(folderPath).toString().replace("\\", "/");
-            List<BookEntity> booksWithFiles = bookRepository.findBooksWithFilesUnderPath(libPathEntity.getId(), relativePrefix);
+            // The lookup compares paths through the database's collation, which ignores case and possibly accents; a
+            // folder that only compares equal to the deleted one is another folder, and its books stay
+            List<BookEntity> booksWithFiles = bookRepository.findBooksWithFilesUnderPath(libPathEntity.getId(), relativePrefix).stream()
+                    .filter(book -> hasBookFormatUnder(book, relativePrefix))
+                    .toList();
 
             if (booksWithFiles.isEmpty()) {
                 log.debug("[FOLDER_DELETE] No books found under '{}'", folderPath);
@@ -485,6 +490,14 @@ public class LibraryFileEventProcessor {
         } catch (Exception e) {
             log.warn("[ERROR] Folder delete '{}': {}", folderPath, e.getMessage());
         }
+    }
+
+    /** Whether the book has a book format in the folder or below it, or is the folder audiobook it names. */
+    private static boolean hasBookFormatUnder(BookEntity book, String folder) {
+        return book.getBookFiles().stream().anyMatch(bf -> bf.isBookFormat() && bf.getFileSubPath() != null
+                && (bf.getFileSubPath().equals(folder)
+                || bf.getFileSubPath().startsWith(folder + "/")
+                || bf.isFolderBased() && (bf.getFileSubPath() + "/" + bf.getFileName()).equals(folder)));
     }
 
     private boolean fileHasContent(Path path) {

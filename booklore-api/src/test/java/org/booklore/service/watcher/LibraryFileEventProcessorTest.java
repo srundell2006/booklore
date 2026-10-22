@@ -255,6 +255,27 @@ class LibraryFileEventProcessorTest {
         }
 
         @Test
+        void bookPerFolderMode_movesOnlyAFileThatWasMovedAndImportsACopy() throws Exception {
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
+            Path folder = Files.createDirectory(tempDir.resolve("arrived"));
+            Path moved = Files.writeString(folder.resolve("moved.epub"), "moved content");
+            Files.writeString(folder.resolve("copy.epub"), "copied content");
+            when(pendingDeletionPool.matchFolderByHashes(any())).thenReturn(Optional.empty());
+            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
+            BookFileEntity movedFrom = BookFileEntity.builder().id(100L).fileName("moved.epub").fileSubPath("before").build();
+            when(bookFilePersistenceService.findMovedFile(anyString(), any(), any())).thenAnswer(inv ->
+                    inv.getArgument(1, Path.class).equals(moved) ? Optional.of(movedFrom) : Optional.empty());
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, folder, true);
+
+            Thread.sleep(8000);
+
+            verify(bookFilePersistenceService).updatePathIfChanged(movedFrom, library, moved);
+            verify(libraryProcessingService).processLibraryFiles(argThat(files -> files.size() == 1
+                    && files.getFirst().getFileName().equals("copy.epub")), eq(library));
+        }
+
+        @Test
         void pathOutsideLibrary_skipped() throws Exception {
             Path outsideFolder = Files.createTempDirectory("outside");
             try {
@@ -306,6 +327,26 @@ class LibraryFileEventProcessorTest {
             Thread.sleep(2000);
 
             verify(pendingDeletionPool).addFolderDeletion(any(), eq(1L), eq(List.of(book)), any());
+        }
+
+        @Test
+        void booksOfAFolderThatOnlyComparesEqualAreNotAddedToThePool() throws Exception {
+            // The lookup compares through the database's collation, which ignores case: 'Books' is another folder
+            BookEntity inBooks = BookEntity.builder().id(10L).library(library).libraryPath(libraryPath).deleted(false)
+                    .bookFiles(new ArrayList<>(List.of(BookFileEntity.builder().id(100L).fileName("a.epub")
+                            .fileSubPath("books/a").currentHash("h1").isBookFormat(true).bookType(BookFileType.EPUB).build())))
+                    .build();
+            BookEntity inOtherFolder = BookEntity.builder().id(11L).library(library).libraryPath(libraryPath).deleted(false)
+                    .bookFiles(new ArrayList<>(List.of(BookFileEntity.builder().id(101L).fileName("b.epub")
+                            .fileSubPath("Books").currentHash("h2").isBookFormat(true).bookType(BookFileType.EPUB).build())))
+                    .build();
+            when(bookRepository.findBooksWithFilesUnderPath(eq(1L), anyString())).thenReturn(List.of(inBooks, inOtherFolder));
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_DELETE, 1L, tempDir.resolve("books"), true);
+
+            Thread.sleep(2000);
+
+            verify(pendingDeletionPool).addFolderDeletion(any(), eq(1L), eq(List.of(inBooks)), any());
         }
 
         @Test

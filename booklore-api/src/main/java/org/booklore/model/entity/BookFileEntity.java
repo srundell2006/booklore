@@ -5,8 +5,11 @@ import lombok.*;
 import org.booklore.convertor.AudioFileChapterListConverter;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.util.ArchiveUtils;
+import org.hibernate.annotations.OnDelete;
+import org.hibernate.annotations.OnDeleteAction;
 
 import java.util.List;
+import java.util.Objects;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -27,8 +30,10 @@ public class BookFileEntity {
     @GeneratedValue(strategy = GenerationType.IDENTITY)
     private Long id;
 
+    // As in the Flyway schema: deleting a book, or a library and with it its books, deletes the book's files
     @ManyToOne
     @JoinColumn(name = "book_id", nullable = false)
+    @OnDelete(action = OnDeleteAction.CASCADE)
     private BookEntity book;
 
     @Column(name = "file_name", length = 1000, nullable = false)
@@ -61,7 +66,11 @@ public class BookFileEntity {
     @Column(name = "current_hash", length = 128)
     private String currentHash;
 
-    @Column(name = "alt_format_current_hash", insertable = false, updatable = false)
+    // A column MariaDB computes and indexes (V91): the current hash of a book format, null for any other file. The
+    // definition only shapes the schema H2 generates for tests, so lookups by this column find there what they find
+    // on MariaDB; the application's schema comes from Flyway.
+    @Column(name = "alt_format_current_hash", insertable = false, updatable = false,
+            columnDefinition = "varchar(128) generated always as (case when is_book then current_hash end)")
     private String altFormatCurrentHash;
 
     @Column(name = "description", columnDefinition = "TEXT")
@@ -94,6 +103,17 @@ public class BookFileEntity {
 
     public boolean isBook() {
         return isBookFormat;
+    }
+
+    /**
+     * Whether this file is stored at exactly this folder and name, compared as Java compares strings, which is how a
+     * library walk tells files apart. The database compares paths through the columns' collation: on MariaDB that
+     * ignores case, and with an accent-insensitive collation also accents and the composed or decomposed form of a
+     * letter. So a lookup by path can return a file at another path that only compares equal to it; callers check
+     * what it returned with this.
+     */
+    public boolean isAt(String fileSubPath, String fileName) {
+        return Objects.equals(this.fileSubPath, fileSubPath) && Objects.equals(this.fileName, fileName);
     }
 
     public Path getFullFilePath() {

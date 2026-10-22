@@ -12,11 +12,15 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.MockitoAnnotations;
 
+import java.io.IOException;
+import java.nio.file.Files;
 import java.nio.file.Path;
+import java.time.Instant;
 import java.util.*;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -144,7 +148,104 @@ class BookFilePersistenceServiceTest {
     }
 
     @Nested
+    class FindMovedFile {
+
+        private static final Instant CUTOFF = Instant.now().minusSeconds(60);
+        private static final Path NEW_PATH = Path.of("/library/new/Title.epub");
+
+        @TempDir
+        Path root;
+
+        private LibraryPathEntity onDisk;
+
+        @BeforeEach
+        void libraryOnDisk() {
+            onDisk = new LibraryPathEntity();
+            onDisk.setId(5L);
+            onDisk.setPath(root.toString());
+        }
+
+        /** A book's file with the hash in folder 'old', present on disk or not. */
+        private BookFileEntity stored(long bookId, String name, boolean present, boolean deleted) throws IOException {
+            BookEntity book = buildBook(bookId);
+            book.setLibraryPath(onDisk);
+            book.setDeleted(deleted);
+            BookFileEntity file = buildBookFile(bookId * 10, book, name, "h");
+            file.setFileSubPath("old");
+            book.getBookFiles().add(file);
+            if (present) {
+                Files.createDirectories(root.resolve("old"));
+                Files.writeString(root.resolve("old").resolve(name), "same content");
+            }
+            return file;
+        }
+
+        private void withHash(BookFileEntity... files) {
+            when(bookRepository.findBookFormatsByCurrentHashIncludingRecentlyDeleted("h", CUTOFF)).thenReturn(List.of(files));
+        }
+
+        @Test
+        void noFileWithTheHash_isNoMove() {
+            withHash();
+
+            assertThat(service.findMovedFile("h", NEW_PATH, CUTOFF)).isEmpty();
+        }
+
+        @Test
+        void theOneBooksFileGoneFromItsPath_movedToTheNewFile() throws IOException {
+            BookFileEntity gone = stored(1, "Title.epub", false, false);
+            withHash(gone);
+
+            assertThat(service.findMovedFile("h", NEW_PATH, CUTOFF)).containsSame(gone);
+        }
+
+        @Test
+        void theOneBooksFileStillAtItsPath_theNewFileIsACopy() throws IOException {
+            // Before, the book was moved to the copy, off the file that is still there
+            withHash(stored(1, "Title.epub", true, false));
+
+            assertThat(service.findMovedFile("h", NEW_PATH, CUTOFF)).isEmpty();
+        }
+
+        @Test
+        void aBookDeletedWithinTheWindow_movedToTheNewFile() throws IOException {
+            BookFileEntity deleted = stored(1, "Title.epub", true, true);
+            withHash(deleted);
+
+            assertThat(service.findMovedFile("h", NEW_PATH, CUTOFF)).containsSame(deleted);
+        }
+
+        @Test
+        void filesOfTwoBooksWithTheHash_noMoveAndNoException() throws IOException {
+            // Before, the lookup threw IncorrectResultSizeDataAccessException for two books
+            withHash(stored(1, "Title.epub", false, false), stored(2, "Title (1).epub", false, false));
+
+            assertThat(service.findMovedFile("h", NEW_PATH, CUTOFF)).isEmpty();
+        }
+
+        @Test
+        void twoFilesOfOneBookWithTheHash_movesTheOneThatIsGone() throws IOException {
+            BookFileEntity there = stored(1, "Title.epub", true, false);
+            BookFileEntity gone = buildBookFile(11L, there.getBook(), "Title (1).epub", "h");
+            gone.setFileSubPath("old");
+            there.getBook().getBookFiles().add(gone);
+            withHash(there, gone);
+
+            assertThat(service.findMovedFile("h", NEW_PATH, CUTOFF)).containsSame(gone);
+
+            Files.delete(root.resolve("old").resolve("Title.epub"));
+            assertThat(service.findMovedFile("h", NEW_PATH, CUTOFF)).as("both gone: which one moved is a guess").isEmpty();
+        }
+    }
+
+    @Nested
     class UpdatePathIfChanged {
+
+        /** The file as findMovedFile hands it over, read again in the move's transaction. */
+        private BookFileEntity moving(BookFileEntity file) {
+            when(bookFileRepository.findById(file.getId())).thenReturn(Optional.of(file));
+            return file;
+        }
 
         @Test
         void updatesPathWhenSubPathDiffers() {
@@ -155,7 +256,7 @@ class BookFilePersistenceServiceTest {
             when(entityManager.merge(any(LibraryPathEntity.class))).thenReturn(libraryPath);
             fileUtilsMock.when(() -> FileUtils.getRelativeSubPath(anyString(), any(Path.class))).thenReturn("newsub");
 
-            service.updatePathIfChanged(book, library, Path.of("/library/newsub/test.epub"), "hash123");
+            service.updatePathIfChanged(moving(bookFile), library, Path.of("/library/newsub/test.epub"));
 
             verify(bookRepository).save(book);
             assertThat(bookFile.getFileSubPath()).isEqualTo("newsub");
@@ -169,7 +270,7 @@ class BookFilePersistenceServiceTest {
 
             when(entityManager.merge(any(LibraryPathEntity.class))).thenReturn(libraryPath);
 
-            service.updatePathIfChanged(book, library, Path.of("/library/sub/new.epub"), "hash123");
+            service.updatePathIfChanged(moving(bookFile), library, Path.of("/library/sub/new.epub"));
 
             verify(bookRepository).save(book);
             assertThat(bookFile.getFileName()).isEqualTo("new.epub");
@@ -184,7 +285,7 @@ class BookFilePersistenceServiceTest {
 
             when(entityManager.merge(any(LibraryPathEntity.class))).thenReturn(libraryPath);
 
-            service.updatePathIfChanged(book, library, Path.of("/library/sub/test.epub"), "hash123");
+            service.updatePathIfChanged(moving(bookFile), library, Path.of("/library/sub/test.epub"));
 
             verify(bookRepository).save(book);
             assertThat(book.getDeleted()).isFalse();
@@ -200,13 +301,13 @@ class BookFilePersistenceServiceTest {
 
             when(entityManager.merge(any(LibraryPathEntity.class))).thenReturn(libraryPath);
 
-            service.updatePathIfChanged(book, library, Path.of("/library/sub/test.epub"), "hash123");
+            service.updatePathIfChanged(moving(bookFile), library, Path.of("/library/sub/test.epub"));
 
             verify(bookRepository, never()).save(any());
         }
 
         @Test
-        void matchesFileByHash_notJustPrimary() {
+        void movesTheFileItIsGiven_notThePrimary() {
             BookEntity book = buildBook(10L);
             BookFileEntity primaryFile = buildBookFile(100L, book, "primary.epub", "primaryhash");
             BookFileEntity secondaryFile = buildBookFile(101L, book, "secondary.pdf", "hash123");
@@ -215,11 +316,12 @@ class BookFilePersistenceServiceTest {
             when(entityManager.merge(any(LibraryPathEntity.class))).thenReturn(libraryPath);
             fileUtilsMock.when(() -> FileUtils.getRelativeSubPath(anyString(), any(Path.class))).thenReturn("newsub");
 
-            service.updatePathIfChanged(book, library, Path.of("/library/newsub/secondary.pdf"), "hash123");
+            service.updatePathIfChanged(moving(secondaryFile), library, Path.of("/library/newsub/secondary.pdf"));
 
-            // Should update the secondary file, not primary
+            // The file it is given moves, not the primary
             assertThat(secondaryFile.getFileSubPath()).isEqualTo("newsub");
             assertThat(secondaryFile.getFileName()).isEqualTo("secondary.pdf");
+            assertThat(primaryFile.getFileSubPath()).isEqualTo("sub");
             verify(bookRepository).save(book);
         }
 
@@ -232,7 +334,7 @@ class BookFilePersistenceServiceTest {
             when(entityManager.merge(any(LibraryPathEntity.class))).thenReturn(libraryPath);
             fileUtilsMock.when(() -> FileUtils.getRelativeSubPath(anyString(), any(Path.class))).thenReturn("newsub");
 
-            service.updatePathIfChanged(book, library, Path.of("/library/newsub/test.epub"), "hash123");
+            service.updatePathIfChanged(moving(bookFile), library, Path.of("/library/newsub/test.epub"));
 
             verify(notificationService).sendMessageToPermissions(any(), any(), any());
         }
@@ -278,25 +380,31 @@ class BookFilePersistenceServiceTest {
     class DelegationMethods {
 
         @Test
-        void findByLibraryPathSubPathAndFileName_delegates() {
-            when(bookRepository.findByLibraryPath_IdAndFileSubPathAndFileName(1L, "sub", "test.epub"))
-                    .thenReturn(Optional.of(buildBook(10L)));
-
-            Optional<BookEntity> result = service.findByLibraryPathSubPathAndFileName(1L, "sub", "test.epub");
-
-            assertThat(result).isPresent();
-        }
-
-        @Test
         void findBookFileByLibraryPathSubPathAndFileName_delegates() {
             BookFileEntity bookFile = buildBookFile(100L, buildBook(10L), "test.epub", "hash");
-            when(bookFileRepository.findByLibraryPathIdAndFileSubPathAndFileName(1L, "sub", "test.epub"))
-                    .thenReturn(Optional.of(bookFile));
+            when(bookFileRepository.findAllByLibraryPathIdAndFileSubPathAndFileName(1L, "sub", "test.epub"))
+                    .thenReturn(List.of(bookFile));
 
             Optional<BookFileEntity> result = service.findBookFileByLibraryPathSubPathAndFileName(1L, "sub", "test.epub");
 
             assertThat(result).isPresent();
             assertThat(result.get().getFileName()).isEqualTo("test.epub");
+        }
+
+        @Test
+        void findBookFileByLibraryPathSubPathAndFileName_returnsOnlyTheFileAtExactlyThePath() {
+            // What MariaDB's case- and accent-insensitive collation returns for 'test.epub' in 'sub'
+            BookFileEntity otherCase = buildBookFile(100L, buildBook(10L), "Test.epub", "h1");
+            BookFileEntity decomposed = buildBookFile(101L, buildBook(11L), "te\u0301st.epub", "h2");
+            BookFileEntity exact = buildBookFile(102L, buildBook(12L), "test.epub", "h3");
+            when(bookFileRepository.findAllByLibraryPathIdAndFileSubPathAndFileName(1L, "sub", "test.epub"))
+                    .thenReturn(List.of(otherCase, decomposed, exact));
+
+            assertThat(service.findBookFileByLibraryPathSubPathAndFileName(1L, "sub", "test.epub")).containsSame(exact);
+
+            when(bookFileRepository.findAllByLibraryPathIdAndFileSubPathAndFileName(1L, "sub", "test.epub"))
+                    .thenReturn(List.of(otherCase, decomposed));
+            assertThat(service.findBookFileByLibraryPathSubPathAndFileName(1L, "sub", "test.epub")).isEmpty();
         }
 
         @Test

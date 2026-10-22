@@ -160,6 +160,83 @@ class SidecarMetadataWriterTest {
                 .isEqualTo(prepared.replaceAll("\"generatedAt\": \"[^\"]*\"", ""));
     }
 
+    // ========== a scan keeps what is there ==========
+
+    @Test
+    void prepareForScan_isPrepareThatKeepsWhatIsThere() {
+        SidecarMetadataWriter writer = writerWithRealMapper(true);
+        BookEntity book = book(tempDir, "book.epub");
+        when(fileService.getCoverFile(7L)).thenReturn(tempDir.resolve("images/7/cover.jpg").toString());
+
+        SidecarMetadataWriter.SidecarJob forScan = writer.prepareForScan(book).orElseThrow();
+        SidecarMetadataWriter.SidecarJob forUpdate = writer.prepare(book).orElseThrow();
+
+        assertThat(forScan.keepExisting()).isTrue();
+        assertThat(forUpdate.keepExisting()).isFalse();
+        assertThat(forScan.sidecarPath()).isEqualTo(forUpdate.sidecarPath());
+        assertThat(forScan.coverTarget()).isEqualTo(forUpdate.coverTarget());
+        assertThat(writer.prepareForScan(null)).isEmpty();
+    }
+
+    @Test
+    void execute_forAScan_keepsTheSidecarAndCoverAlreadyNextToTheBook() throws IOException {
+        Path book = Files.writeString(tempDir.resolve("book.epub"), "epub");
+        Path cover = Files.write(Files.createDirectories(tempDir.resolve("images/7")).resolve("cover.jpg"), new byte[]{1, 2, 3});
+        Path sidecar = Files.writeString(tempDir.resolve("book.metadata.json"), "{ \"curated\": true }");
+        Path sidecarCover = Files.write(tempDir.resolve("book.cover.jpg"), new byte[]{9, 9});
+        var job = new SidecarMetadataWriter.SidecarJob(7L, book, sidecar, "{ }", cover, sidecarCover, true);
+
+        sidecarMetadataWriter.execute(job);
+
+        assertThat(sidecar).hasContent("{ \"curated\": true }");
+        assertThat(sidecarCover).hasBinaryContent(new byte[]{9, 9});
+    }
+
+    @Test
+    void execute_forAScan_writesWhatIsMissing() throws IOException {
+        Path book = Files.writeString(tempDir.resolve("book.epub"), "epub");
+        Path cover = Files.write(Files.createDirectories(tempDir.resolve("images/7")).resolve("cover.jpg"), new byte[]{1, 2, 3});
+        // A cover copy of its own but no sidecar: each is kept or written on its own
+        Path sidecarCover = Files.write(tempDir.resolve("book.cover.jpg"), new byte[]{9, 9});
+        var job = new SidecarMetadataWriter.SidecarJob(7L, book, tempDir.resolve("book.metadata.json"), "{ }", cover, sidecarCover, true);
+
+        sidecarMetadataWriter.execute(job);
+
+        assertThat(tempDir.resolve("book.metadata.json")).hasContent("{ }");
+        assertThat(sidecarCover).hasBinaryContent(new byte[]{9, 9});
+
+        Files.delete(sidecarCover);
+        Files.delete(tempDir.resolve("book.metadata.json"));
+        sidecarMetadataWriter.execute(job);
+
+        assertThat(tempDir.resolve("book.metadata.json")).hasContent("{ }");
+        assertThat(sidecarCover).hasBinaryContent(new byte[]{1, 2, 3});
+    }
+
+    @Test
+    void execute_forAnUpdate_replacesTheSidecarAndCoverAsBefore() throws IOException {
+        Path book = Files.writeString(tempDir.resolve("book.epub"), "epub");
+        Path cover = Files.write(Files.createDirectories(tempDir.resolve("images/7")).resolve("cover.jpg"), new byte[]{1, 2, 3});
+        Path sidecar = Files.writeString(tempDir.resolve("book.metadata.json"), "{ \"curated\": true }");
+        Path sidecarCover = Files.write(tempDir.resolve("book.cover.jpg"), new byte[]{9, 9});
+
+        sidecarMetadataWriter.execute(new SidecarMetadataWriter.SidecarJob(7L, book, sidecar, "{ }", cover, sidecarCover));
+
+        assertThat(sidecar).hasContent("{ }");
+        assertThat(sidecarCover).hasBinaryContent(new byte[]{1, 2, 3});
+    }
+
+    @Test
+    void writeSidecarMetadata_replacesASidecarAlreadyNextToTheBook() throws IOException {
+        SidecarMetadataWriter writer = writerWithRealMapper(false);
+        Files.writeString(tempDir.resolve("book.epub"), "epub");
+        Files.writeString(tempDir.resolve("book.metadata.json"), "{ \"curated\": true }");
+
+        writer.writeSidecarMetadata(book(tempDir, "book.epub"));
+
+        assertThat(Files.readString(tempDir.resolve("book.metadata.json"))).contains("\"title\": \"The Title\"");
+    }
+
     @TempDir
     Path tempDir;
 

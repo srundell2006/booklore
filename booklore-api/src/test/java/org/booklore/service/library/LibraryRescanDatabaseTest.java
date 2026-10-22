@@ -2,11 +2,14 @@ package org.booklore.service.library;
 
 import org.booklore.BookloreApplication;
 import org.booklore.model.dto.settings.LibraryFile;
+import org.booklore.model.entity.AuthorEntity;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
+import org.booklore.model.entity.BookMetadataEntity;
 import org.booklore.model.entity.LibraryEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.BookFileType;
+import org.booklore.repository.AuthorRepository;
 import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
@@ -36,8 +39,12 @@ import java.util.Set;
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.any;
 import static org.mockito.ArgumentMatchers.anyList;
+import static org.mockito.ArgumentMatchers.argThat;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.mock;
+import static org.mockito.Mockito.never;
+import static org.mockito.Mockito.times;
+import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
 
 /**
@@ -96,6 +103,10 @@ class LibraryRescanDatabaseTest {
     @Autowired
     private BookGroupingService bookGroupingService;
     @Autowired
+    private FilelessShells filelessShells;
+    @Autowired
+    private AuthorRepository authorRepository;
+    @Autowired
     private PlatformTransactionManager transactionManager;
 
     @TempDir
@@ -112,9 +123,12 @@ class LibraryRescanDatabaseTest {
     @BeforeEach
     void setUp() {
         tx = new TransactionTemplate(transactionManager);
+        // The real attacher, with the cover writing it decides on recorded by the mocked processor
+        ExistingBookAttacher attacher = new ExistingBookAttacher(bookRepository, bookAdditionalFileRepository,
+                fileAsBookProcessor, filelessShells, transactionManager);
         libraryProcessingService = new LibraryProcessingService(libraryRepository, mock(NotificationService.class),
                 bookAdditionalFileRepository, bookRepository, fileAsBookProcessor, bookRestorationService,
-                bookDeletionService, libraryFileHelper, bookGroupingService, transactionManager);
+                bookDeletionService, libraryFileHelper, bookGroupingService, attacher);
         when(libraryFileHelper.filterByAllowedFormats(anyList(), any())).thenAnswer(inv -> inv.getArgument(0));
 
         library = tx.execute(status -> {
@@ -197,7 +211,9 @@ class LibraryRescanDatabaseTest {
     }
 
     @Test
-    void autoAttachHandsTheCoverDecisionTheBookWithTheAttachedFileAsBefore() throws IOException {
+    void anEbookAttachedToAnAudiobookMakesItsEbookCoverFromThePrimaryTheBookHadBefore() throws IOException {
+        // Changed deliberately: the cover decision saw the book with the epub already added and taken as its primary,
+        // so an epub never gave an audiobook its ebook cover on a rescan, while the importer gives a new one
         Path titleDir = Files.createDirectories(libraryRoot.resolve("Author/Title"));
         Files.writeString(titleDir.resolve("Title.m4b"), "audio");
         Files.writeString(titleDir.resolve("Title.epub"), "epub");
@@ -208,21 +224,156 @@ class LibraryRescanDatabaseTest {
                     onDisk(walked, "Author/Title", "Title.m4b", BookFileType.AUDIOBOOK),
                     onDisk(walked, "Author/Title", "Title.epub", BookFileType.EPUB)), Set.of());
         });
-        List<String> filesSeenByCoverDecision = new ArrayList<>();
-        BookFileType[] primarySeenByCoverDecision = new BookFileType[1];
-        doAnswer(inv -> {
-            BookEntity book = inv.getArgument(0);
-            book.getBookFiles().forEach(file -> filesSeenByCoverDecision.add(file.getFileName()));
-            primarySeenByCoverDecision[0] = book.getPrimaryBookFile().getBookType();
-            return null;
-        }).when(fileAsBookProcessor).generateCoverFromAdditionalFile(any(), any());
 
         rescan();
 
         assertThat(fileNamesOf(audiobook)).containsExactlyInAnyOrder("Author/Title/Title.m4b", "Author/Title/Title.epub");
-        // As in the old one-transaction rescan, where the book's files were already loaded and
-        // association management added the new file to them as soon as it was built.
-        assertThat(filesSeenByCoverDecision).containsExactly("Title.m4b", "Title.epub");
-        assertThat(primarySeenByCoverDecision[0]).isEqualTo(BookFileType.EPUB);
+        verify(fileAsBookProcessor).writeCoverFromFile(argThat(book -> book.getId().equals(audiobook.getId())),
+                argThat(file -> file.getFileName().equals("Title.epub")));
+    }
+
+    /** A fileless book of the library, as a physical book or one whose files were lost is. */
+    private BookEntity filelessBook(String title, String coverHash, String... authors) {
+        return tx.execute(status -> {
+            BookEntity book = BookEntity.builder().library(library).addedOn(Instant.now()).bookCoverHash(coverHash).build();
+            BookMetadataEntity metadata = BookMetadataEntity.builder().book(book).title(title).coverUpdatedOn(SHELL_COVER_TIME).build();
+            metadata.setAuthors(new ArrayList<>());
+            for (String name : authors) {
+                metadata.getAuthors().add(authorRepository.findByName(name)
+                        .orElseGet(() -> authorRepository.save(AuthorEntity.builder().name(name).build())));
+            }
+            book.setMetadata(metadata);
+            return bookRepository.save(book);
+        });
+    }
+
+    private static final Instant SHELL_COVER_TIME = Instant.parse("2025-01-02T03:04:05Z");
+
+    private void walkFinds(String... subPathAndNames) throws IOException {
+        for (String subPathAndName : subPathAndNames) {
+            Path file = libraryRoot.resolve(subPathAndName);
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, subPathAndName);
+        }
+        when(libraryFileHelper.scanAllLibraryFiles(any())).thenAnswer(inv -> {
+            LibraryEntity walked = inv.getArgument(0);
+            List<LibraryFile> files = new ArrayList<>();
+            for (String subPathAndName : subPathAndNames) {
+                int slash = subPathAndName.lastIndexOf('/');
+                String name = subPathAndName.substring(slash + 1);
+                files.add(onDisk(walked, slash < 0 ? "" : subPathAndName.substring(0, slash), name,
+                        org.booklore.model.enums.BookFileExtension.fromFileName(name).orElseThrow().getType()));
+            }
+            return new LibraryScanResult(files, Set.of());
+        });
+    }
+
+    private List<List<String>> newBooksOfTheRescan() {
+        List<List<String>> newBooks = new ArrayList<>();
+        doAnswer(inv -> {
+            java.util.Map<String, List<LibraryFile>> groups = inv.getArgument(0);
+            groups.values().forEach(group -> newBooks.add(group.stream()
+                    .map(file -> file.getFileSubPath() + "/" + file.getFileName()).toList()));
+            return null;
+        }).when(fileAsBookProcessor).processLibraryFilesGrouped(any(), any());
+        return newBooks;
+    }
+
+    private BookEntity reload(BookEntity book) {
+        return tx.execute(status -> {
+            BookEntity loaded = bookRepository.findById(book.getId()).orElseThrow();
+            loaded.getMetadata().getCoverUpdatedOn();
+            return loaded;
+        });
+    }
+
+    @Test
+    void aFilelessBookClaimedFromTwoFoldersKeepsItsCoverAndGetsNoFile() throws IOException {
+        // Production: three "Survival.epub" of three folders went to one fileless book
+        BookEntity survival = filelessBook("Survival", "h0", "Ann Smith");
+        walkFinds("S/Smith, Ann/Survival.epub", "S/Smith, Ann/Series/Survival.epub");
+        List<List<String>> newBooks = newBooksOfTheRescan();
+
+        rescan();
+
+        assertThat(fileNamesOf(survival)).isEmpty();
+        BookEntity after = reload(survival);
+        assertThat(after.getLibraryPath()).isNull();
+        assertThat(after.getBookCoverHash()).isEqualTo("h0");
+        assertThat(newBooks).containsExactlyInAnyOrder(List.of("S/Smith, Ann/Survival.epub"), List.of("S/Smith, Ann/Series/Survival.epub"));
+        verify(fileAsBookProcessor, never()).writeCoverFromFile(any(), any());
+    }
+
+    @Test
+    void aFilelessBookOfAnotherAuthorGetsNoFile() throws IOException {
+        // Production: "Assignment - Karachi" and four more went to "Assignment" by I. Christie
+        BookEntity assignment = filelessBook("Assignment", "h0", "I. Christie");
+        walkFinds("A/Aarons, Edward S/Assignment - Karachi.epub", "A/Aarons, Edward S/Assignment - Stella Marni.epub");
+        List<List<String>> newBooks = newBooksOfTheRescan();
+
+        rescan();
+
+        assertThat(fileNamesOf(assignment)).isEmpty();
+        assertThat(newBooks).hasSize(2);
+    }
+
+    @Test
+    void aFilelessBookWithACoverGetsTheFilesOfItsOneFolderAndKeepsItsCover() throws IOException {
+        BookEntity martian = filelessBook("The Martian", "h0", "Andy Weir");
+        walkFinds("W/Weir, Andy/The Martian.epub", "W/Weir, Andy/The Martian.pdf", "W/Weir, Andy/Artemis.epub");
+        List<List<String>> newBooks = newBooksOfTheRescan();
+
+        rescan();
+
+        assertThat(fileNamesOf(martian)).containsExactlyInAnyOrder("W/Weir, Andy/The Martian.epub", "W/Weir, Andy/The Martian.pdf");
+        BookEntity after = reload(martian);
+        assertThat(after.getLibraryPath().getId()).isEqualTo(libraryPath.getId());
+        assertThat(after.getBookCoverHash()).isEqualTo("h0");
+        assertThat(after.getMetadata().getCoverUpdatedOn()).isEqualTo(SHELL_COVER_TIME);
+        verify(fileAsBookProcessor, never()).writeCoverFromFile(any(), any());
+        assertThat(newBooks).containsExactly(List.of("W/Weir, Andy/Artemis.epub"));
+    }
+
+    @Test
+    void aFilelessBookWithoutACoverGetsOneFromItsNewFile() throws IOException {
+        BookEntity martian = filelessBook("The Martian", null, "Andy Weir");
+        walkFinds("W/Weir, Andy/The Martian.pdf", "W/Weir, Andy/The Martian.epub");
+
+        rescan();
+
+        assertThat(fileNamesOf(martian)).hasSize(2);
+        // From the file that is now its primary, by the library's format priority
+        verify(fileAsBookProcessor).writeCoverFromFile(argThat(book -> book.getId().equals(martian.getId())),
+                argThat(file -> file.getFileName().equals("The Martian.epub")));
+        verify(fileAsBookProcessor, times(1)).writeCoverFromFile(any(), any());
+    }
+
+    @Test
+    void newFilesByTheFoldersAuthorBecomeOneBookEach() throws IOException {
+        // Production: in "B/Dale Brown", "Shadow Command" and "Warrior Class" were imported as more formats of
+        // "Battle Born", because the folder's name was part of every file's name
+        BookEntity other = book("Other", "Other.epub");
+        when(libraryFileHelper.scanAllLibraryFiles(any())).thenAnswer(inv -> {
+            LibraryEntity walked = inv.getArgument(0);
+            return new LibraryScanResult(List.of(
+                    onDisk(walked, "Other", "Other.epub", BookFileType.EPUB),
+                    onDisk(walked, "B/Dale Brown", "Battle Born by Dale Brown.epub", BookFileType.EPUB),
+                    onDisk(walked, "B/Dale Brown", "Shadow Command by Dale Brown.epub", BookFileType.EPUB),
+                    onDisk(walked, "B/Dale Brown", "Warrior Class by Dale Brown.epub", BookFileType.EPUB)), Set.of());
+        });
+        List<List<String>> newBooks = new ArrayList<>();
+        doAnswer(inv -> {
+            java.util.Map<String, List<LibraryFile>> groups = inv.getArgument(0);
+            groups.values().forEach(group -> newBooks.add(group.stream().map(LibraryFile::getFileName).toList()));
+            return null;
+        }).when(fileAsBookProcessor).processLibraryFilesGrouped(any(), any());
+
+        rescan();
+
+        assertThat(newBooks).containsExactlyInAnyOrder(
+                List.of("Battle Born by Dale Brown.epub"),
+                List.of("Shadow Command by Dale Brown.epub"),
+                List.of("Warrior Class by Dale Brown.epub"));
+        assertThat(fileNamesOf(other)).containsExactly("Other/Other.epub");
     }
 }

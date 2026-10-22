@@ -1,9 +1,13 @@
 package org.booklore.repository;
 
 import org.booklore.model.entity.BookEntity;
+import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.BookFileType;
+import org.booklore.repository.projection.BookAuthorRow;
+import org.booklore.repository.projection.BookFileScanRow;
 import org.booklore.repository.projection.BookCoverUpdateProjection;
+import org.booklore.repository.projection.FilelessBookRow;
 import jakarta.transaction.Transactional;
 import org.springframework.data.domain.Pageable;
 import org.springframework.data.jpa.repository.*;
@@ -27,42 +31,64 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     @Query("SELECT b FROM BookEntity b JOIN b.bookFiles bf WHERE bf.currentHash = :currentHash AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false)")
     Optional<BookEntity> findByCurrentHash(@Param("currentHash") String currentHash);
 
-    @Query("SELECT b FROM BookEntity b JOIN FETCH b.bookFiles bf WHERE bf.currentHash = :currentHash AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false OR b.deletedAt > :cutoff)")
-    Optional<BookEntity> findByCurrentHashIncludingRecentlyDeleted(@Param("currentHash") String currentHash, @Param("cutoff") Instant cutoff);
+    /**
+     * The book formats of this hash, with their books, of books not deleted or deleted after the cutoff. Looks the hash
+     * up in alt_format_current_hash, which holds the current hash of exactly the book formats and is indexed, where
+     * current_hash is not: the watcher runs this for every new file. Files of several books can have one content, as
+     * a copy of a file does, so this is a list.
+     */
+    @Query("SELECT bf FROM BookFileEntity bf JOIN FETCH bf.book b WHERE bf.altFormatCurrentHash = :currentHash AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false OR b.deletedAt > :cutoff)")
+    List<BookFileEntity> findBookFormatsByCurrentHashIncludingRecentlyDeleted(@Param("currentHash") String currentHash, @Param("cutoff") Instant cutoff);
 
     Optional<BookEntity> findByBookCoverHash(String bookCoverHash);
 
     @Query("SELECT b.id FROM BookEntity b WHERE b.library.id = :libraryId AND (b.deleted IS NULL OR b.deleted = false)")
     Set<Long> findBookIdsByLibraryId(@Param("libraryId") long libraryId);
 
+    /** Every book of the library, soft-deleted ones too: those keep their cover folders until they are purged. */
+    @Query("SELECT b.id FROM BookEntity b WHERE b.library.id = :libraryId")
+    Set<Long> findAllBookIdsIncludingDeletedByLibraryId(@Param("libraryId") long libraryId);
+
     @Query("SELECT DISTINCT b FROM BookEntity b JOIN b.bookFiles bf WHERE b.libraryPath.id = :libraryPathId AND (bf.fileSubPath = :fileSubPathPrefix OR bf.fileSubPath LIKE CONCAT(:fileSubPathPrefix, '/%')) AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false)")
     List<BookEntity> findAllByLibraryPathIdAndFileSubPathStartingWith(@Param("libraryPathId") Long libraryPathId, @Param("fileSubPathPrefix") String fileSubPathPrefix);
 
-    @Query("SELECT DISTINCT b FROM BookEntity b JOIN b.bookFiles bf WHERE b.libraryPath.id = :libraryPathId AND bf.fileSubPath = :fileSubPath AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false)")
-    List<BookEntity> findAllByLibraryPathIdAndFileSubPath(@Param("libraryPathId") Long libraryPathId, @Param("fileSubPath") String fileSubPath);
+    /**
+     * The book formats stored in one folder of a library path, soft-deleted books' included, as plain rows: what the
+     * watcher matches a new file against, in one query whatever the number of books in the folder. The folder is
+     * compared through the column's collation, which on MariaDB ignores case and possibly accents; callers compare
+     * it exactly.
+     */
+    @Query("""
+            SELECT new org.booklore.repository.projection.BookFileScanRow(
+                bf.id, b.id, lp.id, lp.path, bf.fileSubPath, bf.fileName, bf.isBookFormat, bf.bookType, b.deleted,
+                bf.folderBased)
+            FROM BookFileEntity bf
+            JOIN bf.book b
+            LEFT JOIN b.libraryPath lp
+            WHERE b.libraryPath.id = :libraryPathId AND bf.fileSubPath = :fileSubPath AND bf.isBookFormat = true
+            """)
+    List<BookFileScanRow> findBookFormatRowsInFolder(@Param("libraryPathId") Long libraryPathId,
+                                                     @Param("fileSubPath") String fileSubPath);
 
     /**
-     * Same books as {@link #findAllByLibraryPathIdAndFileSubPath}, in id order, with every
-     * file (not just the matching ones) and the library fetched, so rescan grouping can
-     * pick primary files without a query per book.
+     * The book formats whose own folder is {@code parent/leaf}: the files stored in it, and a folder audiobook that is
+     * that folder. As {@link #findBookFormatRowsInFolder}, compared through the columns' collation.
      */
-    @EntityGraph(attributePaths = {"bookFiles", "library", "libraryPath"})
     @Query("""
-            SELECT DISTINCT b FROM BookEntity b
-            JOIN b.bookFiles bf
-            WHERE b.libraryPath.id = :libraryPathId
-            AND bf.fileSubPath = :fileSubPath
-            AND bf.isBookFormat = true
-            AND (b.deleted IS NULL OR b.deleted = false)
-            ORDER BY b.id
+            SELECT new org.booklore.repository.projection.BookFileScanRow(
+                bf.id, b.id, lp.id, lp.path, bf.fileSubPath, bf.fileName, bf.isBookFormat, bf.bookType, b.deleted,
+                bf.folderBased)
+            FROM BookFileEntity bf
+            JOIN bf.book b
+            LEFT JOIN b.libraryPath lp
+            WHERE b.libraryPath.id = :libraryPathId AND bf.isBookFormat = true
+            AND ((bf.fileSubPath = :folder AND bf.folderBased = false)
+                 OR (bf.folderBased = true AND bf.fileSubPath = :parent AND bf.fileName = :leaf))
             """)
-    List<BookEntity> findAllWithFilesByLibraryPathIdAndFileSubPath(@Param("libraryPathId") Long libraryPathId,
-                                                                   @Param("fileSubPath") String fileSubPath);
-
-    @Query("SELECT b FROM BookEntity b JOIN b.bookFiles bf WHERE b.libraryPath.id = :libraryPathId AND bf.fileSubPath = :fileSubPath AND bf.fileName = :fileName AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false)")
-    Optional<BookEntity> findByLibraryPath_IdAndFileSubPathAndFileName(@Param("libraryPathId") Long libraryPathId,
-                                                                       @Param("fileSubPath") String fileSubPath,
-                                                                       @Param("fileName") String fileName);
+    List<BookFileScanRow> findBookFormatRowsOwnedByFolder(@Param("libraryPathId") Long libraryPathId,
+                                                          @Param("folder") String folder,
+                                                          @Param("parent") String parent,
+                                                          @Param("leaf") String leaf);
 
     @Query("SELECT b.id FROM BookEntity b WHERE b.libraryPath.id IN :libraryPathIds AND (b.deleted IS NULL OR b.deleted = false)")
     List<Long> findAllBookIdsByLibraryPathIdIn(@Param("libraryPathIds") Collection<Long> libraryPathIds);
@@ -174,18 +200,21 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     List<BookEntity> findBooksWithFilesUnderPath(@Param("libraryPathId") Long libraryPathId,
                                                   @Param("folderPath") String folderPath);
 
-    @Query(value = """
-        SELECT b.*
-        FROM book b
-        JOIN book_file bf ON bf.book_id = b.id
-        WHERE b.library_id = :libraryId
-          AND b.library_path_id = :libraryPathId
-          AND bf.file_sub_path = :fileSubPath
-          AND bf.file_name = :fileName
-          AND bf.is_book = true
-        LIMIT 1
-    """, nativeQuery = true)
-    Optional<BookEntity> findByLibraryIdAndLibraryPathIdAndFileSubPathAndFileName(
+    /**
+     * The book formats stored at this folder and name of the library path, with their books, deleted ones included, as
+     * the database compares paths: through the columns' collation, which on MariaDB ignores case and possibly accents.
+     * So several can come back, and some at another path; the caller picks the one at exactly the path.
+     */
+    @Query("""
+            SELECT bf FROM BookFileEntity bf
+            JOIN FETCH bf.book b
+            WHERE b.library.id = :libraryId
+              AND b.libraryPath.id = :libraryPathId
+              AND bf.fileSubPath = :fileSubPath
+              AND bf.fileName = :fileName
+              AND bf.isBookFormat = true
+            """)
+    List<BookFileEntity> findBookFormatsByLibraryIdAndLibraryPathIdAndFileSubPathAndFileName(
             @Param("libraryId") Long libraryId,
             @Param("libraryPathId") Long libraryPathId,
             @Param("fileSubPath") String fileSubPath,
@@ -220,29 +249,33 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     @Query("SELECT COUNT(b) FROM BookEntity b WHERE b.library.id = :libraryId")
     long countIncludingDeletedByLibraryId(@Param("libraryId") Long libraryId);
 
-    @Query("""
-            SELECT b FROM BookEntity b
-            LEFT JOIN b.bookFiles bf
-            WHERE b.library.id = :libraryId
-            AND (b.deleted IS NULL OR b.deleted = false)
-            GROUP BY b
-            HAVING COUNT(bf) = 0
-            """)
-    List<BookEntity> findFilelessBooksByLibraryId(@Param("libraryId") Long libraryId);
-
     /**
-     * Same books as {@link #findFilelessBooksByLibraryId}, in id order, with the metadata and
-     * library path that rescan grouping matches on fetched up front.
+     * The fileless books of the library that are not deleted, one row per author, in book id order: what matching a
+     * new file against them needs, for the whole library in one query and without entities. Books without metadata
+     * have no title to match and are left out.
      */
-    @EntityGraph(attributePaths = {"metadata", "libraryPath"})
     @Query("""
-            SELECT b FROM BookEntity b
+            SELECT new org.booklore.repository.projection.FilelessBookRow(
+                b.id, lp.id, b.isPhysical, b.bookCoverHash, b.audiobookCoverHash, m.title, m.subtitle, m.seriesNumber, a.name)
+            FROM BookEntity b
+            JOIN b.metadata m
+            LEFT JOIN b.libraryPath lp
+            LEFT JOIN m.authors a
             WHERE b.library.id = :libraryId
             AND (b.deleted IS NULL OR b.deleted = false)
             AND NOT EXISTS (SELECT bf.id FROM BookFileEntity bf WHERE bf.book = b)
             ORDER BY b.id
             """)
-    List<BookEntity> findFilelessBooksWithMetadataByLibraryId(@Param("libraryId") Long libraryId);
+    List<FilelessBookRow> findFilelessBookRowsByLibraryId(@Param("libraryId") Long libraryId);
+
+    /** The author names of these books, one row per book and author. */
+    @Query("""
+            SELECT new org.booklore.repository.projection.BookAuthorRow(m.bookId, a.name)
+            FROM BookMetadataEntity m
+            JOIN m.authors a
+            WHERE m.bookId IN :bookIds
+            """)
+    List<BookAuthorRow> findAuthorNamesByBookIds(@Param("bookIds") Collection<Long> bookIds);
 
     @Query("SELECT b.id as id, m.coverUpdatedOn as coverUpdatedOn FROM BookEntity b LEFT JOIN b.metadata m WHERE b.id IN :bookIds")
     List<BookCoverUpdateProjection> findCoverUpdateInfoByIds(@Param("bookIds") Collection<Long> bookIds);

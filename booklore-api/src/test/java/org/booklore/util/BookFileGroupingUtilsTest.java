@@ -2,91 +2,20 @@ package org.booklore.util;
 
 import org.booklore.model.dto.settings.LibraryFile;
 import org.booklore.model.entity.LibraryPathEntity;
+import org.booklore.model.enums.BookFileExtension;
 import org.booklore.model.enums.BookFileType;
+import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.CsvSource;
 
+import java.util.Arrays;
 import java.util.List;
 import java.util.Map;
 
 import static org.assertj.core.api.Assertions.assertThat;
 
 class BookFileGroupingUtilsTest {
-
-    @Test
-    void extractGroupingKey_shouldStripExtension() {
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit.pdf")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit.epub")).isEqualTo("the hobbit");
-    }
-
-    @Test
-    void extractGroupingKey_shouldStripFormatIndicators() {
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit (PDF).pdf")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit (EPUB).epub")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit [pdf].pdf")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit [EPUB].epub")).isEqualTo("the hobbit");
-    }
-
-    @Test
-    void extractGroupingKey_shouldBeCaseInsensitive() {
-        assertThat(BookFileGroupingUtils.extractGroupingKey("THE HOBBIT.pdf"))
-                .isEqualTo(BookFileGroupingUtils.extractGroupingKey("the hobbit.epub"));
-    }
-
-    @Test
-    void extractGroupingKey_shouldNormalizeWhitespace() {
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The   Hobbit.pdf")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("  The Hobbit  .pdf")).isEqualTo("the hobbit");
-    }
-
-    @Test
-    void extractGroupingKey_shouldHandleNullAndEmpty() {
-        assertThat(BookFileGroupingUtils.extractGroupingKey(null)).isEqualTo("");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("")).isEqualTo("");
-    }
-
-    @Test
-    void extractGroupingKey_shouldHandleFileWithNoExtension() {
-        assertThat(BookFileGroupingUtils.extractGroupingKey("noextension")).isEqualTo("noextension");
-    }
-
-    @Test
-    void extractGroupingKey_shouldNotStripDotsThatAreNotExtensions() {
-        // Folder names with dots (like "1. American Gods") should not be stripped
-        // The dot after "1" is NOT a file extension
-        assertThat(BookFileGroupingUtils.extractGroupingKey("1. American Gods - Neil Gaiman (2011)"))
-                .isEqualTo("1. american gods - neil gaiman (2011)");
-        // Series numbering with dots
-        assertThat(BookFileGroupingUtils.extractGroupingKey("Vol. 1 - Adventures (2020)"))
-                .isEqualTo("vol. 1 - adventures (2020)");
-        // Title with dots
-        assertThat(BookFileGroupingUtils.extractGroupingKey("Dr. Seuss Collection"))
-                .isEqualTo("dr. seuss collection");
-        // Multiple dots that are not extensions
-        assertThat(BookFileGroupingUtils.extractGroupingKey("U.S.A. History"))
-                .isEqualTo("u.s.a. history");
-    }
-
-    @Test
-    void extractGroupingKey_shouldHandleMultipleFormatIndicators() {
-        assertThat(BookFileGroupingUtils.extractGroupingKey("Book (PDF) (EPUB).pdf")).isEqualTo("book");
-    }
-
-    @Test
-    void extractGroupingKey_shouldNotStripNonFormatParentheses() {
-        assertThat(BookFileGroupingUtils.extractGroupingKey("Book (Extended Edition).pdf")).isEqualTo("book (extended edition)");
-    }
-
-    @Test
-    void generateDirectoryGroupKey_shouldCombineSubPathAndGroupingKey() {
-        String key = BookFileGroupingUtils.generateDirectoryGroupKey("fantasy/tolkien", "The Hobbit.pdf");
-        assertThat(key).isEqualTo("fantasy/tolkien:the hobbit");
-    }
-
-    @Test
-    void generateDirectoryGroupKey_shouldHandleNullSubPath() {
-        String key = BookFileGroupingUtils.generateDirectoryGroupKey(null, "The Hobbit.pdf");
-        assertThat(key).isEqualTo(":the hobbit");
-    }
 
     @Test
     void groupByBaseName_shouldGroupFilesWithSameBaseNameInSameDirectory() {
@@ -194,63 +123,7 @@ class BookFileGroupingUtilsTest {
         assertThat(groups.values().iterator().next()).containsExactlyInAnyOrder(epub, pdf);
     }
 
-    @Test
-    void extractGroupingKey_shouldConvertUnderscoresToSpaces() {
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The_Hobbit.pdf")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("Lord_of_the_Rings.epub")).isEqualTo("lord of the rings");
-    }
-
-    @Test
-    void extractGroupingKey_shouldStripTrailingAuthor() {
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit - J.R.R. Tolkien.pdf")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("1984 - George Orwell.epub")).isEqualTo("1984");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("Pride and Prejudice - Jane Austen.pdf")).isEqualTo("pride and prejudice");
-    }
-
-    @Test
-    void extractGroupingKey_shouldRepositionArticles() {
-        assertThat(BookFileGroupingUtils.extractGroupingKey("Hobbit, The.pdf")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("Tale of Two Cities, A.epub")).isEqualTo("a tale of two cities");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("Unexpected Journey, An.pdf")).isEqualTo("an unexpected journey");
-    }
-
-    @Test
-    void extractGroupingKey_shouldHandleCombinedNormalizations() {
-        // Underscores + author
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The_Hobbit - J.R.R. Tolkien.pdf")).isEqualTo("the hobbit");
-        // Article + author
-        assertThat(BookFileGroupingUtils.extractGroupingKey("Hobbit, The - J.R.R. Tolkien.pdf")).isEqualTo("the hobbit");
-        // Underscores + article
-        assertThat(BookFileGroupingUtils.extractGroupingKey("Hobbit,_The.pdf")).isEqualTo("the hobbit");
-    }
-
-    @Test
-    void calculateSimilarity_shouldReturnHighScoreForSimilarStrings() {
-        double similarity = BookFileGroupingUtils.calculateSimilarity("the hobbit", "the hobit");
-        assertThat(similarity).isGreaterThan(0.8);
-    }
-
-    @Test
-    void calculateSimilarity_shouldReturnPerfectScoreForIdenticalStrings() {
-        double similarity = BookFileGroupingUtils.calculateSimilarity("the hobbit", "the hobbit");
-        assertThat(similarity).isEqualTo(1.0);
-    }
-
-    @Test
-    void calculateSimilarity_shouldReturnLowScoreForDifferentStrings() {
-        double similarity = BookFileGroupingUtils.calculateSimilarity("the hobbit", "1984");
-        assertThat(similarity).isLessThan(0.5);
-    }
-
-    @Test
-    void calculateSimilarity_shouldHandleNullAndEmptyStrings() {
-        assertThat(BookFileGroupingUtils.calculateSimilarity(null, "test")).isEqualTo(0);
-        assertThat(BookFileGroupingUtils.calculateSimilarity("test", null)).isEqualTo(0);
-        assertThat(BookFileGroupingUtils.calculateSimilarity("", "test")).isEqualTo(0);
-        assertThat(BookFileGroupingUtils.calculateSimilarity("test", "")).isEqualTo(0);
-    }
-
-    // ========== Folder-Centric Grouping Tests ==========
+    // ========== Grouping Tests ==========
 
     @Test
     void groupByBaseName_shouldGroupExtendedNamesMatchingFolderName() {
@@ -486,6 +359,35 @@ class BookFileGroupingUtilsTest {
 
     @Test
     void groupByBaseName_shouldGroupFilesWithAuthorVariationsMatchingFolder() {
+        // The author folder vouches for "Neil Gaiman" being the author's name rather than part of the title
+        LibraryPathEntity pathEntity = new LibraryPathEntity();
+        pathEntity.setId(1L);
+        pathEntity.setPath("/library");
+
+        LibraryFile basic = LibraryFile.builder()
+                .libraryPathEntity(pathEntity)
+                .fileSubPath("Neil Gaiman/American Gods")
+                .fileName("American Gods.epub")
+                .bookFileType(BookFileType.EPUB)
+                .build();
+
+        LibraryFile withAuthor = LibraryFile.builder()
+                .libraryPathEntity(pathEntity)
+                .fileSubPath("Neil Gaiman/American Gods")
+                .fileName("American Gods - Neil Gaiman.mobi")
+                .bookFileType(BookFileType.MOBI)
+                .build();
+
+        Map<String, List<LibraryFile>> groups = BookFileGroupingUtils.groupByBaseName(List.of(basic, withAuthor));
+
+        assertThat(groups).hasSize(1);
+        assertThat(groups.values().iterator().next()).containsExactlyInAnyOrder(basic, withAuthor);
+    }
+
+    @Test
+    void groupByBaseName_shouldKeepANameSuffixNothingVouchesForAsPartOfTheTitle() {
+        // In a folder named only after the title, " - Neil Gaiman" reads like " - Las Vegas Bad Boys" or " - Karachi":
+        // nothing says it is an author, so the files stay two books rather than risk merging two titles
         LibraryPathEntity pathEntity = new LibraryPathEntity();
         pathEntity.setId(1L);
         pathEntity.setPath("/library");
@@ -506,44 +408,10 @@ class BookFileGroupingUtilsTest {
 
         Map<String, List<LibraryFile>> groups = BookFileGroupingUtils.groupByBaseName(List.of(basic, withAuthor));
 
-        assertThat(groups).hasSize(1);
-        assertThat(groups.values().iterator().next()).containsExactlyInAnyOrder(basic, withAuthor);
-    }
-
-    // ========== Part Indicator Stripping Tests ==========
-
-    @Test
-    void extractGroupingKey_shouldStripPartIndicators() {
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Lost Hero (part 1).m4b")).isEqualTo("the lost hero");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Lost Hero (pt 2).m4b")).isEqualTo("the lost hero");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Lost Hero (disc 1).m4b")).isEqualTo("the lost hero");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Lost Hero [cd 3].m4b")).isEqualTo("the lost hero");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Lost Hero - part 1.m4b")).isEqualTo("the lost hero");
-    }
-
-    @Test
-    void extractGroupingKey_shouldPreserveNonPartParenthetical() {
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit (Extended Edition).epub"))
-                .isEqualTo("the hobbit (extended edition)");
-    }
-
-    @Test
-    void extractGroupingKey_shouldProduceSameKeyForMultiPartFiles() {
-        String key1 = BookFileGroupingUtils.extractGroupingKey("1. The Lost Hero (part 1).m4b");
-        String key2 = BookFileGroupingUtils.extractGroupingKey("1. The Lost Hero (part 2).m4b");
-        assertThat(key1).isEqualTo(key2);
+        assertThat(groups).hasSize(2);
     }
 
     // ========== Bare-Number Series Detection Tests ==========
-
-    @Test
-    void extractGroupingKey_shouldNotStripBarePartAsSeriesLabel() {
-        // "Part 1" without brackets/dash is a series label, not a multi-file indicator
-        assertThat(BookFileGroupingUtils.extractGroupingKey("Harry Potter Part 1.epub"))
-                .isEqualTo("harry potter part 1");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("Harry Potter Part 2.epub"))
-                .isEqualTo("harry potter part 2");
-    }
 
     @Test
     void groupByBaseName_shouldKeepBarePartSeriesEntriesSeparate() {
@@ -781,81 +649,6 @@ class BookFileGroupingUtilsTest {
 
         assertThat(groups).hasSize(1);
         assertThat(groups.values().iterator().next()).containsExactlyInAnyOrder(epub, audiobook1);
-    }
-
-    // ========== Part Indicator Pattern Edge Cases ==========
-
-    @Test
-    void extractGroupingKey_shouldStripBareDiscAndCdAndPt() {
-        // pt, disc, disk, cd are unambiguous and stripped even without brackets/dash
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit disc 1.m4b")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit disk 2.m4b")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit cd 3.m4b")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit pt 1.m4b")).isEqualTo("the hobbit");
-    }
-
-    @Test
-    void extractGroupingKey_shouldStripPartInSquareBrackets() {
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit [part 1].m4b")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit [Part 2].m4b")).isEqualTo("the hobbit");
-    }
-
-    @Test
-    void extractGroupingKey_shouldStripPartCaseInsensitive() {
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit (PART 1).m4b")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit (Part 1).m4b")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit - PART 1.m4b")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit DISC 1.m4b")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit CD 3.m4b")).isEqualTo("the hobbit");
-    }
-
-    @Test
-    void extractGroupingKey_shouldNotStripPartWithoutNumber() {
-        // "part" keyword without a trailing number should not be stripped
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Best Part.epub")).isEqualTo("the best part");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("Disc Jockey.m4b")).isEqualTo("disc jockey");
-    }
-
-    @Test
-    void extractGroupingKey_shouldStripAudioFormatIndicators() {
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit (m4b).m4b")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit (mp3).mp3")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit [audiobook].m4b")).isEqualTo("the hobbit");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit (audio).m4b")).isEqualTo("the hobbit");
-    }
-
-    @Test
-    void extractGroupingKey_shouldStripFormatThenPartIndicator() {
-        // Both format indicator and part indicator present
-        assertThat(BookFileGroupingUtils.extractGroupingKey("The Hobbit (mp3) (part 1).mp3")).isEqualTo("the hobbit");
-    }
-
-    // ========== Bare-Number Prefix Edge Cases ==========
-
-    @Test
-    void extractGroupingKey_shouldPreserveBareNumberDotPrefix() {
-        // "N. Title" prefix is preserved in the grouping key (series detection handles it separately)
-        assertThat(BookFileGroupingUtils.extractGroupingKey("01. The Lightning Thief.m4b")).isEqualTo("01. the lightning thief");
-        assertThat(BookFileGroupingUtils.extractGroupingKey("100. War and Peace.epub")).isEqualTo("100. war and peace");
-    }
-
-    @Test
-    void extractGroupingKey_shouldStripDashPrefixViaAuthorPattern() {
-        // "01 - The Lightning Thief" looks like "number - Author Name" to the trailing author pattern,
-        // so the author pattern strips it. This is expected existing behavior.
-        assertThat(BookFileGroupingUtils.extractGroupingKey("01 - The Lightning Thief.m4b")).isEqualTo("01");
-    }
-
-    @Test
-    void extractGroupingKey_shouldNotTreatFourDigitNumberAsPrefix() {
-        // 4-digit numbers should not be treated as series prefixes
-        assertThat(BookFileGroupingUtils.extractGroupingKey("1984.epub")).isEqualTo("1984");
-    }
-
-    @Test
-    void extractGroupingKey_shouldNotTreatNumberWithoutSeparatorAsPrefix() {
-        // "101 Dalmatians" has no dot or dash after the number
-        assertThat(BookFileGroupingUtils.extractGroupingKey("101 Dalmatians.epub")).isEqualTo("101 dalmatians");
     }
 
     @Test
@@ -1273,5 +1066,261 @@ class BookFileGroupingUtilsTest {
         // All 4 files should be grouped as one book
         assertThat(groups).hasSize(1);
         assertThat(groups.values().iterator().next()).containsExactlyInAnyOrder(epub, mobi, m4b, mp3Folder);
+    }
+
+    // ========== Exact keys: what the production rescan merged, and what must stay one book ==========
+
+    private static final LibraryPathEntity LIBRARY_PATH = libraryPath();
+
+    private static LibraryPathEntity libraryPath() {
+        LibraryPathEntity pathEntity = new LibraryPathEntity();
+        pathEntity.setId(1L);
+        pathEntity.setPath("/library");
+        return pathEntity;
+    }
+
+    /** A new file in {@code folder}; a name without a book extension is a folder audiobook. */
+    private static LibraryFile file(String folder, String name) {
+        var extension = BookFileExtension.fromFileName(name);
+        return LibraryFile.builder()
+                .libraryPathEntity(LIBRARY_PATH)
+                .fileSubPath(folder)
+                .fileName(name)
+                .bookFileType(extension.map(BookFileExtension::getType).orElse(BookFileType.AUDIOBOOK))
+                .folderBased(extension.isEmpty())
+                .build();
+    }
+
+    private static List<List<String>> partition(String folder, String... names) {
+        List<LibraryFile> files = Arrays.stream(names).map(name -> file(folder, name)).toList();
+        return BookFileGroupingUtils.groupByBaseName(files).values().stream()
+                .map(group -> group.stream().map(LibraryFile::getFileName).toList())
+                .toList();
+    }
+
+    @Nested
+    class ExactKeys {
+
+        @Test
+        void keepsEachTitleByTheFoldersAuthorApart() {
+            // Production: "Shadow Command" and "Warrior Class" were attached to "Battle Born" because the folder's
+            // name was a substring of every file's name
+            Map<String, List<LibraryFile>> groups = BookFileGroupingUtils.groupByBaseName(List.of(
+                    file("B/Dale Brown", "Battle Born by Dale Brown.epub"),
+                    file("B/Dale Brown", "Shadow Command by Dale Brown.epub"),
+                    file("B/Dale Brown", "Warrior Class by Dale Brown.epub")));
+
+            assertThat(groups.keySet()).containsExactly(
+                    "1:B/Dale Brown:battle born", "1:B/Dale Brown:shadow command", "1:B/Dale Brown:warrior class");
+        }
+
+        @Test
+        void keepsTitlesThatShareTheirFirstPartApart() {
+            // Production: " - Karachi" and " - Stella Marni" were read as authors and dropped, leaving "assignment"
+            assertThat(partition("A/Aarons, Edward S",
+                    "Assignment - Karachi.epub", "Assignment - Karachi.mobi", "Assignment - Stella Marni.epub"))
+                    .containsExactlyInAnyOrder(
+                            List.of("Assignment - Karachi.epub", "Assignment - Karachi.mobi"),
+                            List.of("Assignment - Stella Marni.epub"));
+        }
+
+        @Test
+        void keepsTheBooksOfASeriesFolderApart() {
+            assertThat(partition("A/Alex Archer/Rogue Angel",
+                    "Rogue Angel - Destiny.epub", "Rogue Angel - Solomon's Jar.epub", "Rogue Angel - The Chosen.epub"))
+                    .hasSize(3);
+            assertThat(partition("Rogue Angel",
+                    "Rogue Angel - Destiny.epub", "Rogue Angel - Solomon's Jar.epub", "Rogue Angel - Destiny.pdf"))
+                    .containsExactlyInAnyOrder(
+                            List.of("Rogue Angel - Destiny.epub", "Rogue Angel - Destiny.pdf"),
+                            List.of("Rogue Angel - Solomon's Jar.epub"));
+        }
+
+        @Test
+        void keepsTheFilesOfOneBaseNameTogetherWhateverTheirNamesReadAs() {
+            // An ebook's "(Part 1)" is a volume and an audiobook's a split file, but the two files share one sidecar
+            // name, so as two books they would overwrite each other's metadata and cover
+            assertThat(partition("Rick Riordan",
+                    "The Lost Hero (Part 1).epub", "The Lost Hero (Part 1).m4b", "The Lost Hero (Part 2).m4b"))
+                    .containsExactly(List.of("The Lost Hero (Part 1).epub", "The Lost Hero (Part 1).m4b", "The Lost Hero (Part 2).m4b"));
+        }
+
+        @Test
+        void splitsATitleByDifferentYearsAndLeavesAFileNamingNoneApart() {
+            assertThat(partition("Frank Herbert", "Dune (1965).epub", "Dune (2021).epub", "Dune.pdf")).hasSize(3);
+            assertThat(partition("Frank Herbert", "Dune (1965).epub", "Dune.pdf", "Dune (1965).mobi"))
+                    .containsExactly(List.of("Dune (1965).epub", "Dune.pdf", "Dune (1965).mobi"));
+        }
+
+        @Test
+        void foldsADuplicateOnlyIntoTheFileItDuplicates() {
+            assertThat(partition("Terry Pratchett", "Mort.epub", "Mort (1).epub", "Mort - Copy.epub", "Mort (copy).pdf"))
+                    .containsExactly(List.of("Mort.epub", "Mort (1).epub", "Mort - Copy.epub", "Mort (copy).pdf"));
+            assertThat(partition("Comics/Saga", "Saga (1).cbz", "Saga (2).cbz")).hasSize(2);
+            assertThat(partition("Comics/Saga", "Saga (2).cbz", "Saga 2.cbr"))
+                    .containsExactly(List.of("Saga (2).cbz", "Saga 2.cbr"));
+        }
+
+        @Test
+        void groupsANameWithANumberTooLongForAPartWithoutThrowing() {
+            assertThat(partition("Tolkien", "The Hobbit (Part 9780261102217).m4b", "The Hobbit.epub")).hasSize(2);
+            assertThat(partition("Misc", "Interview cd 20231015120000.mp3")).hasSize(1);
+        }
+
+        @Test
+        void keysEveryGroupByLibraryPathFolderAndIdentity() {
+            Map<String, List<LibraryFile>> groups = BookFileGroupingUtils.groupByBaseName(List.of(
+                    file(null, "01 - The Lightning Thief.m4b"),
+                    file("", "01 - The Lost Hero.m4b"),
+                    file("Comics/Saga", "(Digital).cbz")));
+
+            assertThat(groups.keySet()).containsExactly(
+                    "1::lightning thief #1", "1::lost hero #1", "1:Comics/Saga:=(digital)");
+        }
+
+        // groups separated by ';', the files of one group by '+'
+        @ParameterizedTest(name = "[{0}] {1}")
+        @CsvSource(delimiter = '|', quoteCharacter = '"', textBlock = """
+                B/Dale Brown                  | Battle Born by Dale Brown.epub ; Shadow Command by Dale Brown.epub ; Warrior Class by Dale Brown.epub
+                B/Brown, Dale                 | Battle Born by Dale Brown.epub + Battle Born.mobi ; Shadow Command by Dale Brown.epub
+                B/Dale Brown                  | Battle Born by Dale Brown.epub + Battle Born by Dale Brown - Unabridged.m4b ; Shadow Command by Dale Brown.epub
+                ""                            | Dale Brown - Battle Born.epub ; Dale Brown - Shadow Command.epub
+                Dale Brown                    | Dale Brown - Battle Born.epub ; Dale Brown - Shadow Command.epub
+                A/Aarons, Edward S            | Assignment - Karachi.epub ; Assignment - Stella Marni.epub ; Assignment - The Cairo Dancers.epub
+                Some Author                   | KING - Las Vegas Bad Boys.epub ; King.epub
+                Stuart Slade                  | A Dangerous Universe 3.epub ; A Dangerous Universe 5.epub
+                Terry Pratchett/Discworld     | Discworld 01 - The Colour of Magic.epub ; Discworld 02 - The Light Fantastic.epub + Discworld 02 - The Light Fantastic.mobi
+                Terry Pratchett/Discworld     | [Discworld 03] Equal Rites.epub ; [Discworld 04] Mort.epub + [Discworld 04] Mort.pdf
+                Brandon Sanderson/Mistborn    | Mistborn 1 - The Final Empire.epub ; Mistborn 2 - The Well of Ascension.epub ; Mistborn 3 - The Hero of Ages.epub
+                James S. A. Corey/The Expanse | The Expanse - Book One.epub ; The Expanse - Book Two.epub ; The Expanse - Book Three.epub
+                Comics/Saga                   | Saga 001 (2012) (Digital).cbz ; Saga 002 (2012) (Digital).cbz ; Saga 003 (2012) (Digital).cbz
+                Stephen King/The Dark Tower   | The Dark Tower I - The Gunslinger.epub ; The Dark Tower II - The Drawing of the Three.epub ; The Dark Tower III - The Waste Lands.epub
+                Rocky                         | Rocky II.epub ; Rocky III.epub
+                Frank Herbert                 | Dune.epub + Dune.pdf ; Dune Messiah.epub ; Children of Dune.epub
+                Stephen King                  | It.epub ; The Institute.epub ; Misery.epub
+                Isaac Asimov                  | Foundation.epub + Foundation.mobi ; Foundation and Empire.epub ; Second Foundation.epub
+                Light Novels                  | Kokoro Connect Volume - Nise Random.epub ; Kokoro Connect Volume 2 - Kizu Random.epub ; Kokoro Connect Volume 4 - Michi Random.epub
+                Jeffrey Archer                | A Quiver Full of Arrows.epub ; A Quiver Full of Arrows - Stories.epub ; Kane and Abel.epub
+                Michael Anthony               | Mass Casualties - Michael Anthony (2009).epub + Mass Casualties - Michael Anthony (2009) (1).epub
+                J.R.R. Tolkien                | The Hobbit.epub + Hobbit, The.pdf + The Hobbit - J.R.R. Tolkien.mobi + Tolkien, J.R.R. - The Hobbit.azw3 ; The Silmarillion.epub
+                Stephen King/The Stand        | The Stand.epub + The Stand Part 01.m4b + The Stand Part 02.m4b
+                Neil Gaiman/American Gods     | American Gods.epub + American Gods.mobi + American Gods The Tenth Anniversary Edition (A Full Cast Production).m4b
+                The Hobbit                    | The Hobbit.epub + The Hobbit Unabridged.m4b + The Hobbit (Illustrated Edition).pdf
+                Heroes of Olympus             | 1. The Lost Hero (part 1).m4b + 1. The Lost Hero (part 2).m4b ; 2. The Son of Neptune.m4b ; 3. The Mark of Athena (part 1).m4b + 3. The Mark of Athena (part 2).m4b ; 4. The House of Hades.m4b ; 5. The Blood of Olympus.m4b
+                Book Folder                   | Book.pdf + Book.epub + Book Audiobook
+                Robert Jordan                 | The Great Hunt.epub + The Great Hunt (1).epub ; The Dragon Reborn.epub
+                Comics/Saga                   | Saga (1).cbz ; Saga (2).cbz
+                ""                            | 01 - The Lightning Thief.m4b ; 01 - The Lost Hero.m4b
+                War and Peace                 | War and Peace disc 1.m4b + War and Peace disc 2.m4b + War and Peace disc 3.m4b
+                Ray Bradbury                  | Fahrenheit 451.epub + Fahrenheit 451.mobi ; The Martian Chronicles.epub
+                George Orwell                 | 1984.epub + 1984 - George Orwell.pdf ; Animal Farm.epub
+                Arthur C. Clarke              | 2001 A Space Odyssey.epub ; 2010 Odyssey Two.epub
+                Poetry                        | Collected Poems.epub ; Collected Poems - W. B. Yeats.epub + Collected Poems - W. B. Yeats.pdf ; Collected Poems - T. S. Eliot.epub
+                """)
+        void groupsAFoldersFilesOnlyByEqualKeys(String folder, String expected) {
+            List<List<String>> want = Arrays.stream(expected.split(";"))
+                    .map(group -> Arrays.stream(group.split("\\+")).map(String::trim).toList())
+                    .toList();
+
+            assertThat(partition(folder, want.stream().flatMap(List::stream).toArray(String[]::new)))
+                    .containsExactlyInAnyOrderElementsOf(want);
+        }
+
+        // Two new files of one folder: one book or two, whichever order they come in
+        @ParameterizedTest(name = "[{0}] {1} ~ {2}: {3}")
+        @CsvSource(delimiter = '|', quoteCharacter = '"', textBlock = """
+                Stuart Slade                  | A Dangerous Universe 3.epub                       | A Dangerous Universe 5.epub                        | DIFF
+                Kokoro Connect                | Kokoro Connect Volume 4 - Michi Random.epub       | Kokoro Connect Volume - Nise Random.epub           | DIFF
+                Some Author                   | KING - Las Vegas Bad Boys.epub                    | King.epub                                          | DIFF
+                Las Vegas Bad Boys            | KING - Las Vegas Bad Boys.epub                    | King.mobi                                          | SAME
+                B/Dale Brown                  | Battle Born by Dale Brown.epub                    | Shadow Command by Dale Brown.epub                  | DIFF
+                A/Aarons, Edward S            | Assignment - Karachi.epub                         | Assignment - Treason.epub                          | DIFF
+                A/Aarons, Edward S/Sam Durell | Assignment - Maltese Maiden.epub                  | Assignment - Stella Marni.epub                     | DIFF
+                ""                            | 01 - The Lightning Thief.m4b                      | 01 - The Lost Hero.m4b                             | DIFF
+                Jeffrey Archer                | A Quiver Full of Arrows - Stories.epub            | A Quiver Full of Arrows.epub                       | DIFF
+                Michael Anthony               | Mass Casualties - Michael Anthony (2009) (1).epub | Mass Casualties - Michael Anthony (2009).epub      | SAME
+                Harry Potter                  | Harry Potter Book 1.epub                          | Harry Potter Book 2.epub                           | DIFF
+                Harry Potter                  | Harry Potter Book 1.epub                          | Harry Potter 1.mobi                                | SAME
+                Harry Potter                  | Harry Potter Part 1.epub                          | Harry Potter Part 2.epub                           | DIFF
+                The Expanse                   | The Expanse - Book One.epub                       | The Expanse - Book Two.epub                        | DIFF
+                The Expanse                   | The Expanse - Book One.epub                       | The Expanse Book 1.pdf                             | SAME
+                Mistborn                      | Mistborn 2 - The Well of Ascension.epub           | Mistborn 3 - The Hero of Ages.epub                 | DIFF
+                Saga                          | Saga Vol. 1.cbz                                   | Saga Vol. 2.cbz                                    | DIFF
+                Saga                          | Saga Vol. 1.cbz                                   | Saga Volume 1.cbr                                  | SAME
+                Saga                          | Saga v01.cbz                                      | Saga Vol. 1.cbr                                    | SAME
+                Saga                          | Saga 001 (2012) (Digital).cbz                     | Saga 001 (2012).cbr                                | SAME
+                Saga                          | Saga #12.cbz                                      | Saga #13.cbz                                       | DIFF
+                Comics/Saga                   | Saga Vol. 1.cbz                                   | Saga 001.cbz                                       | DIFF
+                Comics/Saga                   | Saga v01 (2012) (Digital).cbz                     | Saga 001 (2012) (Digital).cbz                      | DIFF
+                Comics/Saga                   | Saga #1.cbz                                       | Saga 001.cbz                                       | SAME
+                Comics/Saga                   | Saga Book One.cbz                                 | Saga #1.cbr                                        | DIFF
+                Comics/Batman                 | Batman 001.cbz                                    | Batman Vol. 1.cbz                                  | DIFF
+                Comics/Saga                   | Saga Volume 1 (Deluxe Edition).cbz                | Saga Volume 1.cbz                                  | DIFF
+                Comics/Saga                   | Saga Volume 1 (Deluxe Edition).cbz                | Saga Volume 1 (Deluxe Edition).pdf                 | SAME
+                Star Wars                     | Star Wars Episode IV - A New Hope.epub            | Star Wars Episode V - The Empire Strikes Back.epub | DIFF
+                Shakespeare                   | Henry IV Part 1.epub                              | Henry IV Part 2.epub                               | DIFF
+                Jack Reacher                  | Jack Reacher 01 - Killing Floor.epub              | Jack Reacher 02 - Die Trying.epub                  | DIFF
+                Percy Jackson                 | 1. The Lightning Thief.epub                       | 1. The Lightning Thief.m4b                         | SAME
+                Joseph Heller                 | Catch-22.epub                                     | Catch-22.azw3                                      | SAME
+                Frank Herbert                 | Dune.epub                                         | Dune Messiah.epub                                  | DIFF
+                Frank Herbert                 | Dune.epub                                         | Children of Dune.epub                              | DIFF
+                Stephen King                  | It.epub                                           | The Institute.epub                                 | DIFF
+                Isaac Asimov                  | Foundation.epub                                   | Second Foundation.epub                             | DIFF
+                Stieg Larsson                 | The Girl with the Dragon Tattoo.epub              | The Girl Who Played with Fire.epub                 | DIFF
+                Tolkien                       | The Lord of the Rings - The Fellowship of the Ring.epub | The Lord of the Rings - The Two Towers.epub  | DIFF
+                Ann Leckie                    | Ancillary Justice.epub                            | Ancillary Sword.epub                               | DIFF
+                Misc                          | The Hobbit - J.R.R. Tolkien.epub                  | The Hobbit.azw3                                    | SAME
+                Poetry                        | Collected Poems - W. B. Yeats.epub                | Collected Poems - T. S. Eliot.epub                 | DIFF
+                ""                            | Collected Poems - W. B. Yeats.epub                | Collected Poems - T. S. Eliot.epub                 | DIFF
+                ""                            | Collected Poems by W.B. Yeats.epub                | Collected Poems by T.S. Eliot.epub                 | DIFF
+                ""                            | Dune - F. Herbert.epub                            | Dune - B. Herbert.epub                             | DIFF
+                Anthologies                   | Short Stories - Philip K. Dick.epub               | Short Stories - Robert E. Howard.epub              | DIFF
+                Manuals                       | Field Manual - U.S. Army.pdf                      | Field Manual - U.S. Navy.pdf                       | DIFF
+                Poetry                        | Collected Poems - T. S. Eliot.epub                | Collected Poems - T.S. Eliot.pdf                   | SAME
+                Poetry                        | Collected Poems - T. S. Eliot.epub                | Collected Poems.pdf                                | SAME
+                ""                            | Dune - F. Herbert.epub                            | Dune - Frank P. Herbert.pdf                        | SAME
+                Neil Gaiman/American Gods     | American Gods - Neil Gaiman.mobi                  | American Gods.epub                                 | SAME
+                American Gods                 | American Gods - Neil Gaiman.mobi                  | American Gods.epub                                 | DIFF
+                Star Trek                     | Star Trek - Prime Directive.epub                  | Star Trek - The Final Reflection.epub              | DIFF
+                Star Trek                     | Star Trek - Prime Directive.epub                  | Star Trek.epub                                     | DIFF
+                Misc                          | Harry Potter and the Sorcerer's Stone.epub        | Harry Potter and the Sorcerers Stone.pdf           | SAME
+                Misc                          | Sapiens: A Brief History of Humankind.epub        | Sapiens - A Brief History of Humankind.pdf         | SAME
+                Misc                          | Sapiens - A Brief History of Humankind.epub       | Sapiens.pdf                                        | DIFF
+                Misc                          | Les Misérables.epub                               | Les Miserables.pdf                                 | SAME
+                Misc                          | Pride & Prejudice.epub                            | Pride and Prejudice.mobi                           | SAME
+                Misc                          | The_Name_of_the_Wind.epub                         | The Name of the Wind.pdf                           | SAME
+                Misc                          | Stand by Me.epub                                  | Stand.epub                                         | DIFF
+                William Gibson                | Neuromancer 20th Anniversary Edition.epub         | Neuromancer.mobi                                   | SAME
+                Stephen King                  | The Stand (Complete and Uncut Edition).epub       | The Stand.epub                                     | SAME
+                Misc                          | Book (Extended Edition).pdf                       | Book.epub                                          | SAME
+                Misc                          | The Martian (v5.0).epub                           | The Martian.mobi                                   | SAME
+                Misc                          | Special Forces.epub                               | Forces.epub                                        | DIFF
+                Misc                          | The Complete Sherlock Holmes.epub                 | Sherlock Holmes.epub                               | DIFF
+                Misc                          | Dune (Graphic Novel).cbz                          | Dune.epub                                          | DIFF
+                Terry Pratchett               | Mort (1).epub                                     | Mort.epub                                          | SAME
+                Terry Pratchett               | Mort - Copy.epub                                  | Mort.epub                                          | SAME
+                Stephen King                  | The Stand Part 01.m4b                             | The Stand Part 02.m4b                              | SAME
+                Stephen King                  | The Stand (Part 1).m4b                            | The Stand (Part 2).m4b                             | SAME
+                Stephen King                  | The Stand - Part 1 of 3.m4b                       | The Stand - Part 2 of 3.m4b                        | SAME
+                Stephen King                  | The Stand Disc 1.mp3                              | The Stand.epub                                     | SAME
+                Tolkien/The Hobbit            | CD1                                               | CD2                                                | SAME
+                Tolkien/The Hobbit            | Disc 1                                            | Disc 2                                             | SAME
+                Tolkien/The Hobbit            | Disk 01                                           | Disk 02                                            | SAME
+                Tolkien/The Hobbit            | CD 1                                              | CD 2                                               | SAME
+                Tolkien/The Hobbit            | The Hobbit.epub                                   | Disc 1                                             | SAME
+                ""                            | CD1                                               | CD2                                                | DIFF
+                Tolkien                       | The Hobbit - Part One.m4b                         | The Hobbit - Part Two.m4b                          | SAME
+                Tolkien                       | The Hobbit (Part I).m4b                           | The Hobbit (Part II).m4b                           | SAME
+                Tolkien                       | The Hobbit [1-2].m4b                              | The Hobbit [2-2].m4b                               | SAME
+                Tolkien                       | The Hobbit (1 of 2).mp3                           | The Hobbit (2 of 2).mp3                            | SAME
+                Tolkien                       | The Hobbit - Part One.epub                        | The Hobbit - Part Two.epub                         | DIFF
+                Misc                          | The Hobbit.epub                                   | The Hobit.epub                                     | DIFF
+                """)
+        void decidesAPairTheSameWayInEitherOrder(String folder, String a, String b, String expected) {
+            int books = expected.equals("SAME") ? 1 : 2;
+
+            assertThat(partition(folder, a, b)).hasSize(books);
+            assertThat(partition(folder, b, a)).hasSize(books);
+        }
     }
 }

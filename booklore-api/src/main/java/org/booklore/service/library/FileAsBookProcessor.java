@@ -146,9 +146,8 @@ public class FileAsBookProcessor {
     }
 
     private void createAdditionalBookFile(BookEntity bookEntity, LibraryFile file) {
-        Optional<BookFileEntity> existing = bookAdditionalFileRepository
-                .findByLibraryPath_IdAndFileSubPathAndFileName(
-                        file.getLibraryPathEntity().getId(), file.getFileSubPath(), file.getFileName());
+        Optional<BookFileEntity> existing = bookAdditionalFileRepository.findExactlyAt(
+                file.getLibraryPathEntity().getId(), file.getFileSubPath(), file.getFileName());
 
         if (existing.isPresent()) {
             log.debug("Additional file already exists: {}", file.getFileName());
@@ -221,6 +220,18 @@ public class FileAsBookProcessor {
             }
         } catch (Exception e) {
             log.warn("Failed to generate cover from additional file {}: {}", additionalFile.getFileName(), e.getMessage());
+        }
+    }
+
+    /**
+     * Writes the book's cover of the file's kind, audiobook or ebook, from the file, replacing one it has. Whether it
+     * should is the caller's decision.
+     */
+    void writeCoverFromFile(BookEntity bookEntity, LibraryFile file) {
+        if (file.getBookFileType() == BookFileType.AUDIOBOOK) {
+            generateAudiobookCoverFromFile(bookEntity, file);
+        } else {
+            generateEbookCoverFromFile(bookEntity, file);
         }
     }
 

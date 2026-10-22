@@ -67,7 +67,6 @@ class LibraryRescanHelperTest {
         library = new LibraryEntity();
         library.setId(1L);
         library.setName("Test Library");
-        library.setBookEntities(new ArrayList<>());
 
         LibraryRescanOptions options = LibraryRescanOptions.builder()
                 .metadataReplaceMode(MetadataReplaceMode.REPLACE_ALL)

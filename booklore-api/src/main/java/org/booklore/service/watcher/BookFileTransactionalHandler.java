@@ -11,13 +11,24 @@ import org.booklore.model.enums.BookFileType;
 import org.booklore.model.enums.LibraryOrganizationMode;
 import org.booklore.model.websocket.LogNotification;
 import org.booklore.model.websocket.Topic;
-import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
+import org.booklore.repository.projection.BookAuthorRow;
+import org.booklore.repository.projection.BookFileScanRow;
 import org.booklore.service.NotificationService;
 import org.booklore.service.file.FileFingerprint;
+import org.booklore.service.library.ExistingBookAttacher;
+import org.booklore.service.library.FilelessShells;
 import org.booklore.service.library.LibraryProcessingService;
-import org.booklore.util.BookFileGroupingUtils;
+import org.booklore.service.library.matching.BooksInFolder;
+import org.booklore.service.library.matching.BooksInFolder.FolderBook;
+import org.booklore.service.library.matching.BooksInFolder.FolderFile;
+import org.booklore.service.library.matching.ExistingBookMatcher;
+import org.booklore.service.library.matching.ExistingBookMatcher.Ambiguous;
+import org.booklore.service.library.matching.ExistingBookMatcher.Decision;
+import org.booklore.service.library.matching.ExistingBookMatcher.Kind;
+import org.booklore.service.library.matching.ExistingBookMatcher.Match;
+import org.booklore.service.library.matching.FileEvidence;
 import org.booklore.util.FileUtils;
 import jakarta.transaction.Transactional;
 import lombok.RequiredArgsConstructor;
@@ -27,8 +38,12 @@ import org.springframework.stereotype.Service;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
-import java.util.Comparator;
+import java.util.ArrayList;
+import java.util.HashMap;
+import java.util.LinkedHashMap;
+import java.util.LinkedHashSet;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
 
@@ -40,15 +55,14 @@ import static org.booklore.model.enums.PermissionType.MANAGE_LIBRARY;
 @RequiredArgsConstructor
 public class BookFileTransactionalHandler {
 
-    private static final double FILELESS_MATCH_THRESHOLD = 0.85;
-
     private final BookFilePersistenceService bookFilePersistenceService;
     private final LibraryProcessingService libraryProcessingService;
     private final NotificationService notificationService;
     private final LibraryRepository libraryRepository;
     private final BookRepository bookRepository;
-    private final BookAdditionalFileRepository bookAdditionalFileRepository;
     private final PendingDeletionPool pendingDeletionPool;
+    private final FilelessShells filelessShells;
+    private final ExistingBookAttacher existingBookAttacher;
 
     @Transactional()
     public void handleNewBookFile(long libraryId, Path path) {
@@ -108,63 +122,27 @@ public class BookFileTransactionalHandler {
             return;
         }
 
-        Optional<BookEntity> existingByHash = bookRepository.findByCurrentHashIncludingRecentlyDeleted(currentHash, Instant.now().minus(60, ChronoUnit.SECONDS));
-        if (existingByHash.isPresent()) {
-            bookFilePersistenceService.updatePathIfChanged(existingByHash.get(), libraryEntity, path, currentHash);
+        Optional<BookFileEntity> movedFrom = bookFilePersistenceService.findMovedFile(currentHash, path, Instant.now().minus(60, ChronoUnit.SECONDS));
+        if (movedFrom.isPresent()) {
+            bookFilePersistenceService.updatePathIfChanged(movedFrom.get(), libraryEntity, path);
             log.info("[CREATE] File '{}' recognized as moved file, updated existing book's path", filePath);
             notificationService.sendMessageToPermissions(Topic.LOG, LogNotification.info("Finished processing file: " + filePath), Set.of(ADMIN, MANAGE_LIBRARY));
             return;
         }
 
-        var mode = libraryEntity.getOrganizationMode() != null
-                ? libraryEntity.getOrganizationMode() : LibraryOrganizationMode.AUTO_DETECT;
+        LibraryFile libraryFile = LibraryFile.builder()
+                .libraryEntity(libraryEntity)
+                .libraryPathEntity(libraryPathEntity)
+                .fileSubPath(fileSubPath)
+                .fileName(fileName)
+                .bookFileType(BookFileExtension.fromFileName(fileName)
+                        .map(BookFileExtension::getType)
+                        .orElseThrow(() -> new IllegalArgumentException("Unsupported book file type: " + fileName)))
+                .build();
 
-        BookEntity filelessMatch = (mode == LibraryOrganizationMode.AUTO_DETECT)
-                ? findMatchingFilelessBook(libraryEntity, fileName, libraryPathEntity)
-                : findExactFilelessBook(libraryEntity, fileName, libraryPathEntity);
-
-        if (filelessMatch != null) {
-            if (filelessMatch.getLibraryPath() == null) {
-                filelessMatch.setLibraryPath(libraryPathEntity);
-                bookRepository.save(filelessMatch);
-            }
-            autoAttachFile(filelessMatch, fileName, fileSubPath, path);
-            log.info("[CREATE] Attached file '{}' to fileless book id={}", filePath, filelessMatch.getId());
-            notificationService.sendMessageToPermissions(Topic.LOG, LogNotification.info("Finished processing file: " + filePath), Set.of(ADMIN, MANAGE_LIBRARY));
-            return;
-        }
-
-        BookEntity matchingBook = null;
-
-        if (mode == LibraryOrganizationMode.BOOK_PER_FILE) {
-            // BOOK_PER_FILE: never attach to existing books
-        } else if (mode == LibraryOrganizationMode.BOOK_PER_FOLDER) {
-            matchingBook = findBookInSameFolder(libraryPathEntity.getId(), fileSubPath);
-            if (matchingBook == null) {
-                BookFileType fileType = BookFileExtension.fromFileName(fileName)
-                        .map(BookFileExtension::getType).orElse(null);
-                if (fileType == BookFileType.AUDIOBOOK) {
-                    matchingBook = findNearestAncestorBookWithEbook(libraryPathEntity.getId(), fileSubPath);
-                }
-            }
+        if (attachToExistingBook(libraryEntity, libraryFile)) {
+            log.info("[CREATE] Attached file '{}' to an existing book", filePath);
         } else {
-            matchingBook = findMatchingBook(libraryPathEntity.getId(), fileSubPath, fileName);
-        }
-
-        if (matchingBook != null) {
-            autoAttachFile(matchingBook, fileName, fileSubPath, path);
-            log.info("[CREATE] Auto-attached file '{}' to existing book", filePath);
-        } else {
-            LibraryFile libraryFile = LibraryFile.builder()
-                    .libraryEntity(libraryEntity)
-                    .libraryPathEntity(libraryPathEntity)
-                    .fileSubPath(fileSubPath)
-                    .fileName(fileName)
-                    .bookFileType(BookFileExtension.fromFileName(fileName)
-                            .map(BookFileExtension::getType)
-                            .orElseThrow(() -> new IllegalArgumentException("Unsupported book file type: " + fileName)))
-                    .build();
-
             libraryProcessingService.processLibraryFiles(List.of(libraryFile), libraryEntity);
             log.info("[CREATE] Completed processing for file '{}'", filePath);
         }
@@ -198,22 +176,18 @@ public class BookFileTransactionalHandler {
             return;
         }
 
-        BookEntity matchingBook = findMatchingBookForFolderAudiobook(libraryPathEntity.getId(), fileSubPath, folderName);
+        LibraryFile libraryFile = LibraryFile.builder()
+                .libraryEntity(libraryEntity)
+                .libraryPathEntity(libraryPathEntity)
+                .fileSubPath(fileSubPath)
+                .fileName(folderName)
+                .bookFileType(BookFileType.AUDIOBOOK)
+                .folderBased(true)
+                .build();
 
-        if (matchingBook != null) {
-            autoAttachFolderAudiobook(matchingBook, folderName, fileSubPath, folderPath);
-            String primaryFileName = matchingBook.hasFiles() ? matchingBook.getPrimaryBookFile().getFileName() : "book#" + matchingBook.getId();
-            log.info("[CREATE] Auto-attached folder audiobook '{}' to existing book '{}'", folderName, primaryFileName);
+        if (attachToExistingBook(libraryEntity, libraryFile)) {
+            log.info("[CREATE] Attached folder audiobook '{}' to an existing book", folderName);
         } else {
-            LibraryFile libraryFile = LibraryFile.builder()
-                    .libraryEntity(libraryEntity)
-                    .libraryPathEntity(libraryPathEntity)
-                    .fileSubPath(fileSubPath)
-                    .fileName(folderName)
-                    .bookFileType(BookFileType.AUDIOBOOK)
-                    .folderBased(true)
-                    .build();
-
             libraryProcessingService.processLibraryFiles(List.of(libraryFile), libraryEntity);
             log.info("[CREATE] Completed processing folder audiobook '{}'", folderPath);
         }
@@ -222,224 +196,132 @@ public class BookFileTransactionalHandler {
                 LogNotification.info("Finished processing folder audiobook: " + folderPath), Set.of(ADMIN, MANAGE_LIBRARY));
     }
 
-    private static final double FUZZY_MATCH_THRESHOLD = 0.85;
+    /**
+     * Attaches a new file to a book the library already has, decided as a rescan decides
+     * ({@link ExistingBookMatcher}): a book with files in the file's folder first, then a fileless book. The watcher
+     * handles one file at a time, so where a rescan leaves a fileless book claimed from two folders alone, here the
+     * first folder to claim it wins; the book then has a file and is no fileless book for the next one.
+     *
+     * @return false when the file belongs to no existing book, or its book changed since it was read
+     */
+    private boolean attachToExistingBook(LibraryEntity library, LibraryFile file) {
+        LibraryOrganizationMode mode = library.getOrganizationMode() != null
+                ? library.getOrganizationMode() : LibraryOrganizationMode.AUTO_DETECT;
+        Long libraryPathId = file.getLibraryPathEntity().getId();
+        String subPath = file.getFileSubPath();
+        FileEvidence evidence = FileEvidence.of(libraryPathId, subPath, file.getFileName(),
+                file.getBookFileType() == BookFileType.AUDIOBOOK);
 
-    private BookEntity findMatchingFilelessBook(LibraryEntity library, String fileName, LibraryPathEntity fileLibraryPath) {
-        List<BookEntity> filelessBooks = bookRepository.findFilelessBooksByLibraryId(library.getId());
-        String fileBaseName = BookFileGroupingUtils.extractGroupingKey(fileName);
-
-        for (BookEntity book : filelessBooks) {
-            if (book.getLibraryPath() != null && !book.getLibraryPath().getId().equals(fileLibraryPath.getId())) {
-                continue;
-            }
-
-            if (book.getMetadata() != null && book.getMetadata().getTitle() != null) {
-                String bookTitle = BookFileGroupingUtils.extractGroupingKey(book.getMetadata().getTitle());
-                double similarity = BookFileGroupingUtils.calculateSimilarity(fileBaseName, bookTitle);
-                if (similarity >= FILELESS_MATCH_THRESHOLD) {
-                    return book;
-                }
-            }
+        Decision inFolder = switch (mode) {
+            case AUTO_DETECT -> ExistingBookMatcher.matchInFolder(evidence, booksInFolder(libraryPathId, subPath));
+            case BOOK_PER_FOLDER -> bookOfFolder(libraryPathId, file);
+            case BOOK_PER_FILE -> null;
+        };
+        if (inFolder instanceof Match match) {
+            return attach(match, file);
         }
-        return null;
+        if (inFolder instanceof Ambiguous ambiguous) {
+            log.info("[CREATE] '{}' is left for a new book: {} (books {})", file.getFileName(), ambiguous.reason(), ambiguous.bookIds());
+            return false;
+        }
+        Decision fileless = ExistingBookMatcher.matchShell(evidence, filelessShells.forWatcher(library.getId()));
+        if (fileless instanceof Match match) {
+            return attach(match, file);
+        }
+        if (fileless instanceof Ambiguous ambiguous) {
+            log.info("[CREATE] '{}' is left for a new book: {}", file.getFileName(), ambiguous.reason());
+        } else {
+            log.debug("[CREATE] '{}' matches no fileless book: {}", file.getFileName(), fileless.reason());
+        }
+        return false;
     }
 
-    private BookEntity findExactFilelessBook(LibraryEntity library, String fileName, LibraryPathEntity fileLibraryPath) {
-        List<BookEntity> filelessBooks = bookRepository.findFilelessBooksByLibraryId(library.getId());
-        String fileBaseName = BookFileGroupingUtils.extractGroupingKey(fileName);
-
-        for (BookEntity book : filelessBooks) {
-            if (book.getLibraryPath() != null && !book.getLibraryPath().getId().equals(fileLibraryPath.getId())) {
-                continue;
-            }
-
-            if (book.getMetadata() != null && book.getMetadata().getTitle() != null) {
-                String bookTitle = BookFileGroupingUtils.extractGroupingKey(book.getMetadata().getTitle());
-                if (fileBaseName.equals(bookTitle)) {
-                    return book;
-                }
-            }
-        }
-        return null;
+    private boolean attach(Match match, LibraryFile file) {
+        return !existingBookAttacher.attach(match.bookId(), match.kind(), List.of(file)).isEmpty();
     }
 
-    private BookEntity findBookInSameFolder(Long libraryPathId, String fileSubPath) {
-        if (fileSubPath == null) {
+    /**
+     * The books with book files in the folder, with those files and their authors: two queries whatever the number of
+     * books there. The database finds the folder through its collation, which ignores case and possibly accents; a
+     * book with files only in a folder that compares equal is in another folder.
+     */
+    private BooksInFolder booksInFolder(Long libraryPathId, String subPath) {
+        if (subPath == null) {
+            return BooksInFolder.EMPTY;
+        }
+        Map<Long, List<FolderFile>> filesByBook = new LinkedHashMap<>();
+        for (BookFileScanRow row : bookRepository.findBookFormatRowsInFolder(libraryPathId, subPath)) {
+            if (!row.isBookDeleted() && subPath.equals(row.fileSubPath())) {
+                filesByBook.computeIfAbsent(row.bookId(), id -> new ArrayList<>())
+                        .add(new FolderFile(row.fileName(), row.bookType() == BookFileType.AUDIOBOOK));
+            }
+        }
+        if (filesByBook.isEmpty()) {
+            return BooksInFolder.EMPTY;
+        }
+        Map<Long, List<String>> authorsByBook = new HashMap<>();
+        for (BookAuthorRow row : bookRepository.findAuthorNamesByBookIds(filesByBook.keySet())) {
+            authorsByBook.computeIfAbsent(row.bookId(), id -> new ArrayList<>()).add(row.authorName());
+        }
+        List<FolderBook> books = new ArrayList<>(filesByBook.size());
+        filesByBook.forEach((bookId, files) -> books.add(new FolderBook(bookId, files, authorsByBook.getOrDefault(bookId, List.of()))));
+        return BooksInFolder.of(subPath, books);
+    }
+
+    /**
+     * BOOK_PER_FOLDER, as the rescan decides it: the one book with files in the file's own folder (a folder
+     * audiobook's own folder is itself), none when there are several, and for an audiobook in a folder without books
+     * the one book with an ebook in the nearest folder above. Files at the library's root are books of their own.
+     */
+    private Decision bookOfFolder(Long libraryPathId, LibraryFile file) {
+        if (file.getFileSubPath() == null || file.getFileSubPath().isEmpty()) {
             return null;
         }
-
-        List<BookEntity> booksInDirectory = bookRepository.findAllByLibraryPathIdAndFileSubPath(libraryPathId, fileSubPath);
-        List<BookEntity> activeBooks = booksInDirectory.stream()
-                .filter(book -> book.getDeleted() == null || !book.getDeleted())
-                .filter(BookEntity::hasFiles)
-                .toList();
-
-        if (activeBooks.isEmpty()) {
+        String folder = BookFileScanRow.ownFolder(file.getFileSubPath(), file.getFileName(), file.isFolderBased());
+        List<Long> inFolder = activeBookIds(libraryPathId, folder, false);
+        if (inFolder.size() == 1) {
+            return new Match(inFolder.getFirst(), Kind.SAME_FOLDER, "the book of its folder");
+        }
+        if (inFolder.size() > 1) {
+            return new Ambiguous(inFolder, inFolder.size() + " books have files in its folder");
+        }
+        if (file.getBookFileType() != BookFileType.AUDIOBOOK) {
             return null;
         }
-
-        if (activeBooks.size() == 1) {
-            return activeBooks.getFirst();
-        }
-
-        return activeBooks.stream()
-                .max(Comparator.comparingLong(book -> book.getBookFiles() != null ? book.getBookFiles().size() : 0))
-                .orElse(null);
-    }
-
-    private BookEntity findNearestAncestorBookWithEbook(Long libraryPathId, String subPath) {
-        String current = subPath;
+        String current = folder;
         while (true) {
-            int lastSep = current.lastIndexOf('/');
-            if (lastSep == -1) {
-                lastSep = current.lastIndexOf('\\');
-            }
+            int lastSep = Math.max(current.lastIndexOf('/'), current.lastIndexOf('\\'));
             if (lastSep <= 0) {
-                break;
+                return null;
             }
             current = current.substring(0, lastSep);
-
-            List<BookEntity> booksAtLevel = bookRepository.findAllByLibraryPathIdAndFileSubPath(libraryPathId, current);
-            for (BookEntity book : booksAtLevel) {
-                if (book.getDeleted() != null && book.getDeleted()) {
-                    continue;
-                }
-                if (book.getBookFiles() != null && book.getBookFiles().stream()
-                        .anyMatch(bf -> bf.getBookType() != BookFileType.AUDIOBOOK)) {
-                    log.debug("BOOK_PER_FOLDER: Audio absorption matched to ancestor book id={} at '{}'",
-                            book.getId(), current);
-                    return book;
-                }
+            List<Long> withEbook = activeBookIds(libraryPathId, current, true);
+            if (withEbook.size() == 1) {
+                log.debug("BOOK_PER_FOLDER: audiobook absorbed by book id={} at '{}'", withEbook.getFirst(), current);
+                return new Match(withEbook.getFirst(), Kind.SAME_FOLDER, "the book with an ebook in '" + current + "'");
+            }
+            if (withEbook.size() > 1) {
+                return new Ambiguous(withEbook, withEbook.size() + " books have ebooks in '" + current + "'");
             }
         }
-        return null;
     }
 
-    private BookEntity findMatchingBook(Long libraryPathId, String fileSubPath, String fileName) {
-        if (fileSubPath == null) {
-            return null;
-        }
-
-        String fileGroupingKey = BookFileGroupingUtils.extractGroupingKey(fileName);
-
-        List<BookEntity> booksInDirectory = bookRepository.findAllByLibraryPathIdAndFileSubPath(libraryPathId, fileSubPath);
-
-        BookEntity fuzzyMatch = null;
-        double bestSimilarity = 0;
-
-        for (BookEntity book : booksInDirectory) {
-            if (book.getDeleted() != null && book.getDeleted()) {
-                continue;
-            }
-            BookFileEntity primaryFile = book.getPrimaryBookFile();
-            if (primaryFile == null) {
-                continue;
-            }
-            String existingGroupingKey = BookFileGroupingUtils.extractGroupingKey(primaryFile.getFileName());
-
-            if (fileGroupingKey.equals(existingGroupingKey)) {
-                return book;
-            }
-
-            double similarity = BookFileGroupingUtils.calculateSimilarity(fileGroupingKey, existingGroupingKey);
-            if (similarity >= FUZZY_MATCH_THRESHOLD && similarity > bestSimilarity) {
-                bestSimilarity = similarity;
-                fuzzyMatch = book;
+    /**
+     * The books, not deleted, with a book format whose own folder is exactly this one (a file stored in it, or a
+     * folder audiobook that is it), and with an ebook there if asked. The folder lookup compares through the
+     * database's collation, so it can also return files of a folder that only compares equal.
+     */
+    private List<Long> activeBookIds(Long libraryPathId, String folder, boolean withAnEbook) {
+        int lastSep = Math.max(folder.lastIndexOf('/'), folder.lastIndexOf('\\'));
+        String parent = lastSep < 0 ? "" : folder.substring(0, lastSep);
+        String leaf = folder.substring(lastSep + 1);
+        Set<Long> ids = new LinkedHashSet<>();
+        for (BookFileScanRow row : bookRepository.findBookFormatRowsOwnedByFolder(libraryPathId, folder, parent, leaf)) {
+            if (!row.isBookDeleted() && folder.equals(row.ownFolder())
+                    && (!withAnEbook || row.bookType() != BookFileType.AUDIOBOOK)) {
+                ids.add(row.bookId());
             }
         }
-
-        if (fuzzyMatch != null) {
-            String primaryFileName = fuzzyMatch.hasFiles() ? fuzzyMatch.getPrimaryBookFile().getFileName() : "book#" + fuzzyMatch.getId();
-            log.debug("Fuzzy matched '{}' to '{}' with similarity {}", fileName, primaryFileName, bestSimilarity);
-        }
-        return fuzzyMatch;
-    }
-
-    private BookEntity findMatchingBookForFolderAudiobook(Long libraryPathId, String fileSubPath, String folderName) {
-        String parentPath = Optional.ofNullable(fileSubPath)
-                .filter(p -> !p.isEmpty())
-                .map(p -> {
-                    int lastSep = p.lastIndexOf('/');
-                    if (lastSep == -1) {
-                        lastSep = p.lastIndexOf('\\');
-                    }
-                    return lastSep > 0 ? p.substring(0, lastSep) : "";
-                })
-                .orElse("");
-
-        String folderGroupingKey = BookFileGroupingUtils.extractGroupingKey(folderName);
-
-        List<BookEntity> booksInParent = bookRepository.findAllByLibraryPathIdAndFileSubPath(libraryPathId, parentPath);
-
-        BookEntity fuzzyMatch = null;
-        double bestSimilarity = 0;
-
-        for (BookEntity book : booksInParent) {
-            if (book.getDeleted() != null && book.getDeleted()) {
-                continue;
-            }
-            BookFileEntity primaryFile = book.getPrimaryBookFile();
-            if (primaryFile == null) {
-                continue;
-            }
-            String existingGroupingKey = BookFileGroupingUtils.extractGroupingKey(primaryFile.getFileName());
-
-            if (folderGroupingKey.equals(existingGroupingKey)) {
-                return book;
-            }
-
-            double similarity = BookFileGroupingUtils.calculateSimilarity(folderGroupingKey, existingGroupingKey);
-            if (similarity >= FUZZY_MATCH_THRESHOLD && similarity > bestSimilarity) {
-                bestSimilarity = similarity;
-                fuzzyMatch = book;
-            }
-        }
-
-        if (fuzzyMatch != null) {
-            String primaryFileName = fuzzyMatch.hasFiles() ? fuzzyMatch.getPrimaryBookFile().getFileName() : "book#" + fuzzyMatch.getId();
-            log.debug("Fuzzy matched folder '{}' to '{}' with similarity {}", folderName, primaryFileName, bestSimilarity);
-        }
-        return fuzzyMatch;
-    }
-
-    private void autoAttachFolderAudiobook(BookEntity book, String folderName, String fileSubPath, Path folderPath) {
-        String hash = FileFingerprint.generateFolderHash(folderPath);
-        BookFileEntity additionalFile = BookFileEntity.builder()
-                .book(book)
-                .fileName(folderName)
-                .fileSubPath(fileSubPath)
-                .isBookFormat(true)
-                .folderBased(true)
-                .bookType(BookFileType.AUDIOBOOK)
-                .fileSizeKb(FileUtils.getFolderSizeInKb(folderPath))
-                .initialHash(hash)
-                .currentHash(hash)
-                .addedOn(Instant.now())
-                .build();
-
-        bookAdditionalFileRepository.save(additionalFile);
-        String primaryFileName = book.hasFiles() ? book.getPrimaryBookFile().getFileName() : "book#" + book.getId();
-        log.info("Auto-attached folder audiobook {} to existing book: {}", folderName, primaryFileName);
-    }
-
-    private void autoAttachFile(BookEntity book, String fileName, String fileSubPath, Path fullPath) {
-        String hash = FileFingerprint.generateHash(fullPath);
-        BookFileEntity additionalFile = BookFileEntity.builder()
-                .book(book)
-                .fileName(fileName)
-                .fileSubPath(fileSubPath)
-                .isBookFormat(true)
-                .bookType(BookFileExtension.fromFileName(fileName)
-                        .map(BookFileExtension::getType)
-                        .orElse(null))
-                .fileSizeKb(FileUtils.getFileSizeInKb(fullPath))
-                .initialHash(hash)
-                .currentHash(hash)
-                .addedOn(Instant.now())
-                .build();
-
-        bookAdditionalFileRepository.save(additionalFile);
-        String primaryFileName = book.hasFiles() ? book.getPrimaryBookFile().getFileName() : "book#" + book.getId();
-        log.info("Auto-attached new format {} to existing book: {}", fileName, primaryFileName);
+        return List.copyOf(ids);
     }
 }
