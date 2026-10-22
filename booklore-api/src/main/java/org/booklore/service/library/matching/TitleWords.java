@@ -56,11 +56,15 @@ final class TitleWords {
     private static final Set<String> LEADING_ANCHORS = new HashSet<>(Set.of(
             "unabridged", "abridged", "ebook", "audiobook", "dramatized", "dramatised"));
 
+    /** Format words that are also English words: a descriptor only in brackets or next to another one ("Kindle Edition"). */
+    private static final Set<String> WORDLIKE_FORMATS = Set.of("kindle", "opus");
+
     static {
         DESCRIPTORS.addAll(FORMATS);
         ANCHORS.addAll(FORMATS);
-        STANDALONE_ANCHORS.addAll(FORMATS);
-        LEADING_ANCHORS.addAll(FORMATS);
+        // "Kindle the Flame" and "Magnum Opus" are titles
+        FORMATS.stream().filter(format -> !WORDLIKE_FORMATS.contains(format)).forEach(STANDALONE_ANCHORS::add);
+        FORMATS.stream().filter(format -> !WORDLIKE_FORMATS.contains(format)).forEach(LEADING_ANCHORS::add);
     }
 
     /** Words a volume or series number follows: "Book 2", "Vol. 3", "Part II", "#4", "No. 5", "Season One". */

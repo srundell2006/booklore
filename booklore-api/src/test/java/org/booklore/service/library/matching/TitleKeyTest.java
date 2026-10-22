@@ -62,6 +62,10 @@ class TitleKeyTest {
                 The Hobbit (m4b).m4b                         | hobbit
                 The Hobbit [audiobook].m4b                   | hobbit
                 The Hobbit (audio).m4b                       | hobbit
+                The Hobbit (Kindle Edition).epub             | hobbit
+                The Hobbit [Kindle].azw3                     | hobbit
+                The Hobbit Kindle Edition.azw3               | hobbit
+                The Hobbit (opus).opus                       | hobbit
                 """)
         void dropsOnlyWhatAClosedVocabularyNames(String name, String identity) {
             assertThat(key("", name).identity()).isEqualTo(identity);
@@ -102,6 +106,9 @@ class TitleKeyTest {
                 The Best Part.epub                       | best part
                 Dr. Seuss Collection.epub                | dr seuss collection
                 U.S.A. History.epub                      | u s a history
+                Kindle the Flame.epub                    | kindle the flame
+                Magnum Opus.epub                         | magnum opus
+                Opus Dei.epub                            | opus dei
                 """)
         void keepsEveryWordOutsideThoseVocabularies(String name, String identity) {
             assertThat(key("", name).identity()).isEqualTo(identity);
