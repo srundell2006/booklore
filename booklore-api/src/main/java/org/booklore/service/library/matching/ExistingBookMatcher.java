@@ -78,7 +78,8 @@ public final class ExistingBookMatcher {
         for (int i = 0; i < readings.size(); i++) {
             TitleKey reading = readings.get(i);
             Evidence evidence = Evidence.of(file, reading, i == 0);
-            if (evidence == null) {
+            if (evidence == null || reading.identity().isEmpty()) {
+                // A name with no word or number left ("(Digital).cbz") is only the book of its own base name
                 continue;
             }
             for (Entry entry : candidates(reading, books)) {
@@ -87,8 +88,10 @@ public final class ExistingBookMatcher {
                 }
                 List<PersonName> authors = books.authorsOf(entry.bookId());
                 if (evidence.confirmed()) {
-                    // The folders vouch for an author part that is none of this book's authors
-                    if (!evidence.claim().isEmpty() && !authors.isEmpty() && PersonName.bestStrength(evidence.claim(), authors) == 0) {
+                    // The folders vouch for an author part that is none of this book's authors, or, for a book
+                    // without authors, not the one its own file names ("Dune - B. Herbert" and "Dune - F. Herbert")
+                    List<PersonName> known = authors.isEmpty() ? entry.key().namedAuthors(file.context()) : authors;
+                    if (!evidence.claim().isEmpty() && !known.isEmpty() && PersonName.bestStrength(evidence.claim(), known) == 0) {
                         continue;
                     }
                 } else if (!agreesWithGivenName(evidence.claim(), authors)) {
@@ -112,7 +115,7 @@ public final class ExistingBookMatcher {
      */
     private static List<Entry> candidates(TitleKey reading, BooksInFolder books) {
         List<Entry> entries = new ArrayList<>(books.withIdentity(reading.identity()));
-        if (reading.copy() != null) {
+        if (reading.copy() != null && !reading.identityWithoutCopy().isEmpty()) {
             books.withIdentity(reading.identityWithoutCopy()).stream()
                     .filter(entry -> entry.key().copy() == null)
                     .forEach(entries::add);

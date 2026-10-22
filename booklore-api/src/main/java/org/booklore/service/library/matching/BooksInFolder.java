@@ -60,8 +60,11 @@ public final class BooksInFolder {
             for (FolderFile file : book.files()) {
                 TitleKey key = TitleKey.ofFileName(file.fileName(), file.audio(), context);
                 Entry entry = new Entry(book.bookId(), key);
-                index.byIdentity.computeIfAbsent(key.identity(), k -> new ArrayList<>(1)).add(entry);
-                if (key.copy() != null) {
+                // A name with no word or number left ("(Digital).cbz") is found only by its base name
+                if (!key.identity().isEmpty()) {
+                    index.byIdentity.computeIfAbsent(key.identity(), k -> new ArrayList<>(1)).add(entry);
+                }
+                if (key.copy() != null && !key.identityWithoutCopy().isEmpty()) {
                     index.copiesByBaseIdentity.computeIfAbsent(key.identityWithoutCopy(), k -> new ArrayList<>(1)).add(entry);
                 }
                 index.byBaseName.computeIfAbsent(FileEvidence.baseNameKey(file.fileName()), k -> new LinkedHashSet<>())

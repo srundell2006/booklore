@@ -388,6 +388,29 @@ class ExistingBookMatcherTest {
         }
 
         @Test
+        void aFileNamingAnotherPersonIsNotTheBookOfAFileNamingSomeoneElse() {
+            // The book has no authors; its own file names one with initials, and the new file another
+            assertThat(folderMatch(file("Poetry", "Collected Poems - W. B. Yeats.epub"), book(1, "Collected Poems - T. S. Eliot.pdf")))
+                    .isInstanceOf(NoMatch.class);
+            assertThat(folderMatch(file("", "Dune - B. Herbert.epub"), book(300, "Dune - F. Herbert.epub")))
+                    .isInstanceOf(NoMatch.class);
+            assertThat(matchedId(folderMatch(file("", "Dune - Frank P. Herbert.pdf"), book(301, "Dune - F. Herbert.epub"))))
+                    .isEqualTo(301);
+            assertThat(matchedId(folderMatch(file("Poetry", "Collected Poems.pdf"), book(2, "Collected Poems - T. S. Eliot.epub"))))
+                    .isEqualTo(2);
+        }
+
+        @Test
+        void twoNamesThatReadAsNothingAreNotTheSameBook() {
+            // The grouping keeps them apart too; only a shared base name makes them one book
+            assertThat(folderMatch(file("Author/Title", "(2019) [Retail].epub"), book(600, "(Unabridged).m4b")))
+                    .isInstanceOf(NoMatch.class);
+            assertThat(folderMatch(file("Comics/Saga", "(Digital).epub"), book(601, "(Digital) (1).cbz")))
+                    .isInstanceOf(NoMatch.class);
+            assertThat(matchedId(folderMatch(file("Comics/Saga", "(Digital).cbr"), book(602, "(Digital).cbz")))).isEqualTo(602);
+        }
+
+        @Test
         void differentYears() {
             assertThat(folderMatch(file("H/Herbert, Frank", "Dune (2021).epub"), book(11, "Dune (1965).pdf")))
                     .isInstanceOf(NoMatch.class);

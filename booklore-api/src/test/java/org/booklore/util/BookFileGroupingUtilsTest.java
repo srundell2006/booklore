@@ -1215,6 +1215,7 @@ class BookFileGroupingUtilsTest {
                 Ray Bradbury                  | Fahrenheit 451.epub + Fahrenheit 451.mobi ; The Martian Chronicles.epub
                 George Orwell                 | 1984.epub + 1984 - George Orwell.pdf ; Animal Farm.epub
                 Arthur C. Clarke              | 2001 A Space Odyssey.epub ; 2010 Odyssey Two.epub
+                Poetry                        | Collected Poems.epub ; Collected Poems - W. B. Yeats.epub + Collected Poems - W. B. Yeats.pdf ; Collected Poems - T. S. Eliot.epub
                 """)
         void groupsAFoldersFilesOnlyByEqualKeys(String folder, String expected) {
             List<List<String>> want = Arrays.stream(expected.split(";"))
@@ -1262,6 +1263,15 @@ class BookFileGroupingUtilsTest {
                 Tolkien                       | The Lord of the Rings - The Fellowship of the Ring.epub | The Lord of the Rings - The Two Towers.epub  | DIFF
                 Ann Leckie                    | Ancillary Justice.epub                            | Ancillary Sword.epub                               | DIFF
                 Misc                          | The Hobbit - J.R.R. Tolkien.epub                  | The Hobbit.azw3                                    | SAME
+                Poetry                        | Collected Poems - W. B. Yeats.epub                | Collected Poems - T. S. Eliot.epub                 | DIFF
+                ""                            | Collected Poems - W. B. Yeats.epub                | Collected Poems - T. S. Eliot.epub                 | DIFF
+                ""                            | Collected Poems by W.B. Yeats.epub                | Collected Poems by T.S. Eliot.epub                 | DIFF
+                ""                            | Dune - F. Herbert.epub                            | Dune - B. Herbert.epub                             | DIFF
+                Anthologies                   | Short Stories - Philip K. Dick.epub               | Short Stories - Robert E. Howard.epub              | DIFF
+                Manuals                       | Field Manual - U.S. Army.pdf                      | Field Manual - U.S. Navy.pdf                       | DIFF
+                Poetry                        | Collected Poems - T. S. Eliot.epub                | Collected Poems - T.S. Eliot.pdf                   | SAME
+                Poetry                        | Collected Poems - T. S. Eliot.epub                | Collected Poems.pdf                                | SAME
+                ""                            | Dune - F. Herbert.epub                            | Dune - Frank P. Herbert.pdf                        | SAME
                 Neil Gaiman/American Gods     | American Gods - Neil Gaiman.mobi                  | American Gods.epub                                 | SAME
                 American Gods                 | American Gods - Neil Gaiman.mobi                  | American Gods.epub                                 | DIFF
                 Star Trek                     | Star Trek - Prime Directive.epub                  | Star Trek - The Final Reflection.epub              | DIFF

@@ -220,6 +220,18 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
         return identity(title, numbers);
     }
 
+    /**
+     * The people the part dropped as an author names, each with a given name or an initial: empty when no part was
+     * dropped, or when the part dropped names the file's own folder (a series: "KING - Las Vegas Bad Boys" in "Las
+     * Vegas Bad Boys").
+     */
+    public List<PersonName> namedAuthors(NameContext context) {
+        if (droppedName == null || (context != null && context.isOwnFolder(droppedName))) {
+            return List.of();
+        }
+        return PersonName.parseAll(droppedName).stream().filter(PersonName::hasGivenName).toList();
+    }
+
     private static String identity(String title, List<String> numbers) {
         // Numbers are taken out of the title, so "#" never appears in one: "henry #4/2" cannot be read two ways
         if (numbers.isEmpty()) {

@@ -1132,6 +1132,31 @@ class BookGroupingServiceTest {
     }
 
     @Test
+    void rescan_autoDetect_anAuthorlessBookInTheFolderDoesNotTakeAFileNamingAnotherAuthor() {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        bookIn(300, path, "", "Dune - F. Herbert.epub");
+        LibraryFile brian = newFile(lib, path, "", "Dune - B. Herbert.epub");
+
+        var result = rescan(lib, brian);
+
+        assertThat(result.filesToAttach()).isEmpty();
+        assertThat(newBooks(result)).containsExactly(List.of("Dune - B. Herbert.epub"));
+    }
+
+    @Test
+    void initialScan_theSameTitleByTwoAuthorsWrittenWithInitialsIsTwoBooks() {
+        var path = pathEntity(1L, "/books");
+        var lib = library(LibraryOrganizationMode.AUTO_DETECT, path);
+
+        var groups = bookGroupingService.groupForInitialScan(List.of(
+                ebook(path, "Poetry", "Collected Poems - W. B. Yeats.epub"),
+                ebook(path, "Poetry", "Collected Poems - T. S. Eliot.epub")), lib);
+
+        assertThat(groups).hasSize(2);
+    }
+
+    @Test
     void rescan_lookupsAreScopedToOneCall() {
         var path = pathEntity(1L, "/books");
         var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);

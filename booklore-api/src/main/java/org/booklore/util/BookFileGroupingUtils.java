@@ -5,6 +5,7 @@ import lombok.extern.slf4j.Slf4j;
 import org.booklore.model.dto.settings.LibraryFile;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.service.library.matching.NameContext;
+import org.booklore.service.library.matching.PersonName;
 import org.booklore.service.library.matching.TitleKey;
 
 import java.util.ArrayList;
@@ -37,8 +38,10 @@ public class BookFileGroupingUtils {
      *       otherwise " (2)" reads as a number, so "Saga (1)" and "Saga (2)" stay two books.</li>
      *   <li>Files naming different publication years ("Dune (1965)", "Dune (2021)") are different books; a file
      *       naming none then stays apart from both rather than guessing which it belongs to.</li>
+     *   <li>Files whose dropped author parts name different people ("Collected Poems - W. B. Yeats", "Collected Poems
+     *       - T. S. Eliot") are different books; a file naming no one then stays apart from both.</li>
      * </ul>
-     * Group keys are {@code <libraryPathId>:<subPath>:<identity>}.
+     * Group keys are {@code <libraryPathId>:<subPath>:<identity>}, with the year or the author that split a title.
      */
     public Map<String, List<LibraryFile>> groupByBaseName(List<LibraryFile> libraryFiles) {
         Map<String, List<LibraryFile>> byFolder = new LinkedHashMap<>();
@@ -98,6 +101,7 @@ public class BookFileGroupingUtils {
             boolean split = yearsByIdentity.getOrDefault(identity, Set.of()).size() > 1;
             labels.add(split ? identity + " (" + yearLabel(keys.get(i)) + ")" : identity);
         }
+        splitByAuthor(labels, keys.stream().map(key -> key.namedAuthors(context)).toList());
 
         // Files sharing a base name are one book whatever their names read as ("Book (Part 1).epub" and
         // "Book (Part 1).m4b": only the audiobook's part is a split file)
@@ -119,6 +123,39 @@ public class BookFileGroupingUtils {
             groups.computeIfAbsent(folderKey + ":" + root(mergedInto, labels.get(i)), k -> new ArrayList<>()).add(files.get(i));
         }
         return groups;
+    }
+
+    /**
+     * Files of one label whose dropped author parts name different people are different books: "Collected Poems - W.
+     * B. Yeats" and "Collected Poems - T. S. Eliot", or "Dune - F. Herbert" and "Dune - B. Herbert", read as the same
+     * title once their initials are dropped. Files naming people who agree, by surname and compatible given names or
+     * initials, stay together; when they do not all agree, each file naming someone goes only with the files naming
+     * the same people written alike, and a file naming no one belongs to none of them.
+     */
+    private void splitByAuthor(List<String> labels, List<List<PersonName>> named) {
+        Map<String, List<Integer>> namedByLabel = new LinkedHashMap<>();
+        for (int i = 0; i < labels.size(); i++) {
+            if (!named.get(i).isEmpty()) {
+                namedByLabel.computeIfAbsent(labels.get(i), k -> new ArrayList<>()).add(i);
+            }
+        }
+        namedByLabel.forEach((label, indexes) -> {
+            boolean allAgree = true;
+            for (int a = 0; a < indexes.size() && allAgree; a++) {
+                for (int b = a + 1; b < indexes.size() && allAgree; b++) {
+                    allAgree = PersonName.bestStrength(named.get(indexes.get(a)), named.get(indexes.get(b))) == 2;
+                }
+            }
+            if (allAgree) {
+                return;
+            }
+            for (int i : indexes) {
+                labels.set(i, label + " by " + named.get(i).stream()
+                        .map(name -> name.surname() + " " + String.join(" ", name.givenNames()))
+                        .sorted()
+                        .collect(Collectors.joining(" & ")));
+            }
+        });
     }
 
     private String root(Map<String, String> mergedInto, String label) {
