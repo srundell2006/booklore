@@ -163,11 +163,14 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
 
         /** The reading the context supports: at most one part dropped, and only one it confirms as an author. */
         TitleKey read(NameContext ctx) {
-            String[] by = splitAtLastBy(text);
-            if (by != null && looksLikeName(by[1]) && (ctx.confirms(by[1]) || hasInitials(by[1])) && hasTitleWord(by[0])) {
-                return finish(segments(by[0]), by[1]);
-            }
             List<String> segments = segments(text);
+            List<String> beforeBy = beforeBy(segments);
+            if (beforeBy != null) {
+                String name = byName(segments);
+                if (ctx.confirms(name) || hasInitials(name)) {
+                    return finish(beforeBy, name);
+                }
+            }
             if (segments.size() > 1) {
                 int author = authorSegment(segments, ctx);
                 if (author >= 0) {
@@ -181,11 +184,11 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
         /** Each reading with one name-like part dropped, confirmed or not: the " by " side, the first or the last part. */
         List<TitleKey> nameReadings() {
             List<TitleKey> out = new ArrayList<>();
-            String[] by = splitAtLastBy(text);
-            if (by != null && looksLikeName(by[1]) && hasTitleWord(by[0])) {
-                out.add(finish(segments(by[0]), by[1]));
-            }
             List<String> segments = segments(text);
+            List<String> beforeBy = beforeBy(segments);
+            if (beforeBy != null) {
+                out.add(finish(beforeBy, byName(segments)));
+            }
             if (segments.size() > 1) {
                 for (int index : List.of(0, segments.size() - 1)) {
                     String candidate = segments.get(index);
@@ -282,7 +285,29 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
         return new Prepared(s, years, part, copy);
     }
 
-    /** The name split at its last " by ", or null when it has none: "Death by Chocolate by Sarah Graves". */
+    /**
+     * The parts with the last one cut at its last " by ", when what follows could be a person's name and what is left
+     * still has a title word: "Death by Chocolate by Sarah Graves", "Battle Born by Dale Brown - Unabridged". Null
+     * when there is no such " by ".
+     */
+    private static List<String> beforeBy(List<String> segments) {
+        if (segments.isEmpty()) {
+            return null;
+        }
+        String[] by = splitAtLastBy(segments.getLast());
+        if (by == null || !looksLikeName(by[1])) {
+            return null;
+        }
+        List<String> rest = new ArrayList<>(segments.subList(0, segments.size() - 1));
+        rest.add(by[0]);
+        return hasTitleWord(String.join(" ", rest)) ? rest : null;
+    }
+
+    /** The name after the last part's last " by ", for a name {@link #beforeBy} accepted. */
+    private static String byName(List<String> segments) {
+        return splitAtLastBy(segments.getLast())[1];
+    }
+
     private static String[] splitAtLastBy(String text) {
         Matcher by = BY.matcher(text);
         int start = -1;

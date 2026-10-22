@@ -1203,6 +1203,7 @@ class BookFileGroupingUtilsTest {
         @CsvSource(delimiter = '|', quoteCharacter = '"', textBlock = """
                 B/Dale Brown                  | Battle Born by Dale Brown.epub ; Shadow Command by Dale Brown.epub ; Warrior Class by Dale Brown.epub
                 B/Brown, Dale                 | Battle Born by Dale Brown.epub + Battle Born.mobi ; Shadow Command by Dale Brown.epub
+                B/Dale Brown                  | Battle Born by Dale Brown.epub + Battle Born by Dale Brown - Unabridged.m4b ; Shadow Command by Dale Brown.epub
                 ""                            | Dale Brown - Battle Born.epub ; Dale Brown - Shadow Command.epub
                 Dale Brown                    | Dale Brown - Battle Born.epub ; Dale Brown - Shadow Command.epub
                 A/Aarons, Edward S            | Assignment - Karachi.epub ; Assignment - Stella Marni.epub ; Assignment - The Cairo Dancers.epub

@@ -203,6 +203,8 @@ class TitleKeyTest {
                 # folder                     | name                                          | identity                     | dropped
                 B/Dale Brown                 | Battle Born by Dale Brown.epub                | battle born                  | Dale Brown
                 B/Brown, Dale                | Battle Born by Dale Brown.epub                | battle born                  | Dale Brown
+                B/Dale Brown                 | Battle Born by Dale Brown - Unabridged.m4b    | battle born                  | Dale Brown
+                James S. A. Corey            | The Expanse - Leviathan Wakes by James S. A. Corey.epub | expanse leviathan wakes | James S. A. Corey
                 Sarah Graves                 | Death by Chocolate by Sarah Graves.epub       | death by chocolate           | Sarah Graves
                 Austen, Jane                 | Pride and Prejudice - Jane Austen.pdf         | pride and prejudice          | Jane Austen
                 George Orwell                | 1984 - George Orwell.pdf                      | #1984                        | George Orwell
