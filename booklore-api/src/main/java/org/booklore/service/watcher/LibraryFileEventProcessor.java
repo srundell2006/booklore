@@ -291,6 +291,8 @@ public class LibraryFileEventProcessor {
             long lastWrite = lastWriteSeen.getOrDefault(pending.libraryId(), 0L);
             if (now - lastWrite < copySourceWaitMs && now - pending.since() < copySourceMaxWaitMs) {
                 long delay = lastWrite + copySourceWaitMs - now;
+                // This timer's own, unless it fired as it was replaced: one timer per waiting copy
+                pending.recheck().cancel(false);
                 pendingCopies.put(path, new PendingCopy(pending.libraryId(), pending.hashes(), pending.folder(),
                         pending.since(), scheduler.schedule(() -> copyWaitEnds(path), delay, TimeUnit.MILLISECONDS)));
                 log.debug("[FILE_CREATE] '{}' waits on as a copy: files are still arriving in its library", path);
