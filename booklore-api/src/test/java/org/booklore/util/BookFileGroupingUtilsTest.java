@@ -1286,6 +1286,17 @@ class BookFileGroupingUtilsTest {
                 Stephen King                  | The Stand (Part 1).m4b                            | The Stand (Part 2).m4b                             | SAME
                 Stephen King                  | The Stand - Part 1 of 3.m4b                       | The Stand - Part 2 of 3.m4b                        | SAME
                 Stephen King                  | The Stand Disc 1.mp3                              | The Stand.epub                                     | SAME
+                Tolkien/The Hobbit            | CD1                                               | CD2                                                | SAME
+                Tolkien/The Hobbit            | Disc 1                                            | Disc 2                                             | SAME
+                Tolkien/The Hobbit            | Disk 01                                           | Disk 02                                            | SAME
+                Tolkien/The Hobbit            | CD 1                                              | CD 2                                               | SAME
+                Tolkien/The Hobbit            | The Hobbit.epub                                   | Disc 1                                             | SAME
+                ""                            | CD1                                               | CD2                                                | DIFF
+                Tolkien                       | The Hobbit - Part One.m4b                         | The Hobbit - Part Two.m4b                          | SAME
+                Tolkien                       | The Hobbit (Part I).m4b                           | The Hobbit (Part II).m4b                           | SAME
+                Tolkien                       | The Hobbit [1-2].m4b                              | The Hobbit [2-2].m4b                               | SAME
+                Tolkien                       | The Hobbit (1 of 2).mp3                           | The Hobbit (2 of 2).mp3                            | SAME
+                Tolkien                       | The Hobbit - Part One.epub                        | The Hobbit - Part Two.epub                         | DIFF
                 Misc                          | The Hobbit.epub                                   | The Hobit.epub                                     | DIFF
                 """)
         void decidesAPairTheSameWayInEitherOrder(String folder, String a, String b, String expected) {

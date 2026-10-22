@@ -66,14 +66,22 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
     private static final Pattern YEAR = Pattern.compile("(?:1[5-9]|20)\\d{2}");
     /** "(v5.0)", "[v2]": a release's revision, not a volume. */
     private static final Pattern RELEASE_TAG = Pattern.compile("v\\d+(?:\\.\\d+)*", Pattern.CASE_INSENSITIVE);
+    private static final String PART_WORD = "(?:part|pt|dis[ck]|cd)";
+    private static final String NUMBER_WORD = "(?:[ivx]{1,7}|zero|one|two|three|four|five|six|seven|eight|nine|ten|eleven"
+            + "|twelve|thirteen|fourteen|fifteen|sixteen|seventeen|eighteen|nineteen|twenty)";
     /**
-     * "Part 2", "disc 1 of 3". At most four digits: a longer number ("Part 9780261102217") is no part of a book split
-     * over files, and would not fit an int.
+     * The number of a part: digits, which may follow the keyword at once ("CD1"), or a Roman numeral or a number word
+     * after a space ("Part II", "Part One"). At most four digits: a longer number ("Part 9780261102217") is no part of
+     * a book split over files, and would not fit an int.
      */
-    private static final Pattern PART_CONTENT = Pattern.compile(
-            "(?:part|pt|dis[ck]|cd)\\s*\\.?\\s*(\\d{1,4})(?:\\s*of\\s*\\d+)?", Pattern.CASE_INSENSITIVE);
+    private static final String PART_NUMBER = "(?:\\s*\\.?\\s*(\\d{1,4})|\\.?\\s+(" + NUMBER_WORD + "))(?![\\p{L}\\p{N}])";
+    private static final String OF_TOTAL = "(?:\\s*of\\s*\\d{1,4}|\\s+of\\s+" + NUMBER_WORD + ")?";
+    /** "Part 2", "disc 1 of 3", "CD1", "Part Two": a whole bracket group, or a whole name. */
+    private static final Pattern PART_CONTENT = Pattern.compile(PART_WORD + PART_NUMBER + OF_TOTAL, Pattern.CASE_INSENSITIVE);
     private static final Pattern TRAILING_PART = Pattern.compile(
-            "\\s*(?:[-\u2013\u2014]\\s*|\\s)(?:part|pt|dis[ck]|cd)\\s*\\.?\\s*(\\d{1,4})(?:\\s*of\\s*\\d+)?$", Pattern.CASE_INSENSITIVE);
+            "\\s*(?:[-\u2013\u2014]\\s*|\\s)" + PART_WORD + PART_NUMBER + OF_TOTAL + "$", Pattern.CASE_INSENSITIVE);
+    /** "[1-2]", "(1 of 2)", "(2/3)": a part and the number of parts, in brackets. */
+    private static final Pattern PART_OF_PARTS = Pattern.compile("(\\d{1,2})\\s*(?:of|-|/)\\s*(\\d{1,2})", Pattern.CASE_INSENSITIVE);
 
     /** " - ", " – ", " — " and ": ". Spaced dashes only: "Spider-Man" and "Catch-22" are one word. */
     private static final Pattern SEGMENT_SEPARATOR = Pattern.compile("\\s+[-\u2013\u2014]\\s+|\\s*:\\s+");
@@ -148,7 +156,10 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
         return number.matches() ? number.group(1).trim() : s;
     }
 
-    /** An audiobook file's base name without the part or disc it holds: "Title (Part 2)" and "Title - Disc 1" are "Title". */
+    /**
+     * An audiobook file's base name without the part or disc it holds: "Title (Part 2)" and "Title - Disc 1" are
+     * "Title", and a name that is only a disc ("CD1") is "".
+     */
     public static String withoutAudioPart(String baseName) {
         String s = collapse(baseName == null ? "" : baseName);
         StringBuilder kept = new StringBuilder();
@@ -156,15 +167,42 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
         int last = 0;
         while (bracket.find()) {
             kept.append(s, last, bracket.start());
-            if (!PART_CONTENT.matcher(bracket.group(1).trim()).matches()) {
+            if (bracketPart(bracket.group(1).trim()) == null) {
                 kept.append(bracket.group());
             }
             last = bracket.end();
         }
         kept.append(s.substring(last));
         s = collapse(kept.toString());
+        Matcher whole = PART_CONTENT.matcher(s);
+        if (whole.matches() && partNumber(whole) != null) {
+            return "";
+        }
         Matcher trailingPart = TRAILING_PART.matcher(s);
-        return trailingPart.find() ? s.substring(0, trailingPart.start()).trim() : s;
+        return trailingPart.find() && partNumber(trailingPart) != null ? s.substring(0, trailingPart.start()).trim() : s;
+    }
+
+    /** The part a bracket group names ("Part 2", "disc One", "1 of 2", "1-2"), or null when it names none. */
+    private static Integer bracketPart(String inner) {
+        Matcher part = PART_CONTENT.matcher(inner);
+        if (part.matches()) {
+            return partNumber(part);
+        }
+        Matcher ofParts = PART_OF_PARTS.matcher(inner);
+        if (ofParts.matches()) {
+            int n = Integer.parseInt(ofParts.group(1));
+            return n >= 1 && n <= Integer.parseInt(ofParts.group(2)) ? n : null;
+        }
+        return null;
+    }
+
+    /** The number a {@link #PART_CONTENT} or {@link #TRAILING_PART} match names, or null for a word that is no numeral. */
+    private static Integer partNumber(Matcher part) {
+        if (part.group(1) != null) {
+            return Integer.parseInt(part.group(1));
+        }
+        String number = TitleWords.numberAfter("part", part.group(2).toLowerCase(Locale.ROOT));
+        return number == null ? null : Integer.parseInt(number);
     }
 
     /** The book this name reads as. A " (n)" copy number counts as one more number: "Saga (2)" is the second Saga. */
@@ -197,6 +235,13 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
 
         /** The reading the context supports: at most one part dropped, and only one it confirms as an author. */
         TitleKey read(NameContext ctx) {
+            if (text.isEmpty() && part != null && !ctx.leafName().isEmpty()) {
+                // A disc and nothing else ("CD1" in "Tolkien/The Hobbit"): the disc of the book its folder names
+                TitleKey folder = prepare(ctx.leafName(), false, false).read(ctx);
+                Set<Integer> allYears = new TreeSet<>(years);
+                allYears.addAll(folder.years());
+                return new TitleKey(folder.title(), folder.numbers(), allYears, part, copy, null);
+            }
             List<String> segments = segments(text);
             List<String> beforeBy = beforeBy(segments);
             if (beforeBy != null) {
@@ -296,11 +341,11 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
         while (bracket.find()) {
             kept.append(s, last, bracket.start()).append(' ');
             String inner = bracket.group(1).trim();
-            Matcher partMatcher = PART_CONTENT.matcher(inner);
+            Integer bracketPart = audio ? bracketPart(inner) : null;
             if (YEAR.matcher(inner).matches()) {
                 years.add(Integer.parseInt(inner));
-            } else if (audio && partMatcher.matches()) {
-                part = Integer.parseInt(partMatcher.group(1));
+            } else if (bracketPart != null) {
+                part = bracketPart;
             } else if (!inner.isEmpty() && !RELEASE_TAG.matcher(inner).matches() && !isDescriptorGroup(words(inner))) {
                 kept.append(inner).append(' ');
             }
@@ -310,9 +355,14 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
         s = collapse(kept.toString());
 
         if (audio) {
+            Matcher whole = PART_CONTENT.matcher(s);
             Matcher trailingPart = TRAILING_PART.matcher(s);
-            if (trailingPart.find()) {
-                part = Integer.parseInt(trailingPart.group(1));
+            if (whole.matches() && partNumber(whole) != null) {
+                // "CD1", "Disc 2": the folders of one audiobook's discs, named after the book's folder when read
+                part = partNumber(whole);
+                s = "";
+            } else if (trailingPart.find() && partNumber(trailingPart) != null) {
+                part = partNumber(trailingPart);
                 s = s.substring(0, trailingPart.start()).trim();
             }
         }

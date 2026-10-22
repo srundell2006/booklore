@@ -21,12 +21,14 @@ public final class NameContext {
 
     private final List<PersonName> folderNames;
     private final List<PersonName> authors;
+    private final String leafName;
     private final String leafKey;
 
-    private NameContext(List<PersonName> folderNames, List<PersonName> authors, String leafKey) {
+    private NameContext(List<PersonName> folderNames, List<PersonName> authors, String leafName) {
         this.folderNames = folderNames;
         this.authors = authors;
-        this.leafKey = leafKey;
+        this.leafName = leafName;
+        this.leafKey = TitleKey.normalize(leafName);
     }
 
     /**
@@ -51,7 +53,7 @@ public final class NameContext {
             }
             names.addAll(PersonName.parseAll(segment));
         }
-        return new NameContext(List.copyOf(names), List.of(), TitleKey.normalize(leaf));
+        return new NameContext(List.copyOf(names), List.of(), leaf);
     }
 
     /** This context plus the authors of the book a name is compared with (a fileless book's, say). */
@@ -66,7 +68,7 @@ public final class NameContext {
                 parsed.add(person);
             }
         }
-        return new NameContext(folderNames, List.copyOf(parsed), leafKey);
+        return new NameContext(folderNames, List.copyOf(parsed), leafName);
     }
 
     /** The names the file's folders could be, for a caller checking a book's authors against them. */
@@ -82,6 +84,11 @@ public final class NameContext {
     boolean confirms(String text) {
         List<PersonName> names = PersonName.parseAll(text).stream().filter(PersonName::hasGivenName).toList();
         return PersonName.bestStrength(names, folderNames) > 0 || PersonName.bestStrength(names, authors) > 0;
+    }
+
+    /** The file's own folder as it is named, without a Calibre id; "" at the library's root. */
+    String leafName() {
+        return leafName;
     }
 
     /** True when {@code text} names the file's own folder: then it is the book's title or series, not its author. */

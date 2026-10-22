@@ -314,6 +314,15 @@ class TitleKeyTest {
                 The Lost Hero pt 1.m4b           | 1
                 The Lost Hero (PART 1).m4b       | 1
                 The Lost Hero (mp3) (part 1).mp3 | 1
+                The Lost Hero - Part One.m4b     | 1
+                The Lost Hero Part Two.mp3       | 2
+                The Lost Hero (Part II).m4b      | 2
+                The Lost Hero - Part IV of VI.m4b | 4
+                The Lost Hero (disc one).m4b     | 1
+                The Lost Hero [1-2].m4b          | 1
+                The Lost Hero (2 of 3).m4b       | 2
+                The Lost Hero (2/3).mp3          | 2
+                The Lost Hero CD1.mp3            | 1
                 """)
         void readsAnAudiobooksPartAsOneBookSplitOverFiles(String name, int part) {
             TitleKey key = key("", name);
@@ -343,6 +352,48 @@ class TitleKeyTest {
             assertThat(key.part()).isNull();
             assertThat(key.identity()).isEqualTo(identity);
             assertThat(FileEvidence.of(1L, "", name, true).readings()).isNotEmpty();
+        }
+
+        @ParameterizedTest(name = "{0}")
+        @CsvSource(delimiter = '|', textBlock = """
+                CD1         | 1
+                CD 2        | 2
+                Disc 1      | 1
+                Disk 02     | 2
+                Part 3      | 3
+                Disc One    | 1
+                Disc 1 of 3 | 1
+                """)
+        void readsAFolderThatIsOnlyADiscAsADiscOfTheBookItsFolderNames(String name, int part) {
+            // "Tolkien/The Hobbit/CD1/*.mp3" is the folder audiobook "CD1" in "Tolkien/The Hobbit"
+            TitleKey key = TitleKey.ofFileName(name, true, NameContext.forFolder("Tolkien/The Hobbit"));
+
+            assertThat(key.identity()).isEqualTo("hobbit");
+            assertThat(key.part()).isEqualTo(part);
+            assertThat(TitleKey.ofFileName(name + ".mp3", true, NameContext.forFolder("Tolkien/The Hobbit (1937)")).identity())
+                    .isEqualTo("hobbit");
+            assertThat(FileEvidence.of(1L, "Tolkien/The Hobbit", name, true).fileNameKey()).isEmpty();
+        }
+
+        @Test
+        void readsADiscWithoutAFolderOrOfAnEbookAsItIs() {
+            assertThat(TitleKey.ofFileName("CD1", true, NameContext.NONE).identity()).isEmpty();
+            assertThat(TitleKey.ofFileName("Part 1.epub", false, NameContext.forFolder("Dune")).identity()).isEqualTo("#1");
+        }
+
+        @ParameterizedTest(name = "{0} -> {1}")
+        @CsvSource(delimiter = '|', textBlock = """
+                The Lost Hero Part Ivy.m4b               | lost hero part ivy
+                The Lost Hero Part IIII.m4b              | lost hero part iiii
+                Collected Lectures (1999-2003).m4b       | collected lectures #1999/2003
+                Collected Lectures (3-2).m4b             | collected lectures #3/2
+                The Lost Hero (part 1).epub              | lost hero #1
+                """)
+        void readsNoPartWhereNoNumeralFollowsOrTheFileIsAnEbook(String name, String identity) {
+            TitleKey key = key("", name);
+
+            assertThat(key.part()).isNull();
+            assertThat(key.identity()).isEqualTo(identity);
         }
 
         @Test

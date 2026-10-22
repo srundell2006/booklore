@@ -1115,6 +1115,23 @@ class BookGroupingServiceTest {
     }
 
     @Test
+    void rescan_autoDetect_aNewDiscFolderJoinsTheBookOfTheOtherDiscs() {
+        // "Tolkien/The Hobbit/Disc 3/*.mp3" is the folder audiobook "Disc 3" in "Tolkien/The Hobbit"
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        rows.add(new BookFileScanRow(4000L, 400L, 1L, "/books", "Tolkien/The Hobbit", "Disc 1", true, BookFileType.AUDIOBOOK, false));
+        rows.add(new BookFileScanRow(4001L, 400L, 1L, "/books", "Tolkien/The Hobbit", "Disc 2", true, BookFileType.AUDIOBOOK, false));
+        LibraryFile disc3 = folderAudiobook(path, "Tolkien/The Hobbit", "Disc 3");
+        LibraryFile cd1 = folderAudiobook(path, "Tolkien/The Silmarillion", "CD1");
+        LibraryFile cd2 = folderAudiobook(path, "Tolkien/The Silmarillion", "CD2");
+
+        var result = rescan(lib, disc3, cd1, cd2);
+
+        assertThat(attached(result)).containsExactly(Map.entry(400L, List.of(disc3)));
+        assertThat(newBooks(result)).containsExactly(List.of("CD1", "CD2"));
+    }
+
+    @Test
     void rescan_lookupsAreScopedToOneCall() {
         var path = pathEntity(1L, "/books");
         var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
