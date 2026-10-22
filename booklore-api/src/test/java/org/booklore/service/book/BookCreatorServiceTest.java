@@ -386,6 +386,23 @@ class BookCreatorServiceTest {
     }
 
     @Test
+    void saveConnections_aCreatorAlreadyMappedInARoleIsNotMappedAgain() {
+        ComicCreatorEntity pen = ComicCreatorEntity.builder().id(5L).name("Pen").build();
+        ComicMetadataEntity comic = new ComicMetadataEntity();
+        comic.setBookId(9L);
+        comic.getCreatorMappings().add(ComicCreatorMappingEntity.builder()
+                .comicMetadata(comic).creator(pen).role(ComicCreatorRole.PENCILLER).build());
+        bookEntity.getMetadata().setComicMetadata(comic);
+        when(comicCreatorRepository.findByName("Pen")).thenReturn(Optional.of(pen));
+
+        bookCreatorService.saveConnections(bookEntity, ComicMetadata.builder()
+                .pencillers(Set.of("Pen")).inkers(Set.of("Pen")).build());
+
+        assertThat(comic.getCreatorMappings()).extracting(m -> m.getCreator().getName(), ComicCreatorMappingEntity::getRole)
+                .containsExactlyInAnyOrder(tuple("Pen", ComicCreatorRole.PENCILLER), tuple("Pen", ComicCreatorRole.INKER));
+    }
+
+    @Test
     void saveConnections_bookWithoutComicMetadata_ignoresTheDto() {
         bookCreatorService.saveConnections(bookEntity, ComicMetadata.builder().characters(Set.of("Hero")).build());
 

@@ -124,21 +124,25 @@ public abstract class AbstractFileProcessor implements PreparableBookFileProcess
 
         BookCreatorService.ShellBook shell = bookCreatorService.createShellBook(libraryFile, shellBookType(libraryFile), prepared.facts());
         BookEntity entity = shell.entity();
+        boolean metadataApplied = false;
         if (shell.created()) {
             applyMetadata(entity, prepared);
+            metadataApplied = true;
             applyCover(entity, prepared.cover(), true);
             // The new book's one file
             entity.getPrimaryBookFile().setCurrentHash(prepared.facts().hash());
         } else if (shell.restored()) {
-            restore(entity, prepared);
+            metadataApplied = restore(entity, prepared);
         } else {
             // The book already had this file, which createShellBook gave its new hash. What the book says is what its
             // owner or a metadata refresh made it say; a scan that took the file for a new one does not overwrite it.
             log.info("Kept the metadata and cover of book#{}, which already has {}", entity.getId(), libraryFile.getFileName());
         }
         entity.setMetadataMatchScore(metadataMatchService.calculateMatchScore(entity));
-        // Only comics have comic metadata, and only CbxProcessor's applyMetadata gives the book the entity it fills
-        bookCreatorService.saveConnections(entity, prepared.metadata() == null ? null : prepared.metadata().getComicMetadata());
+        // Only comics have comic metadata, and only CbxProcessor's applyMetadata gives the book the entity it fills. A
+        // book that keeps its metadata keeps its characters, teams, locations and creators too.
+        bookCreatorService.saveConnections(entity,
+                !metadataApplied || prepared.metadata() == null ? null : prepared.metadata().getComicMetadata());
 
         SidecarMetadataWriter.SidecarJob sidecarJob = null;
         if (!libraryFile.isDeferSidecarWrite() && sidecarMetadataWriter.isWriteOnScanEnabled()) {
@@ -157,13 +161,16 @@ public abstract class AbstractFileProcessor implements PreparableBookFileProcess
      * A deleted book that its file brings back takes the file's metadata and cover as a new book would, but not where its
      * owner locked them: with any metadata field locked it keeps all of its metadata, as the format's
      * {@link #applyMetadata} writes every field it reads, and a locked cover stays.
+     *
+     * @return whether the book took the file's metadata
      */
-    private void restore(BookEntity entity, PreparedBookFile prepared) {
+    private boolean restore(BookEntity entity, PreparedBookFile prepared) {
         BookMetadataEntity metadata = entity.getMetadata();
-        if (metadata.isAnyMetadataFieldLocked()) {
-            log.info("Restored book#{} keeps its metadata, some of which is locked", entity.getId());
-        } else {
+        boolean applied = !metadata.isAnyMetadataFieldLocked();
+        if (applied) {
             applyMetadata(entity, prepared);
+        } else {
+            log.info("Restored book#{} keeps its metadata, some of which is locked", entity.getId());
         }
         RenderedCover cover = prepared.cover();
         boolean coverLocked = cover != null && Boolean.TRUE.equals(cover.kind() == CoverKind.AUDIOBOOK
@@ -173,6 +180,7 @@ public abstract class AbstractFileProcessor implements PreparableBookFileProcess
         } else {
             applyCover(entity, cover, false);
         }
+        return applied;
     }
 
     /**
