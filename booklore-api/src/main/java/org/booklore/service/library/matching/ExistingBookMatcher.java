@@ -60,7 +60,20 @@ public final class ExistingBookMatcher {
     public record Match(long bookId, Kind kind, String reason) implements Decision {
     }
 
-    public record NoMatch(String reason) implements Decision {
+    /**
+     * @param refused the books whose title the file reads as but which it says it is not: it names another author,
+     *                year or series number, or is in another library path. A book turned down only for want of
+     *                evidence (no author in the path) is not among them. A file of the same new book must not be
+     *                attached to these either.
+     */
+    public record NoMatch(String reason, Set<Long> refused) implements Decision {
+        public NoMatch {
+            refused = Set.copyOf(refused);
+        }
+
+        public NoMatch(String reason) {
+            this(reason, Set.of());
+        }
     }
 
     public record Ambiguous(List<Long> bookIds, String reason) implements Decision {
@@ -74,6 +87,7 @@ public final class ExistingBookMatcher {
         }
         // A book with a file of the same base name shares its sidecar files: they are one book whatever the names say
         Set<Long> matched = new LinkedHashSet<>(books.withBaseName(file.baseNameKey()));
+        Set<Long> refused = new LinkedHashSet<>();
         List<TitleKey> readings = file.readings();
         for (int i = 0; i < readings.size(); i++) {
             TitleKey reading = readings.get(i);
@@ -84,6 +98,7 @@ public final class ExistingBookMatcher {
             }
             for (Entry entry : candidates(reading, books)) {
                 if (!yearsAgree(reading, entry.key())) {
+                    refused.add(entry.bookId());
                     continue;
                 }
                 List<PersonName> authors = books.authorsOf(entry.bookId());
@@ -92,19 +107,25 @@ public final class ExistingBookMatcher {
                     // without authors, not the one its own file names ("Dune - B. Herbert" and "Dune - F. Herbert")
                     List<PersonName> known = authors.isEmpty() ? entry.key().namedAuthors(file.context()) : authors;
                     if (!evidence.claim().isEmpty() && !known.isEmpty() && PersonName.bestStrength(evidence.claim(), known) == 0) {
+                        refused.add(entry.bookId());
                         continue;
                     }
                 } else if (!agreesWithGivenName(evidence.claim(), authors)) {
+                    // Only a reading that might have dropped an author: no evidence against the book
                     continue;
                 }
                 matched.add(entry.bookId());
             }
         }
+        refused.removeAll(matched);
         if (matched.size() == 1) {
             return new Match(matched.iterator().next(), Kind.SAME_FOLDER, "same title in the same folder");
         }
         if (matched.size() > 1) {
             return new Ambiguous(List.copyOf(matched), matched.size() + " books in the folder have this title");
+        }
+        if (!refused.isEmpty()) {
+            return new NoMatch("the books in the folder with this title " + refused + " are another author's or year's", refused);
         }
         return new NoMatch("no book in the folder has this title");
     }
@@ -137,7 +158,7 @@ public final class ExistingBookMatcher {
             return new NoMatch("the library has no fileless books");
         }
         Map<Long, ShellCandidate> accepted = new LinkedHashMap<>();
-        Map<Long, String> rejected = new LinkedHashMap<>();
+        Map<Long, Rejection> rejected = new LinkedHashMap<>();
         List<TitleKey> readings = file.readings();
         for (int i = 0; i < readings.size(); i++) {
             consider(file, readings.get(i), i == 0, null, index, accepted, rejected);
@@ -156,11 +177,26 @@ public final class ExistingBookMatcher {
         if (rejected.isEmpty()) {
             return new NoMatch("no fileless book has this title");
         }
-        return new NoMatch(String.join("; ", rejected.values()));
+        Set<Long> refused = new LinkedHashSet<>();
+        rejected.forEach((bookId, rejection) -> {
+            if (rejection.against()) {
+                refused.add(bookId);
+            }
+        });
+        return new NoMatch(rejected.values().stream().map(Rejection::why).collect(Collectors.joining("; ")), refused);
+    }
+
+    /**
+     * Why a fileless book is not a file's book.
+     *
+     * @param against whether the file says it is not that book (another author, series number or library path),
+     *                rather than only failing to say that it is
+     */
+    private record Rejection(String why, boolean against) {
     }
 
     private static void consider(FileEvidence file, TitleKey reading, boolean confirmed, Integer seriesNumber,
-                                 FilelessShellIndex index, Map<Long, ShellCandidate> accepted, Map<Long, String> rejected) {
+                                 FilelessShellIndex index, Map<Long, ShellCandidate> accepted, Map<Long, Rejection> rejected) {
         Evidence evidence = Evidence.of(file, reading, confirmed);
         if (evidence == null) {
             return;
@@ -169,43 +205,46 @@ public final class ExistingBookMatcher {
             if (accepted.containsKey(shell.bookId())) {
                 continue;
             }
-            String why = rejection(file, reading, evidence, seriesNumber, shell);
-            if (why == null) {
+            Rejection rejection = rejection(file, reading, evidence, seriesNumber, shell);
+            if (rejection == null) {
                 accepted.put(shell.bookId(), shell);
                 rejected.remove(shell.bookId());
             } else {
-                rejected.putIfAbsent(shell.bookId(), label(shell) + " " + why);
+                Rejection labelled = new Rejection(label(shell) + " " + rejection.why(), rejection.against());
+                // Evidence against the book from one reading outweighs a want of evidence from another
+                rejected.merge(shell.bookId(), labelled, (first, next) -> first.against() || !next.against() ? first : next);
             }
         }
     }
 
     /** Why the fileless book is not this file's book, or null when it is. */
-    private static String rejection(FileEvidence file, TitleKey reading, Evidence evidence, Integer seriesNumber,
-                                    ShellCandidate shell) {
+    private static Rejection rejection(FileEvidence file, TitleKey reading, Evidence evidence, Integer seriesNumber,
+                                       ShellCandidate shell) {
         if (shell.libraryPathId() != null && !shell.libraryPathId().equals(file.libraryPathId())) {
-            return "is in another library path";
+            return new Rejection("is in another library path", true);
         }
         if (seriesNumber != null && !seriesNumber.equals(shell.seriesNumber())) {
-            return "is not number " + seriesNumber + " of its series";
+            return new Rejection("is not number " + seriesNumber + " of its series", true);
         }
         if (shell.authors().isEmpty()) {
             if (!shell.physical()) {
-                return "has no author to check the file against";
+                return new Rejection("has no author to check the file against", false);
             }
             // Nothing to confirm an author part of the name against: only a part the folders vouch for may go
-            return evidence.confirmed() ? null : "has no author that '" + reading.droppedName() + "' could be";
+            return evidence.confirmed() ? null : new Rejection("has no author that '" + reading.droppedName() + "' could be", false);
         }
         if (!evidence.claim().isEmpty() && !agreesWithGivenName(evidence.claim(), shell.authors())) {
-            return "is not by '" + reading.droppedName() + "'";
+            // Only a part the folders or its initials vouch for says who the file is by
+            return new Rejection("is not by '" + reading.droppedName() + "'", evidence.confirmed());
         }
         List<PersonName> names = new ArrayList<>(file.context().folderNames());
         names.addAll(evidence.claim());
         boolean oneWord = !reading.title().contains(" ");
         if (!agreesWithGivenName(names, shell.authors())) {
-            return "has none of its authors in the path";
+            return new Rejection("has none of its authors in the path", false);
         }
         if (oneWord && !agreesWithSameGivenName(names, shell.authors())) {
-            return "has a one-word title, which needs its author's given name in the path as the book has it";
+            return new Rejection("has a one-word title, which needs its author's given name in the path as the book has it", false);
         }
         return null;
     }

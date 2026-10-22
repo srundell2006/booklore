@@ -798,12 +798,17 @@ class BookGroupingServiceTest {
     }
 
     private BookGroupingService.GroupingResult rescan(LibraryEntity lib, LibraryFile... files) {
+        return rescan(lib, BookGroupingService.DecisionListener.NONE, files);
+    }
+
+    private BookGroupingService.GroupingResult rescan(LibraryEntity lib, BookGroupingService.DecisionListener listener,
+                                                      LibraryFile... files) {
         when(bookRepository.findFilelessBookRowsByLibraryId(1L)).thenReturn(shellRows);
         lenient().when(bookRepository.findAuthorNamesByBookIds(anyCollection())).thenAnswer(inv -> {
             Collection<Long> ids = inv.getArgument(0);
             return authorRows.stream().filter(row -> ids.contains(row.bookId())).toList();
         });
-        return bookGroupingService.groupForRescan(List.of(files), lib, new LibraryBookFiles(rows));
+        return bookGroupingService.groupForRescan(List.of(files), lib, new LibraryBookFiles(rows), listener);
     }
 
     private static Map<Long, List<LibraryFile>> attached(BookGroupingService.GroupingResult result) {
@@ -1154,6 +1159,74 @@ class BookGroupingServiceTest {
                 ebook(path, "Poetry", "Collected Poems - T. S. Eliot.epub")), lib);
 
         assertThat(groups).hasSize(2);
+    }
+
+    @Test
+    void rescan_autoDetect_aFileTheBookTurnedDownForItsAuthorDoesNotFollowItsGroupIntoThatBook() {
+        // "Collected Poems.pdf" names no one and matches the book; "Collected Poems - W. B. Yeats.epub" is of its
+        // group, but names another author than the book's
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        bookIn(100, path, "Poetry", "Collected Poems - T. S. Eliot.epub");
+        authorsOf(100, "T. S. Eliot");
+        LibraryFile pdf = newFile(lib, path, "Poetry", "Collected Poems.pdf");
+        LibraryFile yeats = newFile(lib, path, "Poetry", "Collected Poems - W. B. Yeats.epub");
+        List<String> refused = new ArrayList<>();
+
+        var result = rescan(lib, new BookGroupingService.DecisionListener() {
+            @Override
+            public void groupRefused(List<LibraryFile> files, long bookId, List<LibraryFile> refusing) {
+                refusing.forEach(file -> refused.add(bookId + ":" + file.getFileName()));
+            }
+        }, pdf, yeats);
+
+        assertThat(result.filesToAttach()).isEmpty();
+        assertThat(newBooks(result)).containsExactly(List.of("Collected Poems.pdf", "Collected Poems - W. B. Yeats.epub"));
+        assertThat(refused).containsExactly("100:Collected Poems - W. B. Yeats.epub");
+    }
+
+    @Test
+    void rescan_autoDetect_aFileTheFilelessBookTurnedDownDoesNotFollowItsGroupIntoIt() {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shell(200, "Collected Poems", "T. S. Eliot");
+        LibraryFile eliot = newFile(lib, path, "Poetry/T. S. Eliot", "Collected Poems.epub");
+        LibraryFile yeats = newFile(lib, path, "Poetry/T. S. Eliot", "Collected Poems - W. B. Yeats.pdf");
+
+        var result = rescan(lib, eliot, yeats);
+
+        assertThat(result.filesToAttach()).isEmpty();
+        assertThat(newBooks(result)).containsExactly(List.of("Collected Poems.epub", "Collected Poems - W. B. Yeats.pdf"));
+    }
+
+    @Test
+    void rescan_autoDetect_twoDifferentEpubsOfOneGroupDoNotGoToAFilelessBookOnlyOneOfThemClaimed() {
+        // D2: two different files of one format claiming a fileless book get none of it. "Survival.epub" is turned
+        // down by the one-word rule ("J" is not "Jane"), yet it would follow the other epub of its group
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shell(700, "Survival", "Jane Smith");
+        LibraryFile bare = newFile(lib, path, "S/Smith, J", "Survival.epub");
+        LibraryFile named = newFile(lib, path, "S/Smith, J", "Survival - Jane Smith.epub");
+
+        var result = rescan(lib, bare, named);
+
+        assertThat(result.filesToAttach()).isEmpty();
+        assertThat(newBooks(result)).containsExactly(List.of("Survival.epub", "Survival - Jane Smith.epub"));
+    }
+
+    @Test
+    void rescan_autoDetect_followersOfAFilelessClaimAreClaimsToo() {
+        // The pdf has no claim of its own but goes with the epub, from the epub's folder: one book, two formats
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shell(710, "Survival", "Jane Smith");
+        LibraryFile epub = newFile(lib, path, "S/Smith, J", "Survival - Jane Smith.epub");
+        LibraryFile pdf = newFile(lib, path, "S/Smith, J", "Survival.pdf");
+
+        var result = rescan(lib, epub, pdf);
+
+        assertThat(attached(result)).containsExactly(Map.entry(710L, List.of(epub, pdf)));
     }
 
     @Test

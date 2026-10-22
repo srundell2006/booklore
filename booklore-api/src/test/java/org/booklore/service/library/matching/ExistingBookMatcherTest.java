@@ -411,6 +411,26 @@ class ExistingBookMatcherTest {
         }
 
         @Test
+        void saysWhichBooksTheFileSaysItIsNot() {
+            // A file of the same new book follows a match only to a book none of them says it is not
+            assertThat(folderMatch(file("Poetry", "Collected Poems - W. B. Yeats.epub"),
+                    book(100, List.of("T. S. Eliot"), "Collected Poems - T. S. Eliot.epub")))
+                    .isEqualTo(new NoMatch("the books in the folder with this title [100] are another author's or year's", java.util.Set.of(100L)));
+            assertThat(((NoMatch) folderMatch(file("H/Herbert, Frank", "Dune (2021).epub"), book(11, "Dune (1965).pdf"))).refused())
+                    .containsExactly(11L);
+            assertThat(((NoMatch) shellMatch(file("Poetry", "Collected Poems - W. B. Yeats.epub"),
+                    shell(200, "Collected Poems", "T. S. Eliot"))).refused()).containsExactly(200L);
+            // Turned down only for want of evidence: no author in the path, or an initial for a one-word title
+            assertThat(((NoMatch) shellMatch(file("Poetry", "Collected Poems.epub"),
+                    shell(201, "Collected Poems", "T. S. Eliot"))).refused()).isEmpty();
+            assertThat(((NoMatch) shellMatch(file("S/Smith, J", "Survival.epub"), shell(202, "Survival", "Jane Smith"))).refused())
+                    .isEmpty();
+            // An unconfirmed reading that names someone else is no reading at all
+            assertThat(((NoMatch) shellMatch(file("", "Primal Heat - Lora Leigh.epub"), shell(203, "Primal Heat", "Jane Doe"))).refused())
+                    .isEmpty();
+        }
+
+        @Test
         void differentYears() {
             assertThat(folderMatch(file("H/Herbert, Frank", "Dune (2021).epub"), book(11, "Dune (1965).pdf")))
                     .isInstanceOf(NoMatch.class);

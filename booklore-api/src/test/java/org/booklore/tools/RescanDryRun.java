@@ -76,7 +76,8 @@ import java.util.stream.Collectors;
  *   <li>{@code attach-shell}: attached to the fileless book {@code target};</li>
  *   <li>{@code attach-same-folder}: attached to {@code target}, a book with files in the file's folder;</li>
  *   <li>{@code ambiguous}: becomes a new book because several books qualify ({@code target} lists them), a fileless
- *       book's claims were rejected, or the files it would be one book with matched different books;</li>
+ *       book's claims were rejected, the files it would be one book with matched different books, or the book they
+ *       matched turned one of them down;</li>
  *   <li>{@code new-book}: becomes a new book, matching no existing one.</li>
  * </ul>
  * The group key is the new book the file would be part of, {@code <library_path_id>:<sub path>:<key>}; files attached
@@ -209,6 +210,10 @@ public final class RescanDryRun {
             return new Line("ambiguous", ids(trace.split.get(file)), groupKey,
                     "the files it would be one book with match different books", row);
         }
+        if (trace.refusedGroups.containsKey(file)) {
+            return new Line("ambiguous", String.valueOf(trace.refusedGroups.get(file)), groupKey,
+                    "book#" + trace.refusedGroups.get(file) + " matched a file it would be one book with, and turned another of them down", row);
+        }
         if (trace.rejectedClaims.containsKey(file)) {
             RejectedClaim claim = trace.rejectedClaims.get(file);
             return new Line("ambiguous", String.valueOf(claim.bookId()), groupKey,
@@ -264,6 +269,7 @@ public final class RescanDryRun {
         final Map<LibraryFile, Decision> fileless = new IdentityHashMap<>();
         final Map<LibraryFile, RejectedClaim> rejectedClaims = new IdentityHashMap<>();
         final Map<LibraryFile, Set<Long>> split = new IdentityHashMap<>();
+        final Map<LibraryFile, Long> refusedGroups = new IdentityHashMap<>();
 
         @Override
         public void inFolder(LibraryFile file, Decision decision) {
@@ -285,11 +291,19 @@ public final class RescanDryRun {
             files.forEach(file -> split.put(file, bookIds));
         }
 
+        @Override
+        public void groupRefused(List<LibraryFile> files, long bookId, List<LibraryFile> refusing) {
+            files.forEach(file -> refusedGroups.put(file, bookId));
+        }
+
         /** Why the file got no existing book, each reason once and with its particulars taken out. */
         Set<String> rejections(LibraryFile file) {
             Set<String> reasons = new LinkedHashSet<>();
             if (split.containsKey(file)) {
                 reasons.add("group: the files it would be one book with match different books");
+            }
+            if (refusedGroups.containsKey(file)) {
+                reasons.add("group: the book a file it would be one book with matched turned another of them down");
             }
             if (rejectedClaims.containsKey(file)) {
                 // The reason without the names of the files that made the claims

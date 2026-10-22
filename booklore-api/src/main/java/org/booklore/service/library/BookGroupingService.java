@@ -17,6 +17,7 @@ import org.booklore.service.library.matching.ExistingBookMatcher.ClaimResolution
 import org.booklore.service.library.matching.ExistingBookMatcher.Decision;
 import org.booklore.service.library.matching.ExistingBookMatcher.Kind;
 import org.booklore.service.library.matching.ExistingBookMatcher.Match;
+import org.booklore.service.library.matching.ExistingBookMatcher.NoMatch;
 import org.booklore.service.library.matching.FileEvidence;
 import org.booklore.service.library.matching.FilelessShellIndex;
 import org.booklore.service.library.matching.NameContext;
@@ -81,6 +82,13 @@ public class BookGroupingService {
         /** Files that would be one new book but matched different books, and so become a new book. */
         default void groupSplit(List<LibraryFile> files, Set<Long> bookIds) {
         }
+
+        /**
+         * Files that would be one new book, some matching a book that turned another of them down (another author or
+         * year), and so become a new book.
+         */
+        default void groupRefused(List<LibraryFile> files, long bookId, List<LibraryFile> refusing) {
+        }
     }
 
     public Map<String, List<LibraryFile>> groupForInitialScan(List<LibraryFile> newFiles, LibraryEntity libraryEntity) {
@@ -104,10 +112,11 @@ public class BookGroupingService {
      *       else a fileless book, as in AUTO_DETECT.</li>
      *   <li>BOOK_PER_FILE: only a fileless book, which then gets that one file.</li>
      * </ul>
-     * A fileless book claimed from more than one folder, or by two different files of one format, gets none of them.
      * Files that would be one new book (one group of the mode's grouping) go to one book: a file without a match of its
      * own follows the files of its group that have one ("Title (1).epub" its original, the parts of an audiobook each
-     * other), and a group whose files matched different books becomes a new book instead.
+     * other). A group whose files matched different books, or one of whose files the matched book turned down (it
+     * names another author or year), becomes a new book instead. A fileless book claimed from more than one folder, or
+     * by two different files of one format, the files that follow a claim included, gets none of them.
      */
     public GroupingResult groupForRescan(List<LibraryFile> newFiles, LibraryEntity libraryEntity, LibraryBookFiles bookFiles) {
         return groupForRescan(newFiles, libraryEntity, bookFiles, DecisionListener.NONE);
@@ -127,16 +136,20 @@ public class BookGroupingService {
         }
 
         Map<LibraryFile, Integer> indexOf = new IdentityHashMap<>();
+        FileEvidence[] evidences = new FileEvidence[newFiles.size()];
+        // The book each file's own decision gave it, then the book its group goes to
         Long[] targets = new Long[newFiles.size()];
+        List<Set<Long>> refused = new ArrayList<>(newFiles.size());
         Map<Long, Kind> kinds = new HashMap<>();
-        List<Claim<Integer>> claims = new ArrayList<>();
         Map<String, NameContext> contexts = new HashMap<>();
         for (int i = 0; i < newFiles.size(); i++) {
             LibraryFile file = newFiles.get(i);
             indexOf.put(file, i);
+            refused.add(new HashSet<>());
             String folder = subPath(file);
             FileEvidence evidence = FileEvidence.of(pathId(file), folder, file.getFileName(), isAudio(file),
                     contexts.computeIfAbsent(folder, NameContext::forFolder));
+            evidences[i] = evidence;
 
             Decision inFolder = switch (mode) {
                 case AUTO_DETECT -> ExistingBookMatcher.matchInFolder(evidence, folders.booksIn(pathId(file), folder));
@@ -157,33 +170,28 @@ public class BookGroupingService {
                         ambiguous.reason(), ambiguous.bookIds());
                 continue;
             }
+            if (inFolder instanceof NoMatch noMatch) {
+                refused.get(i).addAll(noMatch.refused());
+            }
             Decision fileless = ExistingBookMatcher.matchShell(evidence, shells);
             listener.fileless(file, fileless);
             if (fileless instanceof Match match) {
-                boolean oneFilePerBook = mode == LibraryOrganizationMode.BOOK_PER_FILE;
-                claims.add(new Claim<>(i, file.getFileName(), match.bookId(), evidence.folderKey(),
-                        oneFilePerBook ? "file" : String.valueOf(file.getBookFileType()),
-                        oneFilePerBook ? evidence.folderKey() + "/" + file.getFileName() : evidence.fileNameKey()));
+                targets[i] = match.bookId();
+                kinds.put(match.bookId(), Kind.FILELESS);
             } else if (fileless instanceof Ambiguous ambiguous) {
                 log.info("New file '{}/{}' is left for a new book: {}", folder, file.getFileName(), ambiguous.reason());
             } else {
+                refused.get(i).addAll(((NoMatch) fileless).refused());
                 log.debug("'{}/{}' matches no fileless book: {}", folder, file.getFileName(), fileless.reason());
             }
         }
 
-        ClaimResolution<Integer> resolution = ExistingBookMatcher.resolveShellClaims(claims);
-        resolution.rejected().forEach((bookId, why) -> {
-            log.info("Fileless book#{} is left as it is: {}; those files become new books", bookId, why);
-            listener.claimsRejected(bookId, claims.stream().filter(claim -> claim.bookId() == bookId)
-                    .map(claim -> newFiles.get(claim.file())).toList(), why);
-        });
-        resolution.accepted().forEach((bookId, indexes) -> {
-            indexes.forEach(i -> targets[i] = bookId);
-            kinds.put(bookId, Kind.FILELESS);
-        });
-
-        Map<String, List<LibraryFile>> newBookGroups = new LinkedHashMap<>();
-        newBookGroups(mode, newFiles).forEach((key, group) -> {
+        // A file without a book of its own follows its group's, unless the group is split over books
+        Map<String, List<LibraryFile>> grouped = newBookGroups(mode, newFiles);
+        List<List<LibraryFile>> groups = new ArrayList<>(grouped.values());
+        List<String> groupKeys = new ArrayList<>(grouped.keySet());
+        Map<Integer, String> claimFolder = new HashMap<>();
+        for (List<LibraryFile> group : groups) {
             Set<Long> groupTargets = new LinkedHashSet<>();
             group.forEach(file -> {
                 Long target = targets[indexOf.get(file)];
@@ -191,19 +199,64 @@ public class BookGroupingService {
                     groupTargets.add(target);
                 }
             });
-            if (groupTargets.size() == 1) {
-                Long target = groupTargets.iterator().next();
-                group.forEach(file -> targets[indexOf.get(file)] = target);
-                return;
-            }
             if (groupTargets.size() > 1) {
                 log.info("New files {} read as one book but match different books {}; they become a new book",
-                        group.stream().map(LibraryFile::getFileName).toList(), groupTargets);
+                        names(group), groupTargets);
                 listener.groupSplit(group, groupTargets);
                 group.forEach(file -> targets[indexOf.get(file)] = null);
+                continue;
             }
-            newBookGroups.put(key, group);
+            if (groupTargets.size() == 1) {
+                long target = groupTargets.iterator().next();
+                List<LibraryFile> refusing = group.stream().filter(file -> refused.get(indexOf.get(file)).contains(target)).toList();
+                if (!refusing.isEmpty()) {
+                    log.info("New files {} read as one book, but book#{} turned {} down; they become a new book",
+                            names(group), target, names(refusing));
+                    listener.groupRefused(group, target, refusing);
+                    group.forEach(file -> targets[indexOf.get(file)] = null);
+                    continue;
+                }
+                // A follower claims a fileless book from the folder of the file it follows
+                String folderKey = group.stream().filter(file -> targets[indexOf.get(file)] != null)
+                        .map(file -> evidences[indexOf.get(file)].folderKey()).findFirst().orElseThrow();
+                group.forEach(file -> {
+                    int i = indexOf.get(file);
+                    if (targets[i] == null) {
+                        targets[i] = target;
+                        claimFolder.put(i, folderKey);
+                    }
+                });
+            }
+        }
+
+        // Every file a fileless book would get claims it, so that two different files of one format leave it alone
+        List<Claim<Integer>> claims = new ArrayList<>();
+        boolean oneFilePerBook = mode == LibraryOrganizationMode.BOOK_PER_FILE;
+        for (int i = 0; i < newFiles.size(); i++) {
+            if (targets[i] == null || kinds.get(targets[i]) != Kind.FILELESS) {
+                continue;
+            }
+            LibraryFile file = newFiles.get(i);
+            FileEvidence evidence = evidences[i];
+            claims.add(new Claim<>(i, file.getFileName(), targets[i], claimFolder.getOrDefault(i, evidence.folderKey()),
+                    oneFilePerBook ? "file" : String.valueOf(file.getBookFileType()),
+                    oneFilePerBook ? evidence.folderKey() + "/" + file.getFileName() : evidence.fileNameKey()));
+        }
+        ClaimResolution<Integer> resolution = ExistingBookMatcher.resolveShellClaims(claims);
+        resolution.rejected().forEach((bookId, why) -> {
+            log.info("Fileless book#{} is left as it is: {}; those files become new books", bookId, why);
+            listener.claimsRejected(bookId, claims.stream().filter(claim -> claim.bookId() == bookId)
+                    .map(claim -> newFiles.get(claim.file())).toList(), why);
+            claims.stream().filter(claim -> claim.bookId() == bookId).forEach(claim -> targets[claim.file()] = null);
         });
+
+        Map<String, List<LibraryFile>> newBookGroups = new LinkedHashMap<>();
+        for (int g = 0; g < groups.size(); g++) {
+            List<LibraryFile> group = groups.get(g);
+            if (group.stream().allMatch(file -> targets[indexOf.get(file)] == null)) {
+                newBookGroups.put(groupKeys.get(g), group);
+            }
+        }
 
         Map<Long, List<LibraryFile>> filesByBook = new LinkedHashMap<>();
         for (int i = 0; i < newFiles.size(); i++) {
@@ -220,6 +273,10 @@ public class BookGroupingService {
                 count(attachments, Kind.FILELESS, true), count(attachments, Kind.FILELESS, false),
                 newBookGroups.values().stream().mapToInt(List::size).sum(), newBookGroups.size());
         return new GroupingResult(attachments, newBookGroups);
+    }
+
+    private static List<String> names(List<LibraryFile> files) {
+        return files.stream().map(LibraryFile::getFileName).toList();
     }
 
     private static int count(List<Attachment> attachments, Kind kind, boolean files) {
