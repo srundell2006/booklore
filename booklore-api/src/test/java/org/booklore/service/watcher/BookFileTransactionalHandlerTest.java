@@ -375,6 +375,38 @@ class BookFileTransactionalHandlerTest {
         }
 
         @Test
+        void bookPerFolder_aBookWhoseFolderOnlyComparesEqualIsNotTheBookOfTheFolder() {
+            // The database finds 'sub' through its collation, which ignores case: this book's files are in 'Sub'
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
+            noEarlierMatch();
+            BookEntity otherFolder = buildBook(20L, false);
+            BookFileEntity file = buildBookFile(200L, otherFolder, "existing.epub", "otherhash");
+            file.setFileSubPath("Sub");
+            otherFolder.setBookFiles(new ArrayList<>(List.of(file)));
+            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "sub")).thenReturn(List.of(otherFolder));
+
+            handler.handleNewBookFile(1L, Path.of("/library/sub/new.pdf"));
+
+            verifyNoInteractions(existingBookAttacher);
+            verify(libraryProcessingService).processLibraryFiles(anyList(), eq(library));
+        }
+
+        @Test
+        void autoDetect_aBookWhoseFolderOnlyComparesEqualIsNotInTheFilesFolder() {
+            noEarlierMatch();
+            BookEntity otherFolder = buildBook(20L, false);
+            BookFileEntity file = buildBookFile(200L, otherFolder, "test.epub", "otherhash");
+            file.setFileSubPath("SUB");
+            otherFolder.setBookFiles(new ArrayList<>(List.of(file)));
+            when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "sub")).thenReturn(List.of(otherFolder));
+
+            handler.handleNewBookFile(1L, Path.of("/library/sub/test.pdf"));
+
+            verifyNoInteractions(existingBookAttacher);
+            verify(libraryProcessingService).processLibraryFiles(anyList(), eq(library));
+        }
+
+        @Test
         void bookPerFolder_noBookInFolder_createsNew() {
             library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
             noEarlierMatch();
@@ -395,6 +427,7 @@ class BookFileTransactionalHandlerTest {
             BookEntity parentBook = buildBook(30L, false);
             BookFileEntity ebookFile = buildBookFile(300L, parentBook, "book.epub", "ebookhash");
             ebookFile.setBookType(BookFileType.EPUB);
+            ebookFile.setFileSubPath("author/book");
             parentBook.setBookFiles(new ArrayList<>(List.of(ebookFile)));
             when(bookRepository.findAllByLibraryPathIdAndFileSubPath(1L, "author/book")).thenReturn(List.of(parentBook));
 

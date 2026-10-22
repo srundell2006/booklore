@@ -368,15 +368,98 @@ class AbstractFileProcessorTest {
         }
 
         @Test
-        void existingBookRolledBack_keepsItsCoverFiles() throws Exception {
+        void restoredBookRolledBack_keepsItsCoverFiles() throws Exception {
             assertThat(persistWithSynchronization(false)).isEmpty();
+            verify(fileService).writeRenderedCover(eq(BOOK_ID), any());
+        }
+
+        @Test
+        void bookAlreadyStoredForThePath_keepsItsMetadataCoverAndPrimaryHash() throws Exception {
+            var libraryFile = bookFile("books", "book.epub", LibraryOrganizationMode.BOOK_PER_FILE);
+            RenderedCover cover = new RenderedCover(CoverKind.BOOK, new byte[]{1}, new byte[]{2});
+            BookEntity book = shellBook();
+            book.getPrimaryBookFile().setCurrentHash("primary");
+            book.setBookCoverHash("curated");
+            when(bookCreatorService.createShellBook(any(), any(), any())).thenReturn(new BookCreatorService.ShellBook(book, false, false));
+
+            PersistedBook persisted = processor.persistPrepared(libraryFile,
+                    prepared(libraryFile, new FileFacts("abc", 12L), BookMetadata.builder().title("From The File").build(), cover));
+
+            assertThat(processor.applied).isNull();
+            verify(fileService, never()).writeRenderedCover(anyLong(), any());
+            assertThat(book.getBookCoverHash()).isEqualTo("curated");
+            assertThat(book.getPrimaryBookFile().getCurrentHash()).isEqualTo("primary");
+            assertThat(persisted.created()).isFalse();
+            verify(bookCreatorService).saveConnections(book, null);
+        }
+
+        @Test
+        void restoredBook_takesTheFilesMetadataAndCover() throws Exception {
+            var libraryFile = bookFile("books", "book.epub", LibraryOrganizationMode.BOOK_PER_FILE);
+            RenderedCover cover = new RenderedCover(CoverKind.BOOK, new byte[]{1}, new byte[]{2});
+            PreparedBookFile prepared = prepared(libraryFile, new FileFacts("abc", 12L), BookMetadata.builder().title("From The File").build(), cover);
+            BookEntity book = shellBook();
+            when(bookCreatorService.createShellBook(any(), any(), any())).thenReturn(new BookCreatorService.ShellBook(book, false, true));
+            when(fileService.writeRenderedCover(BOOK_ID, cover)).thenReturn(true);
+
+            processor.persistPrepared(libraryFile, prepared);
+
+            assertThat(processor.applied).isSameAs(prepared);
+            assertThat(book.getBookCoverHash()).isNotNull();
+        }
+
+        @Test
+        void restoredBookWithALockedField_keepsAllOfItsMetadataButTakesTheCover() throws Exception {
+            var libraryFile = bookFile("books", "book.epub", LibraryOrganizationMode.BOOK_PER_FILE);
+            RenderedCover cover = new RenderedCover(CoverKind.BOOK, new byte[]{1}, new byte[]{2});
+            BookEntity book = shellBook();
+            book.getMetadata().setSeriesNumberLocked(true);
+            when(bookCreatorService.createShellBook(any(), any(), any())).thenReturn(new BookCreatorService.ShellBook(book, false, true));
+            when(fileService.writeRenderedCover(BOOK_ID, cover)).thenReturn(true);
+
+            processor.persistPrepared(libraryFile, prepared(libraryFile, new FileFacts("abc", 12L), BookMetadata.builder().title("From The File").build(), cover));
+
+            assertThat(processor.applied).isNull();
+            assertThat(book.getBookCoverHash()).isNotNull();
+        }
+
+        @Test
+        void restoredBookWithALockedCover_keepsItsCoverButTakesTheMetadata() throws Exception {
+            var libraryFile = bookFile("books", "book.epub", LibraryOrganizationMode.BOOK_PER_FILE);
+            RenderedCover cover = new RenderedCover(CoverKind.BOOK, new byte[]{1}, new byte[]{2});
+            PreparedBookFile prepared = prepared(libraryFile, new FileFacts("abc", 12L), BookMetadata.builder().title("From The File").build(), cover);
+            BookEntity book = shellBook();
+            book.setBookCoverHash("curated");
+            book.getMetadata().setCoverLocked(true);
+            when(bookCreatorService.createShellBook(any(), any(), any())).thenReturn(new BookCreatorService.ShellBook(book, false, true));
+
+            processor.persistPrepared(libraryFile, prepared);
+
+            assertThat(processor.applied).isSameAs(prepared);
+            verify(fileService, never()).writeRenderedCover(anyLong(), any());
+            assertThat(book.getBookCoverHash()).isEqualTo("curated");
+        }
+
+        @Test
+        void restoredAudiobookWithOnlyItsEbookCoverLocked_takesTheAudiobookCover() throws Exception {
+            var libraryFile = bookFile("books", "book.m4b", LibraryOrganizationMode.BOOK_PER_FILE);
+            RenderedCover cover = new RenderedCover(CoverKind.AUDIOBOOK, new byte[]{1}, new byte[]{2});
+            BookEntity book = shellBook();
+            book.getMetadata().setCoverLocked(true);
+            when(bookCreatorService.createShellBook(any(), any(), any())).thenReturn(new BookCreatorService.ShellBook(book, false, true));
+            when(fileService.writeRenderedCover(BOOK_ID, cover)).thenReturn(true);
+
+            processor.persistPrepared(libraryFile, prepared(libraryFile, new FileFacts("abc", 12L), null, cover));
+
+            assertThat(book.getAudiobookCoverHash()).isNotNull();
         }
 
         private List<TransactionSynchronization> persistWithSynchronization(boolean created) throws Exception {
             var libraryFile = bookFile("books", "book.epub", LibraryOrganizationMode.BOOK_PER_FILE);
             RenderedCover cover = new RenderedCover(CoverKind.BOOK, new byte[]{1}, new byte[]{2});
             BookEntity book = shellBook();
-            when(bookCreatorService.createShellBook(any(), any(), any())).thenReturn(new BookCreatorService.ShellBook(book, created));
+            // A book not created is one restored here: only a new or a restored book takes the file's cover
+            when(bookCreatorService.createShellBook(any(), any(), any())).thenReturn(new BookCreatorService.ShellBook(book, created, !created));
             when(fileService.writeRenderedCover(BOOK_ID, cover)).thenReturn(true);
             TransactionSynchronizationManager.initSynchronization();
             try {

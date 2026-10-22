@@ -543,6 +543,54 @@ public class BookMetadataEntity {
                 ;
     }
 
+    /**
+     * Whether its owner locked any of the book's metadata, its covers left out: what reads metadata from a file without
+     * going field by field, such as a scan bringing back a deleted book, then leaves all of it alone.
+     */
+    public boolean isAnyMetadataFieldLocked() {
+        return Boolean.TRUE.equals(this.titleLocked)
+                || Boolean.TRUE.equals(this.subtitleLocked)
+                || Boolean.TRUE.equals(this.publisherLocked)
+                || Boolean.TRUE.equals(this.publishedDateLocked)
+                || Boolean.TRUE.equals(this.descriptionLocked)
+                || Boolean.TRUE.equals(this.isbn13Locked)
+                || Boolean.TRUE.equals(this.isbn10Locked)
+                || Boolean.TRUE.equals(this.asinLocked)
+                || Boolean.TRUE.equals(this.pageCountLocked)
+                || Boolean.TRUE.equals(this.languageLocked)
+                || Boolean.TRUE.equals(this.seriesNameLocked)
+                || Boolean.TRUE.equals(this.seriesNumberLocked)
+                || Boolean.TRUE.equals(this.seriesTotalLocked)
+                || Boolean.TRUE.equals(this.authorsLocked)
+                || Boolean.TRUE.equals(this.categoriesLocked)
+                || Boolean.TRUE.equals(this.moodsLocked)
+                || Boolean.TRUE.equals(this.tagsLocked)
+                || Boolean.TRUE.equals(this.amazonRatingLocked)
+                || Boolean.TRUE.equals(this.amazonReviewCountLocked)
+                || Boolean.TRUE.equals(this.goodreadsRatingLocked)
+                || Boolean.TRUE.equals(this.goodreadsReviewCountLocked)
+                || Boolean.TRUE.equals(this.hardcoverRatingLocked)
+                || Boolean.TRUE.equals(this.hardcoverReviewCountLocked)
+                || Boolean.TRUE.equals(this.lubimyczytacRatingLocked)
+                || Boolean.TRUE.equals(this.goodreadsIdLocked)
+                || Boolean.TRUE.equals(this.comicvineIdLocked)
+                || Boolean.TRUE.equals(this.hardcoverIdLocked)
+                || Boolean.TRUE.equals(this.hardcoverBookIdLocked)
+                || Boolean.TRUE.equals(this.googleIdLocked)
+                || Boolean.TRUE.equals(this.lubimyczytacIdLocked)
+                || Boolean.TRUE.equals(this.ranobedbIdLocked)
+                || Boolean.TRUE.equals(this.ranobedbRatingLocked)
+                || Boolean.TRUE.equals(this.audibleIdLocked)
+                || Boolean.TRUE.equals(this.audibleRatingLocked)
+                || Boolean.TRUE.equals(this.audibleReviewCountLocked)
+                || Boolean.TRUE.equals(this.reviewsLocked)
+                || Boolean.TRUE.equals(this.narratorLocked)
+                || Boolean.TRUE.equals(this.abridgedLocked)
+                || Boolean.TRUE.equals(this.ageRatingLocked)
+                || Boolean.TRUE.equals(this.contentRatingLocked)
+                || (this.comicMetadata != null && this.comicMetadata.isAnyFieldLocked());
+    }
+
     @Column(name = "title_changed_by_auto_fetch")
     private boolean titleChangedByAutoFetch;
 

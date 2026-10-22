@@ -235,7 +235,11 @@ public class BookFileTransactionalHandler {
         return !existingBookAttacher.attach(match.bookId(), match.kind(), List.of(file)).isEmpty();
     }
 
-    /** The books with book files in the folder, with those files and their authors. */
+    /**
+     * The books with book files in the folder, with those files and their authors. The database finds the folder through
+     * its collation, which ignores case and possibly accents; a book with files only in a folder that compares equal is
+     * in another folder.
+     */
     private BooksInFolder booksInFolder(Long libraryPathId, String subPath) {
         if (subPath == null) {
             return BooksInFolder.EMPTY;
@@ -249,6 +253,9 @@ public class BookFileTransactionalHandler {
                     .filter(bf -> bf.isBookFormat() && subPath.equals(bf.getFileSubPath()))
                     .map(bf -> new FolderFile(bf.getFileName(), bf.getBookType() == BookFileType.AUDIOBOOK))
                     .toList();
+            if (files.isEmpty()) {
+                continue;
+            }
             List<String> authors = book.getMetadata() == null || book.getMetadata().getAuthors() == null
                     ? List.of()
                     : book.getMetadata().getAuthors().stream().map(AuthorEntity::getName).toList();
@@ -266,7 +273,7 @@ public class BookFileTransactionalHandler {
         if (subPath == null || subPath.isEmpty()) {
             return null;
         }
-        List<Long> inFolder = activeBookIds(bookRepository.findAllByLibraryPathIdAndFileSubPath(libraryPathId, subPath), false);
+        List<Long> inFolder = activeBookIds(bookRepository.findAllByLibraryPathIdAndFileSubPath(libraryPathId, subPath), subPath, false);
         if (inFolder.size() == 1) {
             return new Match(inFolder.getFirst(), Kind.SAME_FOLDER, "the book of its folder");
         }
@@ -283,7 +290,7 @@ public class BookFileTransactionalHandler {
                 return null;
             }
             current = current.substring(0, lastSep);
-            List<Long> withEbook = activeBookIds(bookRepository.findAllByLibraryPathIdAndFileSubPath(libraryPathId, current), true);
+            List<Long> withEbook = activeBookIds(bookRepository.findAllByLibraryPathIdAndFileSubPath(libraryPathId, current), current, true);
             if (withEbook.size() == 1) {
                 log.debug("BOOK_PER_FOLDER: audiobook absorbed by book id={} at '{}'", withEbook.getFirst(), current);
                 return new Match(withEbook.getFirst(), Kind.SAME_FOLDER, "the book with an ebook in '" + current + "'");
@@ -294,9 +301,15 @@ public class BookFileTransactionalHandler {
         }
     }
 
-    private static List<Long> activeBookIds(List<BookEntity> books, boolean withAnEbook) {
+    /**
+     * The books, not deleted, with a book format in exactly this folder, and with an ebook if asked. The folder lookup
+     * compares through the database's collation, so it can also return books of a folder that only compares equal.
+     */
+    private static List<Long> activeBookIds(List<BookEntity> books, String folder, boolean withAnEbook) {
         return books.stream()
                 .filter(book -> !Boolean.TRUE.equals(book.getDeleted()))
+                .filter(book -> book.getBookFiles().stream()
+                        .anyMatch(bf -> bf.isBookFormat() && folder.equals(bf.getFileSubPath())))
                 .filter(book -> !withAnEbook || book.getBookFiles().stream()
                         .anyMatch(bf -> bf.isBookFormat() && bf.getBookType() != BookFileType.AUDIOBOOK))
                 .map(BookEntity::getId)

@@ -278,25 +278,31 @@ class BookFilePersistenceServiceTest {
     class DelegationMethods {
 
         @Test
-        void findByLibraryPathSubPathAndFileName_delegates() {
-            when(bookRepository.findByLibraryPath_IdAndFileSubPathAndFileName(1L, "sub", "test.epub"))
-                    .thenReturn(Optional.of(buildBook(10L)));
-
-            Optional<BookEntity> result = service.findByLibraryPathSubPathAndFileName(1L, "sub", "test.epub");
-
-            assertThat(result).isPresent();
-        }
-
-        @Test
         void findBookFileByLibraryPathSubPathAndFileName_delegates() {
             BookFileEntity bookFile = buildBookFile(100L, buildBook(10L), "test.epub", "hash");
-            when(bookFileRepository.findByLibraryPathIdAndFileSubPathAndFileName(1L, "sub", "test.epub"))
-                    .thenReturn(Optional.of(bookFile));
+            when(bookFileRepository.findAllByLibraryPathIdAndFileSubPathAndFileName(1L, "sub", "test.epub"))
+                    .thenReturn(List.of(bookFile));
 
             Optional<BookFileEntity> result = service.findBookFileByLibraryPathSubPathAndFileName(1L, "sub", "test.epub");
 
             assertThat(result).isPresent();
             assertThat(result.get().getFileName()).isEqualTo("test.epub");
+        }
+
+        @Test
+        void findBookFileByLibraryPathSubPathAndFileName_returnsOnlyTheFileAtExactlyThePath() {
+            // What MariaDB's case- and accent-insensitive collation returns for 'test.epub' in 'sub'
+            BookFileEntity otherCase = buildBookFile(100L, buildBook(10L), "Test.epub", "h1");
+            BookFileEntity decomposed = buildBookFile(101L, buildBook(11L), "te\u0301st.epub", "h2");
+            BookFileEntity exact = buildBookFile(102L, buildBook(12L), "test.epub", "h3");
+            when(bookFileRepository.findAllByLibraryPathIdAndFileSubPathAndFileName(1L, "sub", "test.epub"))
+                    .thenReturn(List.of(otherCase, decomposed, exact));
+
+            assertThat(service.findBookFileByLibraryPathSubPathAndFileName(1L, "sub", "test.epub")).containsSame(exact);
+
+            when(bookFileRepository.findAllByLibraryPathIdAndFileSubPathAndFileName(1L, "sub", "test.epub"))
+                    .thenReturn(List.of(otherCase, decomposed));
+            assertThat(service.findBookFileByLibraryPathSubPathAndFileName(1L, "sub", "test.epub")).isEmpty();
         }
 
         @Test

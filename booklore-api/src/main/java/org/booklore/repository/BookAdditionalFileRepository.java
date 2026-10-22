@@ -20,10 +20,26 @@ public interface BookAdditionalFileRepository extends JpaRepository<BookFileEnti
 
     Optional<BookFileEntity> findByAltFormatCurrentHash(String altFormatCurrentHash);
 
+    /**
+     * The files stored at this folder and name as the database compares them, through the columns' collation: on
+     * MariaDB that ignores case, and possibly accents, so this can return files at another path, and more than one.
+     * Whoever asks for the file at a path uses {@link #findExactlyAt}.
+     */
     @Query("SELECT bf FROM BookFileEntity bf WHERE bf.book.libraryPath.id = :libraryPathId AND bf.fileSubPath = :fileSubPath AND bf.fileName = :fileName")
-    Optional<BookFileEntity> findByLibraryPath_IdAndFileSubPathAndFileName(@Param("libraryPathId") Long libraryPathId,
-                                                                           @Param("fileSubPath") String fileSubPath,
-                                                                           @Param("fileName") String fileName);
+    List<BookFileEntity> findAllByLibraryPathIdAndFileSubPathAndFileName(@Param("libraryPathId") Long libraryPathId,
+                                                                        @Param("fileSubPath") String fileSubPath,
+                                                                        @Param("fileName") String fileName);
+
+    /**
+     * The file stored at exactly this folder and name of the library path, compared as a library walk compares them
+     * ({@link BookFileEntity#isAt}). A file whose path differs only in case or accents is another file: on a
+     * case-sensitive share both exist, and on any other the stored one was renamed and is gone.
+     */
+    default Optional<BookFileEntity> findExactlyAt(Long libraryPathId, String fileSubPath, String fileName) {
+        return findAllByLibraryPathIdAndFileSubPathAndFileName(libraryPathId, fileSubPath, fileName).stream()
+                .filter(file -> file.isAt(fileSubPath, fileName))
+                .findFirst();
+    }
 
     /**
      * One plain row per book_file of the library, soft-deleted books included, for rescans

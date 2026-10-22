@@ -205,9 +205,9 @@ class ExistingBookAttacherTest {
         LibraryFile stored = onDisk("A", "Stored.pdf", BookFileType.PDF);
         LibraryFile elsewhere = onDisk("A", "Title.mobi", BookFileType.MOBI);
         elsewhere.setLibraryPathEntity(LibraryPathEntity.builder().id(99L).path(root.toString()).build());
-        when(bookAdditionalFileRepository.findByLibraryPath_IdAndFileSubPathAndFileName(10L, "A", "Stored.pdf"))
+        when(bookAdditionalFileRepository.findExactlyAt(10L, "A", "Stored.pdf"))
                 .thenReturn(Optional.of(BookFileEntity.builder().id(5L).build()));
-        when(bookAdditionalFileRepository.findByLibraryPath_IdAndFileSubPathAndFileName(eq(99L), anyString(), anyString()))
+        when(bookAdditionalFileRepository.findExactlyAt(eq(99L), anyString(), anyString()))
                 .thenReturn(Optional.empty());
 
         assertThat(attacher.attach(18, Kind.SAME_FOLDER, List.of(stored, elsewhere))).isEmpty();
@@ -221,7 +221,7 @@ class ExistingBookAttacherTest {
         book(19, path, null, BookFileType.EPUB);
         LibraryFile missing = LibraryFile.builder().libraryEntity(library).libraryPathEntity(path)
                 .fileSubPath("A").fileName("missing.pdf").bookFileType(BookFileType.PDF).build();
-        when(bookAdditionalFileRepository.findByLibraryPath_IdAndFileSubPathAndFileName(anyLong(), anyString(), anyString()))
+        when(bookAdditionalFileRepository.findExactlyAt(anyLong(), anyString(), anyString()))
                 .thenReturn(Optional.empty());
 
         assertThatThrownBy(() -> attacher.attach(19, Kind.SAME_FOLDER, List.of(missing))).isInstanceOf(RuntimeException.class);

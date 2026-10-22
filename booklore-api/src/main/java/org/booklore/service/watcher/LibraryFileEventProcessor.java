@@ -469,7 +469,11 @@ public class LibraryFileEventProcessor {
             LibraryPathEntity libPathEntity = bookFilePersistenceService.getLibraryPathEntityForFile(library, libPath);
 
             String relativePrefix = Path.of(libPathEntity.getPath()).relativize(folderPath).toString().replace("\\", "/");
-            List<BookEntity> booksWithFiles = bookRepository.findBooksWithFilesUnderPath(libPathEntity.getId(), relativePrefix);
+            // The lookup compares paths through the database's collation, which ignores case and possibly accents; a
+            // folder that only compares equal to the deleted one is another folder, and its books stay
+            List<BookEntity> booksWithFiles = bookRepository.findBooksWithFilesUnderPath(libPathEntity.getId(), relativePrefix).stream()
+                    .filter(book -> hasBookFormatUnder(book, relativePrefix))
+                    .toList();
 
             if (booksWithFiles.isEmpty()) {
                 log.debug("[FOLDER_DELETE] No books found under '{}'", folderPath);
@@ -485,6 +489,14 @@ public class LibraryFileEventProcessor {
         } catch (Exception e) {
             log.warn("[ERROR] Folder delete '{}': {}", folderPath, e.getMessage());
         }
+    }
+
+    /** Whether the book has a book format in the folder or below it, or is the folder audiobook it names. */
+    private static boolean hasBookFormatUnder(BookEntity book, String folder) {
+        return book.getBookFiles().stream().anyMatch(bf -> bf.isBookFormat() && bf.getFileSubPath() != null
+                && (bf.getFileSubPath().equals(folder)
+                || bf.getFileSubPath().startsWith(folder + "/")
+                || bf.isFolderBased() && (bf.getFileSubPath() + "/" + bf.getFileName()).equals(folder)));
     }
 
     private boolean fileHasContent(Path path) {

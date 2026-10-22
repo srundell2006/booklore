@@ -309,6 +309,26 @@ class LibraryFileEventProcessorTest {
         }
 
         @Test
+        void booksOfAFolderThatOnlyComparesEqualAreNotAddedToThePool() throws Exception {
+            // The lookup compares through the database's collation, which ignores case: 'Books' is another folder
+            BookEntity inBooks = BookEntity.builder().id(10L).library(library).libraryPath(libraryPath).deleted(false)
+                    .bookFiles(new ArrayList<>(List.of(BookFileEntity.builder().id(100L).fileName("a.epub")
+                            .fileSubPath("books/a").currentHash("h1").isBookFormat(true).bookType(BookFileType.EPUB).build())))
+                    .build();
+            BookEntity inOtherFolder = BookEntity.builder().id(11L).library(library).libraryPath(libraryPath).deleted(false)
+                    .bookFiles(new ArrayList<>(List.of(BookFileEntity.builder().id(101L).fileName("b.epub")
+                            .fileSubPath("Books").currentHash("h2").isBookFormat(true).bookType(BookFileType.EPUB).build())))
+                    .build();
+            when(bookRepository.findBooksWithFilesUnderPath(eq(1L), anyString())).thenReturn(List.of(inBooks, inOtherFolder));
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_DELETE, 1L, tempDir.resolve("books"), true);
+
+            Thread.sleep(2000);
+
+            verify(pendingDeletionPool).addFolderDeletion(any(), eq(1L), eq(List.of(inBooks)), any());
+        }
+
+        @Test
         void folderWithNoBooks_doesNotAddToPool() throws Exception {
             when(bookRepository.findBooksWithFilesUnderPath(eq(1L), anyString()))
                     .thenReturn(List.of());

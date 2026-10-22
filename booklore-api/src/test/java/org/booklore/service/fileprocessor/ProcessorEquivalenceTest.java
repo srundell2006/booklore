@@ -290,8 +290,8 @@ class ProcessorEquivalenceTest {
             when(bookRepository.save(any(BookEntity.class))).thenAnswer(inv -> saved = inv.getArgument(0));
             if (c.existing()) {
                 BookEntity existing = existingBook();
-                when(bookRepository.findByLibraryIdAndLibraryPathIdAndFileSubPathAndFileName(3L, 4L, c.subPath(), c.fileName()))
-                        .thenReturn(Optional.of(existing));
+                when(bookRepository.findBookFormatsByLibraryIdAndLibraryPathIdAndFileSubPathAndFileName(3L, 4L, c.subPath(), c.fileName()))
+                        .thenReturn(List.of(existing.getPrimaryBookFile()));
             }
         }
 

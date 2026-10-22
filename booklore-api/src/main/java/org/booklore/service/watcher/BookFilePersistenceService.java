@@ -103,14 +103,15 @@ public class BookFilePersistenceService {
         return books.size();
     }
 
-    @Transactional(readOnly = true)
-    public Optional<BookEntity> findByLibraryPathSubPathAndFileName(long libraryPathId, String fileSubPath, String fileName) {
-        return bookRepository.findByLibraryPath_IdAndFileSubPathAndFileName(libraryPathId, fileSubPath, fileName);
-    }
-
+    /**
+     * The file stored at exactly this path. The database also returns files whose path only compares equal to it in its
+     * collation, ignoring case and possibly accents; those are other files, and an event for this path is not about them.
+     */
     @Transactional(readOnly = true)
     public Optional<BookFileEntity> findBookFileByLibraryPathSubPathAndFileName(long libraryPathId, String fileSubPath, String fileName) {
-        return bookFileRepository.findByLibraryPathIdAndFileSubPathAndFileName(libraryPathId, fileSubPath, fileName);
+        return bookFileRepository.findAllByLibraryPathIdAndFileSubPathAndFileName(libraryPathId, fileSubPath, fileName).stream()
+                .filter(file -> file.isAt(fileSubPath, fileName))
+                .findFirst();
     }
 
     @Transactional

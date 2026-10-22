@@ -469,7 +469,7 @@ class ParallelBookImporterIT {
 
     private Long bookIdOf(LibraryEntity library, String subPath, String fileName) {
         return tx.execute(status -> bookAdditionalFileRepository
-                .findByLibraryPath_IdAndFileSubPathAndFileName(library.getLibraryPaths().getFirst().getId(), subPath, fileName)
+                .findExactlyAt(library.getLibraryPaths().getFirst().getId(), subPath, fileName)
                 .map(file -> file.getBook().getId())
                 .orElse(null));
     }

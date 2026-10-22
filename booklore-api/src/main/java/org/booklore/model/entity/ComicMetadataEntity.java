@@ -255,4 +255,31 @@ public class ComicMetadataEntity {
                 && Boolean.TRUE.equals(this.teamsLocked)
                 && Boolean.TRUE.equals(this.locationsLocked);
     }
+
+    public boolean isAnyFieldLocked() {
+        return Boolean.TRUE.equals(this.issueNumberLocked)
+                || Boolean.TRUE.equals(this.volumeNameLocked)
+                || Boolean.TRUE.equals(this.volumeNumberLocked)
+                || Boolean.TRUE.equals(this.storyArcLocked)
+                || Boolean.TRUE.equals(this.storyArcNumberLocked)
+                || Boolean.TRUE.equals(this.alternateSeriesLocked)
+                || Boolean.TRUE.equals(this.alternateIssueLocked)
+                || Boolean.TRUE.equals(this.imprintLocked)
+                || Boolean.TRUE.equals(this.formatLocked)
+                || Boolean.TRUE.equals(this.blackAndWhiteLocked)
+                || Boolean.TRUE.equals(this.mangaLocked)
+                || Boolean.TRUE.equals(this.readingDirectionLocked)
+                || Boolean.TRUE.equals(this.webLinkLocked)
+                || Boolean.TRUE.equals(this.notesLocked)
+                || Boolean.TRUE.equals(this.creatorsLocked)
+                || Boolean.TRUE.equals(this.pencillersLocked)
+                || Boolean.TRUE.equals(this.inkersLocked)
+                || Boolean.TRUE.equals(this.coloristsLocked)
+                || Boolean.TRUE.equals(this.letterersLocked)
+                || Boolean.TRUE.equals(this.coverArtistsLocked)
+                || Boolean.TRUE.equals(this.editorsLocked)
+                || Boolean.TRUE.equals(this.charactersLocked)
+                || Boolean.TRUE.equals(this.teamsLocked)
+                || Boolean.TRUE.equals(this.locationsLocked);
+    }
 }

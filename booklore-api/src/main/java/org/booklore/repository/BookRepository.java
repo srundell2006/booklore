@@ -1,6 +1,7 @@
 package org.booklore.repository;
 
 import org.booklore.model.entity.BookEntity;
+import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.projection.BookAuthorRow;
@@ -51,11 +52,6 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
 
     @Query("SELECT DISTINCT b FROM BookEntity b JOIN b.bookFiles bf WHERE b.libraryPath.id = :libraryPathId AND bf.fileSubPath = :fileSubPath AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false)")
     List<BookEntity> findAllByLibraryPathIdAndFileSubPath(@Param("libraryPathId") Long libraryPathId, @Param("fileSubPath") String fileSubPath);
-
-    @Query("SELECT b FROM BookEntity b JOIN b.bookFiles bf WHERE b.libraryPath.id = :libraryPathId AND bf.fileSubPath = :fileSubPath AND bf.fileName = :fileName AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false)")
-    Optional<BookEntity> findByLibraryPath_IdAndFileSubPathAndFileName(@Param("libraryPathId") Long libraryPathId,
-                                                                       @Param("fileSubPath") String fileSubPath,
-                                                                       @Param("fileName") String fileName);
 
     @Query("SELECT b.id FROM BookEntity b WHERE b.libraryPath.id IN :libraryPathIds AND (b.deleted IS NULL OR b.deleted = false)")
     List<Long> findAllBookIdsByLibraryPathIdIn(@Param("libraryPathIds") Collection<Long> libraryPathIds);
@@ -167,18 +163,21 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     List<BookEntity> findBooksWithFilesUnderPath(@Param("libraryPathId") Long libraryPathId,
                                                   @Param("folderPath") String folderPath);
 
-    @Query(value = """
-        SELECT b.*
-        FROM book b
-        JOIN book_file bf ON bf.book_id = b.id
-        WHERE b.library_id = :libraryId
-          AND b.library_path_id = :libraryPathId
-          AND bf.file_sub_path = :fileSubPath
-          AND bf.file_name = :fileName
-          AND bf.is_book = true
-        LIMIT 1
-    """, nativeQuery = true)
-    Optional<BookEntity> findByLibraryIdAndLibraryPathIdAndFileSubPathAndFileName(
+    /**
+     * The book formats stored at this folder and name of the library path, with their books, deleted ones included, as
+     * the database compares paths: through the columns' collation, which on MariaDB ignores case and possibly accents.
+     * So several can come back, and some at another path; the caller picks the one at exactly the path.
+     */
+    @Query("""
+            SELECT bf FROM BookFileEntity bf
+            JOIN FETCH bf.book b
+            WHERE b.library.id = :libraryId
+              AND b.libraryPath.id = :libraryPathId
+              AND bf.fileSubPath = :fileSubPath
+              AND bf.fileName = :fileName
+              AND bf.isBookFormat = true
+            """)
+    List<BookFileEntity> findBookFormatsByLibraryIdAndLibraryPathIdAndFileSubPathAndFileName(
             @Param("libraryId") Long libraryId,
             @Param("libraryPathId") Long libraryPathId,
             @Param("fileSubPath") String fileSubPath,

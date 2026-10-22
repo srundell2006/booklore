@@ -146,9 +146,8 @@ public class FileAsBookProcessor {
     }
 
     private void createAdditionalBookFile(BookEntity bookEntity, LibraryFile file) {
-        Optional<BookFileEntity> existing = bookAdditionalFileRepository
-                .findByLibraryPath_IdAndFileSubPathAndFileName(
-                        file.getLibraryPathEntity().getId(), file.getFileSubPath(), file.getFileName());
+        Optional<BookFileEntity> existing = bookAdditionalFileRepository.findExactlyAt(
+                file.getLibraryPathEntity().getId(), file.getFileSubPath(), file.getFileName());
 
         if (existing.isPresent()) {
             log.debug("Additional file already exists: {}", file.getFileName());

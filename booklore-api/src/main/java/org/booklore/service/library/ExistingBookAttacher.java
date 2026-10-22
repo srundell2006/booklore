@@ -104,7 +104,7 @@ public class ExistingBookAttacher {
 
     private boolean attachFile(BookEntity book, LibraryFile file, String label) {
         // Another scan, or the watcher, may have stored it meanwhile
-        if (bookAdditionalFileRepository.findByLibraryPath_IdAndFileSubPathAndFileName(
+        if (bookAdditionalFileRepository.findExactlyAt(
                 file.getLibraryPathEntity().getId(), file.getFileSubPath(), file.getFileName()).isPresent()) {
             log.debug("{} is already stored, not attaching it to {}", file.getFileName(), label);
             return false;

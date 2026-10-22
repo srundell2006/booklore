@@ -450,9 +450,8 @@ public class ParallelBookImporter {
 
     /** Attaches one additional format to the saved book, and writes the cover it made for a book of the other kind. */
     private void attach(PersistedBook persisted, LibraryFile file, PreparedAttachment prepared) {
-        Optional<BookFileEntity> existing = bookAdditionalFileRepository
-                .findByLibraryPath_IdAndFileSubPathAndFileName(
-                        file.getLibraryPathEntity().getId(), file.getFileSubPath(), file.getFileName());
+        Optional<BookFileEntity> existing = bookAdditionalFileRepository.findExactlyAt(
+                file.getLibraryPathEntity().getId(), file.getFileSubPath(), file.getFileName());
         if (existing.isPresent()) {
             log.debug("Additional file already exists: {}", file.getFileName());
             return;

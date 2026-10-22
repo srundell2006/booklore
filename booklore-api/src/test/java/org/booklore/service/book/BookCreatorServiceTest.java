@@ -17,6 +17,7 @@ import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.time.Instant;
 import java.util.ArrayList;
 import java.util.HashSet;
 import java.util.List;
@@ -242,12 +243,12 @@ class BookCreatorServiceTest {
     @Test
     void createShellBook_existingBook_isUpdatedWithTheFactsAndNotSaved() {
         LibraryFile libraryFile = libraryFile(false);
-        BookEntity existing = BookEntity.builder().id(9L).deleted(true).bookFiles(new ArrayList<>()).build();
-        BookFileEntity file = BookFileEntity.builder().fileName("Book").fileSubPath("Author").isBookFormat(true)
+        BookEntity existing = BookEntity.builder().id(9L).deleted(true).deletedAt(Instant.now()).bookFiles(new ArrayList<>()).build();
+        BookFileEntity file = BookFileEntity.builder().book(existing).fileName("Book").fileSubPath("Author").isBookFormat(true)
                 .folderBased(true).initialHash("old").currentHash("old").fileSizeKb(1L).build();
         existing.getBookFiles().add(file);
-        when(bookRepository.findByLibraryIdAndLibraryPathIdAndFileSubPathAndFileName(1L, 2L, "Author", "Book"))
-                .thenReturn(Optional.of(existing));
+        when(bookRepository.findBookFormatsByLibraryIdAndLibraryPathIdAndFileSubPathAndFileName(1L, 2L, "Author", "Book"))
+                .thenReturn(List.of(file));
 
         BookCreatorService.ShellBook shell;
         try (MockedStatic<FileFingerprint> fingerprint = mockStatic(FileFingerprint.class);
@@ -258,13 +259,77 @@ class BookCreatorServiceTest {
         }
 
         assertFalse(shell.created());
+        assertTrue(shell.restored());
         assertSame(existing, shell.entity());
         assertFalse(existing.getDeleted());
+        assertNull(existing.getDeletedAt());
         assertEquals("abc", file.getInitialHash());
         assertEquals("abc", file.getCurrentHash());
         assertEquals(42L, file.getFileSizeKb());
         assertFalse(file.isFolderBased());
         verify(bookRepository, never()).saveAndFlush(any());
+    }
+
+    @Test
+    void createShellBook_existingBookNotDeleted_isReusedButNotRestored() {
+        BookEntity existing = BookEntity.builder().id(9L).deleted(false).bookFiles(new ArrayList<>()).build();
+        BookFileEntity file = BookFileEntity.builder().book(existing).fileName("Book").fileSubPath("Author").isBookFormat(true).build();
+        existing.getBookFiles().add(file);
+        when(bookRepository.findBookFormatsByLibraryIdAndLibraryPathIdAndFileSubPathAndFileName(1L, 2L, "Author", "Book"))
+                .thenReturn(List.of(file));
+
+        BookCreatorService.ShellBook shell = bookCreatorService.createShellBook(libraryFile(false), BookFileType.EPUB, new FileFacts("abc", 42L));
+
+        assertFalse(shell.created());
+        assertFalse(shell.restored());
+        assertSame(existing, shell.entity());
+    }
+
+    @Test
+    void createShellBook_existingBook_getsTheHashOnTheFileAtThePathNotOnItsPrimary() {
+        BookEntity existing = BookEntity.builder().id(9L).bookFiles(new ArrayList<>()).build();
+        BookFileEntity primary = BookFileEntity.builder().book(existing).fileName("Book.epub").fileSubPath("Author")
+                .isBookFormat(true).bookType(BookFileType.EPUB).initialHash("epub").currentHash("epub").build();
+        BookFileEntity atPath = BookFileEntity.builder().book(existing).fileName("Book").fileSubPath("Author")
+                .isBookFormat(true).bookType(BookFileType.PDF).initialHash("old").currentHash("old").build();
+        existing.getBookFiles().add(primary);
+        existing.getBookFiles().add(atPath);
+        when(bookRepository.findBookFormatsByLibraryIdAndLibraryPathIdAndFileSubPathAndFileName(1L, 2L, "Author", "Book"))
+                .thenReturn(List.of(atPath));
+
+        bookCreatorService.createShellBook(libraryFile(false), BookFileType.PDF, new FileFacts("abc", 42L));
+
+        assertEquals("abc", atPath.getCurrentHash());
+        assertEquals("epub", primary.getCurrentHash());
+        assertEquals("epub", primary.getInitialHash());
+    }
+
+    @Test
+    void createShellBook_bookAtAPathThatOnlyComparesEqual_isLeftAloneAndTheFileGetsABookOfItsOwn() {
+        // What a case- and accent-insensitive collation returns for 'Author/Book': other files, at other paths
+        BookEntity other = BookEntity.builder().id(9L).deleted(true).bookFiles(new ArrayList<>()).build();
+        BookFileEntity otherCase = BookFileEntity.builder().book(other).fileName("BOOK").fileSubPath("author")
+                .isBookFormat(true).initialHash("old").currentHash("old").fileSizeKb(1L).build();
+        BookFileEntity accented = BookFileEntity.builder().book(other).fileName("Bo\u0301ok").fileSubPath("Author")
+                .isBookFormat(true).initialHash("old").currentHash("old").fileSizeKb(1L).build();
+        other.getBookFiles().add(otherCase);
+        other.getBookFiles().add(accented);
+        when(bookRepository.findBookFormatsByLibraryIdAndLibraryPathIdAndFileSubPathAndFileName(1L, 2L, "Author", "Book"))
+                .thenReturn(List.of(otherCase, accented));
+        when(bookRepository.saveAndFlush(any(BookEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+
+        BookCreatorService.ShellBook shell = bookCreatorService.createShellBook(libraryFile(false), BookFileType.EPUB, new FileFacts("abc", 42L));
+
+        assertTrue(shell.created());
+        assertNotSame(other, shell.entity());
+        assertEquals("Book", shell.entity().getPrimaryBookFile().getFileName());
+        assertEquals("Author", shell.entity().getPrimaryBookFile().getFileSubPath());
+        assertTrue(other.getDeleted());
+        for (BookFileEntity file : List.of(otherCase, accented)) {
+            assertEquals("old", file.getCurrentHash());
+            assertEquals("old", file.getInitialHash());
+            assertEquals(1L, file.getFileSizeKb());
+        }
     }
 
     @Test
@@ -279,10 +344,10 @@ class BookCreatorServiceTest {
     @Test
     void createShellBook_existingBookWithUnknownSize_isGivenZero() {
         BookEntity existing = BookEntity.builder().id(9L).bookFiles(new ArrayList<>()).build();
-        BookFileEntity file = BookFileEntity.builder().fileName("Book").fileSizeKb(5L).build();
+        BookFileEntity file = BookFileEntity.builder().book(existing).fileName("Book").fileSubPath("Author").fileSizeKb(5L).build();
         existing.getBookFiles().add(file);
-        when(bookRepository.findByLibraryIdAndLibraryPathIdAndFileSubPathAndFileName(1L, 2L, "Author", "Book"))
-                .thenReturn(Optional.of(existing));
+        when(bookRepository.findBookFormatsByLibraryIdAndLibraryPathIdAndFileSubPathAndFileName(1L, 2L, "Author", "Book"))
+                .thenReturn(List.of(file));
 
         bookCreatorService.createShellBook(libraryFile(false), BookFileType.EPUB, new FileFacts("abc", null));
 
