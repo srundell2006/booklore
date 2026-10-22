@@ -65,7 +65,11 @@ public class BookFileEntity {
     @Column(name = "current_hash", length = 128)
     private String currentHash;
 
-    @Column(name = "alt_format_current_hash", insertable = false, updatable = false)
+    // A column MariaDB computes and indexes (V91): the current hash of a book format, null for any other file. The
+    // definition only shapes the schema H2 generates for tests, so lookups by this column find there what they find
+    // on MariaDB; the application's schema comes from Flyway.
+    @Column(name = "alt_format_current_hash", insertable = false, updatable = false,
+            columnDefinition = "varchar(128) generated always as (case when is_book then current_hash end)")
     private String altFormatCurrentHash;
 
     @Column(name = "description", columnDefinition = "TEXT")

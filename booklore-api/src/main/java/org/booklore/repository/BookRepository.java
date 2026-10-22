@@ -27,7 +27,12 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     @Query("SELECT b FROM BookEntity b JOIN b.bookFiles bf WHERE bf.currentHash = :currentHash AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false)")
     Optional<BookEntity> findByCurrentHash(@Param("currentHash") String currentHash);
 
-    @Query("SELECT b FROM BookEntity b JOIN FETCH b.bookFiles bf WHERE bf.currentHash = :currentHash AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false OR b.deletedAt > :cutoff)")
+    /**
+     * The book with a book format of this hash that is not deleted, or was deleted after the cutoff. Looks the hash up
+     * in alt_format_current_hash, which holds the current hash of exactly the book formats and is indexed, where
+     * current_hash is not: the watcher runs this for every new file.
+     */
+    @Query("SELECT b FROM BookEntity b JOIN FETCH b.bookFiles bf WHERE bf.altFormatCurrentHash = :currentHash AND bf.isBookFormat = true AND (b.deleted IS NULL OR b.deleted = false OR b.deletedAt > :cutoff)")
     Optional<BookEntity> findByCurrentHashIncludingRecentlyDeleted(@Param("currentHash") String currentHash, @Param("cutoff") Instant cutoff);
 
     Optional<BookEntity> findByBookCoverHash(String bookCoverHash);

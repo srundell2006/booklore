@@ -352,4 +352,57 @@ class LibraryScanRepositoryTest {
             assertThat(statistics().getPrepareStatementCount()).isEqualTo(statements);
         }
     }
+
+    @Nested
+    class MovedFileLookup {
+
+        private BookFileEntity hashed(BookEntity book, String name, String hash, boolean bookFormat) {
+            BookFileEntity file = file(book, "Author/Title", name, bookFormat ? BookFileType.EPUB : BookFileType.PDF, bookFormat);
+            file.setCurrentHash(hash);
+            entityManager.flush();
+            return file;
+        }
+
+        private BookEntity deletedAt(Instant when) {
+            BookEntity book = book(library, libraryPath, true);
+            book.setDeletedAt(when);
+            entityManager.flush();
+            return book;
+        }
+
+        @Test
+        void findsTheBookWhoseBookFormatHasTheHashIfItIsNotDeletedOrWasDeletedAfterTheCutoff() {
+            Instant now = Instant.now();
+            BookEntity live = book(library, libraryPath, false);
+            BookFileEntity liveEpub = hashed(live, "Live.epub", "h-live", true);
+            hashed(live, "cover.jpg", "h-cover", false);
+            BookEntity justDeleted = deletedAt(now.minusSeconds(10));
+            hashed(justDeleted, "Just Deleted.epub", "h-recent", true);
+            BookEntity longDeleted = deletedAt(now.minusSeconds(600));
+            hashed(longDeleted, "Long Deleted.epub", "h-old", true);
+            clear();
+
+            Instant cutoff = now.minusSeconds(60);
+            assertThat(bookRepository.findByCurrentHashIncludingRecentlyDeleted("h-live", cutoff)).get()
+                    .satisfies(book -> {
+                        assertThat(book.getId()).isEqualTo(live.getId());
+                        assertThat(book.getBookFiles()).extracting(BookFileEntity::getId).containsExactly(liveEpub.getId());
+                    });
+            assertThat(bookRepository.findByCurrentHashIncludingRecentlyDeleted("h-recent", cutoff)).get()
+                    .extracting(BookEntity::getId).isEqualTo(justDeleted.getId());
+            assertThat(bookRepository.findByCurrentHashIncludingRecentlyDeleted("h-old", cutoff)).isEmpty();
+            assertThat(bookRepository.findByCurrentHashIncludingRecentlyDeleted("h-cover", cutoff)).isEmpty();
+        }
+
+        @Test
+        void theIndexedHashColumnHoldsTheCurrentHashOfBookFormatsOnlyAsOnMariaDb() {
+            BookEntity book = book(library, libraryPath, false);
+            BookFileEntity epub = hashed(book, "Title.epub", "h-epub", true);
+            BookFileEntity cover = hashed(book, "cover.jpg", "h-cover", false);
+            clear();
+
+            assertThat(entityManager.find(BookFileEntity.class, epub.getId()).getAltFormatCurrentHash()).isEqualTo("h-epub");
+            assertThat(entityManager.find(BookFileEntity.class, cover.getId()).getAltFormatCurrentHash()).isNull();
+        }
+    }
 }
