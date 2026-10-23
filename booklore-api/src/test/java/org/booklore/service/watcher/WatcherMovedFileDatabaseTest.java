@@ -421,6 +421,24 @@ class WatcherMovedFileDatabaseTest {
         assertThat(bookRepository.countIncludingDeletedByLibraryId(library.getId())).isEqualTo(2);
     }
 
+    @Test
+    void aStoredFolderAudiobookAnnouncedAgainIsNotLeftWaitingAsACopyOfItself() throws Exception {
+        Path folder = root.resolve("Audio/Dune");
+        audio(folder.resolve("Dune - 01.mp3"));
+        audio(folder.resolve("Dune - 02.mp3"));
+        long bookId = storedBook(new StoredFile("Audio", "Dune", FileFingerprint.generateFolderHash(folder), BookFileType.AUDIOBOOK, true));
+
+        // What LibraryWatchService.handleOverflow sends for the folder's watch key
+        libraryFileEventProcessor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, library.getId(), folder, true);
+
+        // Handled, and not left waiting: an in-app move in the library would wait out the drain timeout meanwhile
+        waitUntil(() -> !libraryFileEventProcessor.hasPendingEventsForPaths(Set.of(root)));
+        assertThat(libraryFileEventProcessor.waitsAsCopy(folder)).isFalse();
+        assertThat(pathsOf(bookId)).containsExactly("Audio/Dune");
+        assertNotDeleted(bookId);
+        assertThat(bookRepository.countIncludingDeletedByLibraryId(library.getId())).isEqualTo(1);
+    }
+
     // ========== fixture ==========
 
     /** What the watcher does with the deletion of a stored file: the pool holds its book for a grace period. */

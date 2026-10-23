@@ -794,6 +794,20 @@ class BookFileTransactionalHandlerTest {
         }
 
         @Test
+        void aFolderAudiobookStoredAtThisVeryFolderIsNeitherMovedHereNorACopyOfItself() {
+            // What an overflow re-walk sends for the folder of a stored folder audiobook
+            when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
+            when(bookFilePersistenceService.isStoredByALiveBook(library, Path.of("/library/sub/audiobook"))).thenReturn(true);
+            when(bookFilePersistenceService.findBookCopied(eq("folderhash"), any())).thenReturn(Optional.of(20L));
+
+            org.assertj.core.api.Assertions.assertThat(handler.handleNewFolderAudiobookUnlessCopy(1L, Path.of("/library/sub/audiobook")))
+                    .isEmpty();
+
+            verify(bookFilePersistenceService, never()).findMovedFile(any(), any(), any());
+            verify(bookFilePersistenceService, never()).findBookCopied(any(), any());
+        }
+
+        @Test
         void aCopyOfAStoredFolderAudiobookIsANewOneOnceItWaited() {
             when(pendingDeletionPool.matchByHash(anyString())).thenReturn(Optional.empty());
             when(bookFilePersistenceService.findMovedFile(anyString(), any(), any())).thenReturn(Optional.empty());

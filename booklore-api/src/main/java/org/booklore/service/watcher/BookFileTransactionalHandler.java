@@ -229,9 +229,12 @@ public class BookFileTransactionalHandler {
             return Optional.empty();
         }
 
-        // A folder audiobook is stored with its folder's hash, so it is found moved, or copied, as a file is
+        // A folder audiobook is stored with its folder's hash, so it is found moved, or copied, as a file is; one that
+        // a book stores at this very folder, announced again as an overflow re-walk does, is neither, nor its own copy
         Instant cutoff = Instant.now().minus(60, ChronoUnit.SECONDS);
-        Optional<BookFileEntity> movedFrom = bookFilePersistenceService.findMovedFile(folderHash, folderPath, cutoff);
+        boolean storedHere = bookFilePersistenceService.isStoredByALiveBook(libraryEntity, folderPath);
+        Optional<BookFileEntity> movedFrom = storedHere
+                ? Optional.empty() : bookFilePersistenceService.findMovedFile(folderHash, folderPath, cutoff);
         if (movedFrom.isPresent()) {
             bookFilePersistenceService.updatePathIfChanged(movedFrom.get(), libraryEntity, folderPath);
             log.info("[CREATE] Folder audiobook '{}' recognized as moved, updated existing book's path", folderPath);
@@ -239,7 +242,7 @@ public class BookFileTransactionalHandler {
                     LogNotification.info("Finished processing folder audiobook: " + folderPath), Set.of(ADMIN, MANAGE_LIBRARY));
             return Optional.empty();
         }
-        if (leaveCopies) {
+        if (leaveCopies && !storedHere) {
             Optional<Long> copied = bookFilePersistenceService.findBookCopied(folderHash, cutoff);
             if (copied.isPresent()) {
                 log.info("[CREATE] Folder audiobook '{}' copies that of book id={}, which is still there; left until "
