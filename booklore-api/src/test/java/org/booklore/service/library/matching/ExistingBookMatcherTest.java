@@ -536,6 +536,17 @@ class ExistingBookMatcherTest {
         }
 
         @Test
+        void aBookFoundAsTheFirstVolumeIsNotTurnedDownForItsSeriesNumber() {
+            // Only a book found through the name without its " (1)" may be another volume than 1: these are found as
+            // volume 1, as before
+            assertThat(shellMatch(file("A/Kate Atkinson", "Case Histories (1).epub"), shellNumber(10, "Case Histories 1", 2, "Kate Atkinson")))
+                    .isEqualTo(new Match(10, Kind.FILELESS, "title and author agree with book#10 \"Case Histories 1\""));
+            ShellCandidate saga = ShellCandidate.of(8, PATH, false, true, "Saga", "Volume 1", 3f, List.of("Brian K. Vaughan"));
+            assertThat(shellMatch(file("V/Brian K. Vaughan", "Saga (1).epub"), saga))
+                    .isEqualTo(new Match(8, Kind.FILELESS, "title and author agree with book#8 \"Saga\""));
+        }
+
+        @Test
         void alikeBooksOfTheTitle() {
             assertThat(shellMatch(file("A/Kate Atkinson", "Started Early, Took My Dog (1).epub"),
                     shell(7, "Started Early, Took My Dog", "Kate Atkinson"), shell(3, "Started Early, Took My Dog", "Kate Atkinson")))
