@@ -506,6 +506,59 @@ class LibraryFileEventProcessorTest {
         }
 
         @Test
+        void aCopyWaitsOnWhileAFileThatIsNoBookFileIsStillWritten() throws Exception {
+            // A mover that copies a tree writes its cover art and extras too, and removes no source until it is done
+            processor.setCopySourceWaitMs(4000);
+            Path copy = settledFile("copy.epub");
+            when(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(1L, copy))
+                    .thenReturn(Optional.of(new BookFileTransactionalHandler.CopyOfAStoredFile(7L, "hash")));
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, copy, false);
+            waitUntil(() -> processor.waitsAsCopy(copy));
+
+            Path extra = Files.writeString(tempDir.resolve("extras.mkv"), "the start");
+            processor.noteFileArrived(1L, extra);
+            writeFor(extra, 12000);
+
+            verify(bookFileTransactionalHandler, never()).handleNewBookFile(1L, copy);
+            assertThat(processor.waitsAsCopy(copy)).isTrue();
+            // Taken for a copy once the library is quiet
+            verify(bookFileTransactionalHandler, timeout(12000)).handleNewBookFile(1L, copy);
+            // The file is no book: nothing is imported from it
+            verify(bookFileTransactionalHandler, never()).handleNewBookFileUnlessCopy(1L, extra);
+        }
+
+        @Test
+        void aCopyWaitsOnWhileAFileThatIsNoBookFileIsStillWrittenInANewFolderThatGaveNoEventForIt() throws Exception {
+            // The first file of a new folder is written before the folder is watched, so no event comes for it; the
+            // folder's handling finds it still being written. The wait is longer than the folder's debounce, as the
+            // production wait is.
+            processor.setCopySourceWaitMs(7000);
+            Path copy = settledFile("copy.epub");
+            when(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(1L, copy))
+                    .thenReturn(Optional.of(new BookFileTransactionalHandler.CopyOfAStoredFile(7L, "hash")));
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, copy, false);
+            waitUntil(() -> processor.waitsAsCopy(copy));
+
+            Path folder = Files.createDirectory(tempDir.resolve("Extras"));
+            Path extra = Files.writeString(folder.resolve("making of.mkv"), "the start");
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, folder, true);
+            writeFor(extra, 15000);
+
+            verify(bookFileTransactionalHandler, never()).handleNewBookFile(1L, copy);
+            assertThat(processor.waitsAsCopy(copy)).isTrue();
+            verify(bookFileTransactionalHandler, timeout(15000)).handleNewBookFile(1L, copy);
+        }
+
+        /** Appends to the file every half second for this long, as a mover writing it does. */
+        private void writeFor(Path file, long millis) throws Exception {
+            long until = System.currentTimeMillis() + millis;
+            while (System.currentTimeMillis() < until) {
+                Files.writeString(file, " and more", StandardOpenOption.APPEND);
+                Thread.sleep(500);
+            }
+        }
+
+        @Test
         void aFileWhoseModificationTimeIsAheadOfTheClockHoldsTheCopiesNoLongerThanAFileStillBeingWritten() throws Exception {
             // A share whose clock runs ahead of this host stamps a file it has finished with a time still to come: it
             // looks written to until then, but it no longer changes

@@ -313,6 +313,39 @@ class WatcherMovedFileDatabaseTest {
     }
 
     @Test
+    void aFileMovedByCopyingIntoANewFolderMovesTheBookWhenTheMoverWritesAFileThatIsNoBookFileForLongerThanTheWait() throws Exception {
+        // The mover then writes an extra into the folder, no book file, for longer than the wait, and removes the source
+        // once it is done. The wait is longer than the 3 s between checks of a file still written, as the production
+        // wait is.
+        libraryFileEventProcessor.setCopySourceWaitMs(4000);
+        Path source = epub(root.resolve("Asimov/Foundation.epub"), "Foundation " + System.nanoTime());
+        long bookId = storedBook("Asimov", "Foundation.epub", FileFingerprint.generateHash(source), false);
+        Path folder = Files.createDirectories(root.resolve("Moved"));
+        Path destination = settled(Files.copy(source, folder.resolve("Foundation.epub")));
+        libraryFileEventProcessor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, library.getId(), folder, true);
+        waitUntil(() -> libraryFileEventProcessor.waitsAsCopy(destination));
+
+        // What LibraryWatchService sends for a file that is no book file
+        Path extra = Files.writeString(folder.resolve("extras.mkv"), "the start");
+        libraryFileEventProcessor.noteFileArrived(library.getId(), extra);
+        long until = System.currentTimeMillis() + 10000;
+        while (System.currentTimeMillis() < until) {
+            Files.writeString(extra, " and more", StandardOpenOption.APPEND);
+            Thread.sleep(300);
+        }
+        assertThat(libraryFileEventProcessor.waitsAsCopy(destination)).isTrue();
+        Files.delete(source);
+        libraryFileEventProcessor.processEvent(StandardWatchEventKinds.ENTRY_DELETE, library.getId(), source, false);
+
+        waitUntil(() -> pathsOf(bookId).equals(List.of("Moved/Foundation.epub")));
+        // Past the grace period of the source's deletion, the book is still there, and it is the only one
+        Thread.sleep(9000);
+        assertThat(pathsOf(bookId)).containsExactly("Moved/Foundation.epub");
+        assertNotDeleted(bookId);
+        assertThat(bookRepository.countIncludingDeletedByLibraryId(library.getId())).isEqualTo(1);
+    }
+
+    @Test
     void bookPerFile_aBookFolderMovedByCopyingThenRemovedMovesItsBook() throws Exception {
         // GNU mv across file systems: the tree is copied, then removed, and the watcher reports the removed folder
         // as well as its file; both are held for deletion, and the one the copy does not take must not delete the book

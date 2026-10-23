@@ -47,7 +47,8 @@ public class LibraryFileEventProcessor {
     /**
      * How long a new file with the content of a stored file that is still there waits for that file to go before it
      * is taken for a copy: a mover that writes the destination before it removes the source removes it within this
-     * once it stops writing. The wait counts from the last file seen arriving or growing in the library.
+     * once it stops writing. The wait counts from the last file seen arriving or growing in the library, book file or
+     * not: a mover that is silent for this long, writing nothing the watcher can see, is taken to be done.
      */
     static final long COPY_SOURCE_WAIT_MS = 30000L;
     /**
@@ -212,6 +213,17 @@ public class LibraryFileEventProcessor {
     /** A file arrived in the library, or one is still being written: a copy into it may still be going on. */
     private void noteWrite(long libraryId) {
         lastWriteSeen.put(libraryId, clock.getAsLong());
+    }
+
+    /**
+     * A file that is no book file arrived in a library: nothing is imported from it, but a mover is at work there for
+     * as long as it writes it. A mover that copies a tree removes the sources only once it has written all of it, its
+     * cover art, extras and temporary files too, so the copies waiting in the library wait while it writes them.
+     */
+    public void noteFileArrived(long libraryId, Path fullPath) {
+        noteWrite(libraryId);
+        Path path = fullPath.toAbsolutePath().normalize();
+        scheduler.execute(() -> noteWritesWhileGrowing(libraryId, path));
     }
 
     private void handleEvent(FileEvent event) {
@@ -430,7 +442,7 @@ public class LibraryFileEventProcessor {
         var mode = library.getOrganizationMode() != null
                 ? library.getOrganizationMode() : LibraryOrganizationMode.AUTO_DETECT;
         switch (mode) {
-            case BOOK_PER_FILE -> handleEachFile(library.getId(), bookFilesUnder(folderPath));
+            case BOOK_PER_FILE -> handleEachFile(library.getId(), bookFilesUnder(library.getId(), folderPath));
             case BOOK_PER_FOLDER -> processFilesInFolderAsOneBook(library, folderPath, event);
             case AUTO_DETECT -> processFilesInFolderAutoDetected(library, folderPath, event);
         }
@@ -444,7 +456,7 @@ public class LibraryFileEventProcessor {
      */
     private void processFilesInFolderAutoDetected(LibraryEntity library, Path folderPath, FileEvent event) {
         Map<Path, List<Path>> filesByFolder = new LinkedHashMap<>();
-        for (Path file : bookFilesUnder(folderPath)) {
+        for (Path file : bookFilesUnder(library.getId(), folderPath)) {
             filesByFolder.computeIfAbsent(file.getParent(), parent -> new ArrayList<>()).add(file);
         }
         Set<Path> libraryPaths = libraryPaths(library);
@@ -549,14 +561,25 @@ public class LibraryFileEventProcessor {
         return true;
     }
 
-    /** The book files in the folder and below it, but for those in a folder marked to be ignored. */
-    private List<Path> bookFilesUnder(Path folderPath) {
+    /**
+     * The book files in the folder and below it, but for those in a folder marked to be ignored. Other files there
+     * still being written are noted as writes while they grow: a mover writes the first file of a new folder before
+     * the folder is watched, so no event comes for it, and a large one can outlast a copy's wait.
+     */
+    private List<Path> bookFilesUnder(long libraryId, Path folderPath) {
         try (var stream = Files.walk(folderPath)) {
-            return stream.filter(Files::isRegularFile)
-                    .filter(p -> !isUnderIgnoredDirectory(p, folderPath))
-                    .filter(p -> isBookFile(p.getFileName().toString()))
-                    .sorted()
-                    .toList();
+            List<Path> bookFiles = new ArrayList<>();
+            stream.filter(Files::isRegularFile).forEach(p -> {
+                if (!isBookFile(p.getFileName().toString())) {
+                    if (beingWritten(p)) {
+                        noteWritesWhileGrowing(libraryId, p);
+                    }
+                } else if (!isUnderIgnoredDirectory(p, folderPath)) {
+                    bookFiles.add(p);
+                }
+            });
+            bookFiles.sort(Comparator.naturalOrder());
+            return bookFiles;
         } catch (IOException | UncheckedIOException e) {
             log.warn("[ERROR] Walking folder '{}': {}", folderPath, e.getMessage());
             return List.of();
@@ -597,7 +620,7 @@ public class LibraryFileEventProcessor {
      * copy becomes one book after the wait, as it did at once before.
      */
     private void processFilesInFolderAsOneBook(LibraryEntity library, Path folderPath, FileEvent event) {
-        List<Path> bookFiles = bookFilesUnder(folderPath).stream()
+        List<Path> bookFiles = bookFilesUnder(library.getId(), folderPath).stream()
                 // A file a book has at its path is no new file: it would be taken for a copy of itself, and a folder
                 // that comes back from waiting, or from a wait for its files to be written, holds the files the pool
                 // gave their books meanwhile

@@ -73,7 +73,14 @@ public class LibraryWatchService {
                             : watches.containsKey(fullPath);
 
                     boolean isRelevantFile = !isDir && isRelevantBookFile(fullPath);
-                    if (!isDir && !isRelevantFile) continue;
+                    if (!isDir && !isRelevantFile) {
+                        // No book, but a mover writing it is still at work in the library
+                        WatchEntry watched = watches.get(directory);
+                        if (kind == StandardWatchEventKinds.ENTRY_CREATE && watched != null) {
+                            eventProcessor.noteFileArrived(watched.libraryId(), fullPath);
+                        }
+                        continue;
+                    }
 
                     if (isDir && kind == StandardWatchEventKinds.ENTRY_CREATE) {
                         WatchEntry parentEntry = watches.get(directory);
