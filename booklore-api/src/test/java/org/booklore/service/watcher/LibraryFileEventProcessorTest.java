@@ -865,7 +865,14 @@ class LibraryFileEventProcessorTest {
         @Test
         void bookPerFolder_aFolderWaitsForAFileStillBeingWrittenNoLongerThanANewFileWaitsToSettle() throws Exception {
             library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
-            processor.setStabilityMaxWaitMs(4000);
+            processor.setStabilityMaxWaitMs(3000);
+            processor.setCopySourceWaitMs(6000);
+            // A copy elsewhere in the library waits for the mover meanwhile
+            Path copy = settled(tempDir.resolve("copy.epub"), "copied");
+            when(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(1L, copy))
+                    .thenReturn(Optional.of(new BookFileTransactionalHandler.CopyOfAStoredFile(7L, "hash")));
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, copy, false);
+            waitUntil(() -> processor.waitsAsCopy(copy));
             Path folder = Files.createDirectory(tempDir.resolve("Arriving"));
             Path big = Files.writeString(folder.resolve("Big.pdf"), "the start");
 
@@ -875,6 +882,9 @@ class LibraryFileEventProcessorTest {
             // Handled at the limit while still being written, as a single new file is
             verify(libraryProcessingService).processLibraryFiles(argThat(files -> files.size() == 1
                     && files.getFirst().getFileName().equals("Big.pdf")), eq(library));
+            // The file's growth past the limit still counts as the mover's writes: the copy waits until it is written
+            verify(bookFileTransactionalHandler, never()).handleNewBookFile(1L, copy);
+            verify(bookFileTransactionalHandler, timeout(15000)).handleNewBookFile(1L, copy);
         }
 
         @Test
