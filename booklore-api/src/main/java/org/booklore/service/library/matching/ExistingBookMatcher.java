@@ -42,7 +42,7 @@ import java.util.stream.Collectors;
  *   <li>be the only fileless book that qualifies, or one of several alike ones: the same titles, the same series
  *       number and the same authors, as a book entered twice or a paper copy's record next to its ebook's are. The
  *       file goes to one that is not physical, since an ebook file belongs with the record whose file was lost, else
- *       to the one with the lowest id. Books without authors are never alike: nothing tells them apart.</li>
+ *       to the one with the lowest id. Books without authors are never alike: nothing says they are one book.</li>
  * </ul>
  * A name ending in " (1)", as a browser names a second download, is also read without it, by the same rules:
  * "Started Early, Took My Dog (1).epub" is the fileless book "Started Early, Took My Dog" as well as its first volume.

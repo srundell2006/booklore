@@ -47,6 +47,11 @@ There is one tab-separated line per new file, with these columns:
   show the same key.
 - `reason` comes from the matcher. For example, `fileless: book#500 "Survival" has none of its
   authors in the path`, or `folder: 2 books in the folder have this title`.
+- An `attach-shell` reason also says when the file went to one of several alike fileless books
+  (the same title, series number and authors), as in `title and author agree with book#12
+  "Survival", one of 2 alike fileless books (book#12, book#40)`, and when a ` (1)` at the end of
+  its name was read as a copy, as in `title and author agree with book#7 "Saga" (" (1)" read as a
+  copy)`.
 
 The report ends with lines starting with `#`:
 - the count of each decision;
@@ -61,6 +66,7 @@ Useful cuts:
 ```bash
 grep -v '^#' report.tsv | awk -F'\t' '$1=="attach-shell"' | less        # every attach to a fileless book
 grep -v '^#' report.tsv | awk -F'\t' '$1=="new-book" && $4 ~ /is not by/' # files turned down on the author rule
+grep -v '^#' report.tsv | awk -F'\t' '$4 ~ /alike fileless books|read as a copy/' # attaches to alike books, or of a " (1)"
 ```
 
 ## The exports
