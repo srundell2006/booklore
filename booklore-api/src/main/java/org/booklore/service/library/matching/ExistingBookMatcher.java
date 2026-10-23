@@ -50,7 +50,9 @@ import java.util.stream.Collectors;
  * "Started Early, Took My Dog (1).epub" is the fileless book "Started Early, Took My Dog" as well as its first volume.
  * A book found only that way that says it is another volume than 1 is turned down when nothing else in the name is a
  * number, since " (1)" may as well mean volume 1: its series number is another (2, or 2.5), or its title or subtitle
- * names volumes after a series keyword and none of them is 1 ("Saga: Volume Two"). A bare number in a subtitle names
+ * names volumes after a series keyword and none of them is 1 ("Saga: Volume Two"). It may be the file's book all the
+ * same, if the " (1)" is a copy's: so when another book qualifies the file is ambiguous ("Saga (1).epub" against a
+ * "Saga" numbered 1 and one numbered 2), and only when none does is it no match. A bare number in a subtitle names
  * no volume: "Unbroken (1).epub" is the copy of "Unbroken: A World War II Story of Survival, Resilience, and
  * Redemption". With a leading series number ("03 - Title (1).epub") or another number in the name the " (1)" is a
  * copy, and the series number rule decides. A comic's " (1)" is an issue, and " (2)" to " (9)" stay volume numbers.
@@ -177,14 +179,24 @@ public final class ExistingBookMatcher {
         if (index == null || index.size() == 0) {
             return new NoMatch("the library has no fileless books");
         }
-        Map<Long, Accepted> accepted = new LinkedHashMap<>();
-        Map<Long, Rejection> rejected = new LinkedHashMap<>();
+        Findings findings = new Findings();
         List<TitleKey> readings = file.readings();
         for (int i = 0; i < readings.size(); i++) {
-            consider(file, readings.get(i), i == 0, null, index, accepted, rejected);
+            consider(file, readings.get(i), i == 0, null, index, findings);
         }
         for (SeriesReading reading : file.seriesReadings()) {
-            consider(file, reading.key(), reading.confirmed(), reading.seriesNumber(), index, accepted, rejected);
+            consider(file, reading.key(), reading.confirmed(), reading.seriesNumber(), index, findings);
+        }
+        Map<Long, Accepted> accepted = findings.accepted();
+        Map<Long, Rejection> rejected = findings.rejected();
+        if (!accepted.isEmpty() && !findings.doubted().isEmpty()) {
+            // Read as a copy, the books the " (1)" guard turned down qualify as well: the name does not say which
+            List<Long> bookIds = new ArrayList<>(accepted.keySet());
+            bookIds.addAll(findings.doubted().keySet());
+            return new Ambiguous(bookIds, bookIds.size() + " fileless books qualify: "
+                    + accepted.values().stream().map(a -> label(a.shell())).collect(Collectors.joining(", ")) + ", and "
+                    + findings.doubted().values().stream().map(ExistingBookMatcher::label).collect(Collectors.joining(", "))
+                    + " if \" (1)\" is a copy");
         }
         if (accepted.size() == 1) {
             Accepted only = accepted.values().iterator().next();
@@ -229,21 +241,37 @@ public final class ExistingBookMatcher {
     private record Accepted(ShellCandidate shell, boolean asCopy) {
     }
 
+    /**
+     * What the readings of one file found among the fileless books, by book id.
+     *
+     * @param accepted the books that qualify
+     * @param rejected why each book that does not qualify was turned down
+     * @param doubted  the books that qualify but for the " (1)" guard ({@link #anotherVolumeThanOne}), and qualify by
+     *                 no reading: the file may be such a book's copy all the same, so where another book qualifies, the
+     *                 name does not say which of them it is
+     */
+    private record Findings(Map<Long, Accepted> accepted, Map<Long, Rejection> rejected, Map<Long, ShellCandidate> doubted) {
+
+        Findings() {
+            this(new LinkedHashMap<>(), new LinkedHashMap<>(), new LinkedHashMap<>());
+        }
+    }
+
     private static void consider(FileEvidence file, TitleKey reading, boolean confirmed, Integer seriesNumber,
-                                 FilelessShellIndex index, Map<Long, Accepted> accepted, Map<Long, Rejection> rejected) {
+                                 FilelessShellIndex index, Findings findings) {
         Evidence evidence = Evidence.of(file, reading, confirmed);
         if (evidence == null) {
             return;
         }
         List<ShellCandidate> found = index.lookup(reading.identity());
         for (ShellCandidate shell : found) {
-            judge(file, reading, evidence, seriesNumber, shell, false, accepted, rejected);
+            judge(file, reading, evidence, seriesNumber, shell, false, findings);
         }
         if (readsAsACopy(reading)) {
             Set<Long> foundByNumber = found.stream().map(ShellCandidate::bookId).collect(Collectors.toSet());
             for (ShellCandidate shell : index.lookup(reading.identityWithoutCopy())) {
                 if (!foundByNumber.contains(shell.bookId())) {
-                    judge(file, reading, evidence, seriesNumber, shell, true, accepted, rejected);
+                    judge(file, reading, evidence, seriesNumber, shell, true, findings);
                 }
             }
         }
@@ -266,8 +294,8 @@ public final class ExistingBookMatcher {
      * @param asCopy whether the book was found only under the name without its " (1)"
      */
     private static void judge(FileEvidence file, TitleKey reading, Evidence evidence, Integer seriesNumber,
-                              ShellCandidate shell, boolean asCopy, Map<Long, Accepted> accepted, Map<Long, Rejection> rejected) {
-        if (accepted.containsKey(shell.bookId())) {
+                              ShellCandidate shell, boolean asCopy, Findings findings) {
+        if (findings.accepted().containsKey(shell.bookId())) {
             return;
         }
         Rejection rejection = rejection(file, reading, evidence, seriesNumber, shell);
@@ -275,14 +303,18 @@ public final class ExistingBookMatcher {
             // "Saga (1).epub" may as well be volume 1 as a copy of "Saga.epub"; only a leading series number or
             // another number in the name would say which
             rejection = anotherVolumeThanOne(shell);
+            if (rejection != null) {
+                findings.doubted().put(shell.bookId(), shell);
+            }
         }
         if (rejection == null) {
-            accepted.put(shell.bookId(), new Accepted(shell, asCopy));
-            rejected.remove(shell.bookId());
+            findings.accepted().put(shell.bookId(), new Accepted(shell, asCopy));
+            findings.rejected().remove(shell.bookId());
+            findings.doubted().remove(shell.bookId());
         } else {
             Rejection labelled = new Rejection(label(shell) + " " + rejection.why(), rejection.against());
             // Evidence against the book from one reading outweighs a want of evidence from another
-            rejected.merge(shell.bookId(), labelled, (first, next) -> first.against() || !next.against() ? first : next);
+            findings.rejected().merge(shell.bookId(), labelled, (first, next) -> first.against() || !next.against() ? first : next);
         }
     }
 
@@ -290,7 +322,8 @@ public final class ExistingBookMatcher {
      * Why the book is no volume 1, which a " (1)" may mean: its place in its series is another, fractions included, or
      * its titles name volumes after a series keyword and none of them is 1 ("Saga: Volume Two", "The Walking Dead: Vol.
      * 2: Miles Behind Us"). A bare number says nothing: "World War II" or "1936" in a subtitle is what a book is about.
-     * Null when nothing says so. Never evidence against the book, of which the file may be a copy all the same.
+     * Null when nothing says so. Never evidence against the book, of which the file may be a copy all the same: so it
+     * only keeps the file from that book when no other book qualifies, and makes the file ambiguous when one does.
      */
     private static Rejection anotherVolumeThanOne(ShellCandidate shell) {
         if (shell.seriesPlace() != null && shell.seriesPlace() != 1f) {

@@ -175,6 +175,29 @@ class RescanDryRunTest {
     }
 
     @Test
+    void aSecondDownloadOfATitleTwoVolumesShareGoesToNeither() throws IOException {
+        // Read as a copy, "Saga (1).epub" is the second volume as much as the first, and so is "Saga.epub" next to it
+        Files.writeString(dir.resolve("shells.tsv"), """
+                1\t1\t0\t1\tSaga\tNULL\t1\tBrian K. Vaughan
+                2\t1\t0\t1\tSaga\tNULL\t2\tBrian K. Vaughan
+                """);
+        Files.writeString(dir.resolve("existing.tsv"), "");
+        Files.writeString(dir.resolve("newfiles.tsv"), """
+                1\tV/Brian K. Vaughan\tSaga.epub
+                1\tV/Brian K. Vaughan\tSaga (1).epub
+                """);
+
+        Report report = run();
+
+        assertThat(decisions(report)).containsExactly(
+                entry("V/Brian K. Vaughan/Saga.epub", "ambiguous 1,2"),
+                entry("V/Brian K. Vaughan/Saga (1).epub", "ambiguous 1,2"));
+        assertThat(report.lines().get(1).reason())
+                .isEqualTo("fileless: 2 fileless books qualify: book#1 \"Saga\", and book#2 \"Saga\" if \" (1)\" is a copy");
+        assertThat(report.rejections()).containsExactly(entry("fileless: several fileless books qualify", 2));
+    }
+
+    @Test
     void writesTheReportFromTheCommandLine() throws IOException {
         Path out = dir.resolve("report.tsv");
 

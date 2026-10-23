@@ -52,6 +52,9 @@ There is one tab-separated line per new file, with these columns:
   "Survival", one of 2 alike fileless books (book#12, book#40)`, and when a ` (1)` at the end of
   its name was read as a copy, as in `title and author agree with book#7 "Saga" (" (1)" read as a
   copy)`.
+- An `ambiguous` reason names apart the fileless books that qualify only if a ` (1)` is a copy,
+  not volume 1, as in `fileless: 2 fileless books qualify: book#1 "Saga", and book#2 "Saga" if
+  " (1)" is a copy`: book#2 is number 2 of its series, and the name does not say which it is.
 
 The report ends with lines starting with `#`:
 - the count of each decision;

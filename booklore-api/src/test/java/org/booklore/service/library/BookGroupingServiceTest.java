@@ -10,6 +10,7 @@ import org.booklore.repository.BookRepository;
 import org.booklore.repository.projection.BookAuthorRow;
 import org.booklore.repository.projection.BookFileScanRow;
 import org.booklore.repository.projection.FilelessBookRow;
+import org.booklore.service.library.matching.ExistingBookMatcher.Ambiguous;
 import org.booklore.service.library.matching.ExistingBookMatcher.Decision;
 import org.booklore.service.library.matching.ExistingBookMatcher.Kind;
 import org.booklore.service.library.matching.ExistingBookMatcher.Match;
@@ -1142,6 +1143,41 @@ class BookGroupingServiceTest {
         assertThat(attached(result)).containsExactly(Map.entry(12L, List.of(copy)));
         assertThat(result.newBookGroups()).isEmpty();
         assertThat(decisions.get("Unbroken (1).epub").reason()).contains("read as a copy");
+    }
+
+    /** "Saga" numbered 1 and "Saga" numbered 2, fileless: a "Saga.epub" and its "Saga (1).epub" say neither. */
+    private void twoSagas(LibraryOrganizationMode mode) {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(mode, path);
+        shellRows.add(new FilelessBookRow(1L, null, false, "cover", null, "Saga", null, 1f, "Brian K. Vaughan"));
+        shellRows.add(new FilelessBookRow(2L, null, false, "cover", null, "Saga", null, 2f, "Brian K. Vaughan"));
+        LibraryFile saga = newFile(lib, path, "V/Brian K. Vaughan", "Saga.epub");
+        LibraryFile copy = newFile(lib, path, "V/Brian K. Vaughan", "Saga (1).epub");
+        Map<String, Decision> decisions = new LinkedHashMap<>();
+
+        var pair = rescan(lib, filelessDecisions(decisions), saga, copy);
+
+        // The copy is no evidence for volume 1: read as a copy, book#2 qualifies as much as book#1
+        assertThat(pair.filesToAttach()).isEmpty();
+        assertThat(newBooks(pair)).containsExactly(List.of("Saga.epub", "Saga (1).epub"));
+        assertThat(decisions.get("Saga.epub")).isInstanceOf(Ambiguous.class);
+        assertThat(decisions.get("Saga (1).epub")).isEqualTo(new Ambiguous(List.of(1L, 2L),
+                "2 fileless books qualify: book#1 \"Saga\", and book#2 \"Saga\" if \" (1)\" is a copy"));
+
+        var alone = rescan(lib, copy);
+
+        assertThat(alone.filesToAttach()).isEmpty();
+        assertThat(newBooks(alone)).containsExactly(List.of("Saga (1).epub"));
+    }
+
+    @Test
+    void rescan_autoDetect_aSecondDownloadOfATitleTwoVolumesShareGoesToNeither() {
+        twoSagas(LibraryOrganizationMode.AUTO_DETECT);
+    }
+
+    @Test
+    void rescan_bookPerFolder_aSecondDownloadOfATitleTwoVolumesShareGoesToNeither() {
+        twoSagas(LibraryOrganizationMode.BOOK_PER_FOLDER);
     }
 
     @Test

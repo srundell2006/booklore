@@ -207,6 +207,22 @@ class WatcherFilelessBookDatabaseTest {
     }
 
     @Test
+    void aSecondDownloadOfATitleTwoFilelessVolumesShareGoesToNeitherWhicheverComesFirst() throws IOException {
+        // Read as a copy, "Saga (1).epub" is volume 2 as much as volume 1; its original then joins it in its folder
+        long first = filelessBook("Saga", "Brian K. Vaughan", false, 1f);
+        long second = filelessBook("Saga", "Brian K. Vaughan", false, 2f);
+
+        bookFileTransactionalHandler.handleNewBookFile(library.getId(), epub("Vaughan, Brian K./Saga (1).epub"));
+        bookFileTransactionalHandler.handleNewBookFile(library.getId(), epub("Vaughan, Brian K./Saga.epub"));
+
+        assertThat(pathsOf(first)).isEmpty();
+        assertThat(pathsOf(second)).isEmpty();
+        Long copy = bookIdAt("Vaughan, Brian K.", "Saga (1).epub");
+        assertThat(copy).isNotNull().isNotIn(first, second);
+        assertThat(bookIdAt("Vaughan, Brian K.", "Saga.epub")).isEqualTo(copy);
+    }
+
+    @Test
     void twoAttachesToOneFilelessBookAtOnceGiveItTheFilesOfOneFolderOnly() throws Exception {
         long shell = filelessBook("The Martian", "Andy Weir", false);
         // With a cover and a library path, an attach adds the book's file and changes nothing else of the book
@@ -301,13 +317,17 @@ class WatcherFilelessBookDatabaseTest {
     }
 
     private long filelessBook(String title, String author, boolean physical) {
+        return filelessBook(title, author, physical, null);
+    }
+
+    private long filelessBook(String title, String author, boolean physical, Float seriesNumber) {
         return tx.execute(status -> {
             BookEntity book = BookEntity.builder()
                     .library(libraryRepository.findById(library.getId()).orElseThrow())
                     .isPhysical(physical)
                     .addedOn(Instant.now())
                     .build();
-            BookMetadataEntity metadata = BookMetadataEntity.builder().book(book).title(title).build();
+            BookMetadataEntity metadata = BookMetadataEntity.builder().book(book).title(title).seriesNumber(seriesNumber).build();
             metadata.setAuthors(new ArrayList<>());
             if (author != null) {
                 metadata.getAuthors().add(authorRepository.findByName(author)

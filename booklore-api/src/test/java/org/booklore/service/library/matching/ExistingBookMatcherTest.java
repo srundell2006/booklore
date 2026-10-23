@@ -438,6 +438,30 @@ class ExistingBookMatcherTest {
         }
 
         @Test
+        void aBookTurnedDownForAnotherNumberStillMakesTheFileAmbiguous() {
+            // Read as a copy, "Saga" number 2 qualifies as much as "Saga" number 1: the name does not say which it is
+            FileEvidence saga = file("V/Brian K. Vaughan", "Saga (1).epub");
+            ShellCandidate second = shellNumber(2, "Saga", 2, "Brian K. Vaughan");
+
+            Decision decision = shellMatch(saga, shellNumber(1, "Saga", 1, "Brian K. Vaughan"), second);
+
+            assertThat(decision).isEqualTo(new Ambiguous(List.of(1L, 2L),
+                    "2 fileless books qualify: book#1 \"Saga\", and book#2 \"Saga\" if \" (1)\" is a copy"));
+            // So it is next to a "Saga" in no series, and next to the first volume found by its number
+            assertThat(shellMatch(saga, shell(1, "Saga", "Brian K. Vaughan"), second)).isInstanceOf(Ambiguous.class);
+            ShellCandidate volumeOne = ShellCandidate.of(1, PATH, false, true, "Saga", "Volume 1", null, List.of("Brian K. Vaughan"));
+            assertThat(((Ambiguous) shellMatch(saga, volumeOne, second)).bookIds()).containsExactly(1L, 2L);
+            // The original next to it is ambiguous as it always was
+            assertThat(shellMatch(file("V/Brian K. Vaughan", "Saga.epub"), shellNumber(1, "Saga", 1, "Brian K. Vaughan"), second))
+                    .isInstanceOf(Ambiguous.class);
+            // A book turned down for want of evidence, or with evidence against it, is no candidate
+            ShellCandidate elsewhere = ShellCandidate.of(3, 2L, false, true, "Saga", null, 2f, List.of("Brian K. Vaughan"));
+            ShellCandidate otherAuthor = shellNumber(4, "Saga", 2, "Ann Smith");
+            assertThat(shellMatch(saga, shellNumber(1, "Saga", 1, "Brian K. Vaughan"), elsewhere, otherAuthor))
+                    .isEqualTo(new Match(1, Kind.FILELESS, "title and author agree with book#1 \"Saga\" (\" (1)\" read as a copy)"));
+        }
+
+        @Test
         void notTheBookWhoseTitleNamesAnotherVolume() {
             // No series number, but its subtitle says it is volume 2: "Saga (1).epub" may be volume 1
             ShellCandidate saga = ShellCandidate.of(8, PATH, false, true, "Saga", "Volume Two", null, List.of("Brian K. Vaughan"));
