@@ -476,8 +476,14 @@ class ExistingBookMatcherTest {
         void withAnotherNumberInTheNameTheOneIsACopy() {
             assertThat(matchedId(shellMatch(file("S/Smith, Ann", "Survival 3 (1).epub"), shell(11, "Survival 3", "Ann Smith"))))
                     .isEqualTo(11);
+            // The name says which volume it is, so the book's own number, not 1, does not turn it down
+            assertThat(shellMatch(file("V/Brian K. Vaughan", "Saga Vol. 3 (1).epub"), shellNumber(8, "Saga Vol. 3", 3, "Brian K. Vaughan")))
+                    .isEqualTo(new Match(8, Kind.FILELESS, "title and author agree with book#8 \"Saga Vol. 3\" (\" (1)\" read as a copy)"));
+            assertThat(matchedId(shellMatch(file("S/Smith, Ann", "Survival 3 (1).epub"), shellNumber(11, "Survival 3", 5, "Ann Smith"))))
+                    .isEqualTo(11);
+            // The number is part of the name, not the series number: "Survival 3" is not "Survival"
             assertThat(shellMatch(file("S/Smith, Ann", "Survival 3 (1).epub"), shellNumber(11, "Survival", 3, "Ann Smith")))
-                    .isInstanceOf(NoMatch.class);
+                    .isEqualTo(new NoMatch("no fileless book has this title"));
         }
 
         @Test
