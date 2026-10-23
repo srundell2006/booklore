@@ -12,6 +12,7 @@ import org.junit.jupiter.api.io.TempDir;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
+import java.nio.file.StandardWatchEventKinds;
 import java.util.List;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
@@ -57,6 +58,52 @@ class LibraryWatchServiceTest {
         assertThat(poll.isVirtual()).isFalse();
         assertThat(poll.isDaemon()).isTrue();
         assertThat(poll.getName()).isEqualTo("watch-poll");
+    }
+
+    @Test
+    void aFileThatIsNoBookFileArrivingIsNotedAsAWriteAndNotHandled() throws Exception {
+        // A mover writing cover art or extras is still at work in the library: the copies waiting there wait for it
+        Path root = Files.createDirectories(tmp.resolve("noted"));
+        service.registerPath(root, 5L);
+        service.start();
+
+        Path cover = Files.writeString(root.resolve("cover.jpg"), "image");
+        verify(processor, timeout(10000)).noteFileArrived(5L, cover);
+        Files.delete(cover);
+        Path book = Files.writeString(root.resolve("book.epub"), "book");
+        verify(processor, timeout(10000)).processEvent(StandardWatchEventKinds.ENTRY_CREATE, 5L, book, false);
+
+        // Neither handled as a file of the library nor noted again for its deletion
+        verify(processor, never()).processEvent(any(), anyLong(), eq(cover), anyBoolean());
+        verify(processor, times(1)).noteFileArrived(anyLong(), any());
+    }
+
+    @Test
+    void announceFilesWithoutBooks_hasTheWatchedLibrariesAnnouncedOnAThreadOfItsOwn() throws Exception {
+        Library watched = library(5L, true);
+        Library unwatched = library(6L, false);
+        service.registerLibraries(List.of(watched, unwatched));
+        CompletableFuture<Thread> announcedOn = new CompletableFuture<>();
+        doAnswer(inv -> announcedOn.complete(Thread.currentThread())).when(processor).announceFilesWithoutBooks(5L);
+
+        service.announceFilesWithoutBooks(List.of(watched, unwatched));
+
+        // The walk can take long, and new folders must go on being watched meanwhile
+        Thread announcer = announcedOn.get(10, TimeUnit.SECONDS);
+        assertThat(announcer).isNotSameAs(Thread.currentThread());
+        assertThat(announcer.isDaemon()).isTrue();
+        assertThat(announcer.isVirtual()).isFalse();
+        Thread.sleep(500);
+        verify(processor, never()).announceFilesWithoutBooks(6L);
+    }
+
+    private static Library library(long id, boolean watch) {
+        Library library = mock(Library.class);
+        when(library.getId()).thenReturn(id);
+        when(library.isWatch()).thenReturn(watch);
+        when(library.getPaths()).thenReturn(List.of());
+        when(library.getName()).thenReturn("library " + id);
+        return library;
     }
 
     @Test

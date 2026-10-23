@@ -64,8 +64,36 @@ public class BookFileTransactionalHandler {
     private final FilelessShells filelessShells;
     private final ExistingBookAttacher existingBookAttacher;
 
+    /**
+     * A new file at a path that a book with the same content still has, which {@link #handleNewBookFileUnlessCopy}
+     * left alone.
+     *
+     * @param bookId the book whose file it copies
+     * @param hash   its content's hash, which the copied file's deletion will carry if it was moved after all
+     */
+    public record CopyOfAStoredFile(long bookId, String hash) {
+    }
+
     @Transactional()
     public void handleNewBookFile(long libraryId, Path path) {
+        handle(libraryId, path, false);
+    }
+
+    /**
+     * As {@link #handleNewBookFile}, but a file with the content of a stored file that is still where it was is left
+     * alone, for the caller to hand back once the stored file had time to go. Some movers write the destination before
+     * they remove the source (rsync --remove-source-files, a move across devices); taken for a copy at once, such a
+     * file became a new book, and the source's deletion then deleted the book it was moved from, with its reading
+     * progress and shelves.
+     *
+     * @return the book it copies, when it left the file alone
+     */
+    @Transactional()
+    public Optional<CopyOfAStoredFile> handleNewBookFileUnlessCopy(long libraryId, Path path) {
+        return handle(libraryId, path, true);
+    }
+
+    private Optional<CopyOfAStoredFile> handle(long libraryId, Path path, boolean leaveCopies) {
         LibraryEntity libraryEntity = libraryRepository.findById(libraryId).orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(libraryId));
 
         String filePath = path.toString();
@@ -94,7 +122,7 @@ public class BookFileTransactionalHandler {
                 bookFilePersistenceService.save(existingBook);
                 log.info("[CREATE] File '{}' restored deleted book id={}", filePath, existingBook.getId());
                 notificationService.sendMessageToPermissions(Topic.LOG, LogNotification.info("Finished processing file: " + filePath), Set.of(ADMIN, MANAGE_LIBRARY));
-                return;
+                return Optional.empty();
             }
 
             pendingDeletionPool.cancelByPath(path);
@@ -102,13 +130,13 @@ public class BookFileTransactionalHandler {
             if (currentHash.equals(existingHash)) {
                 log.debug("[CREATE] File '{}' unchanged (same hash), skipping", filePath);
                 notificationService.sendMessageToPermissions(Topic.LOG, LogNotification.info("Finished processing file: " + filePath), Set.of(ADMIN, MANAGE_LIBRARY));
-                return;
+                return Optional.empty();
             }
             existing.setCurrentHash(currentHash);
             bookFilePersistenceService.save(existingBook);
             log.info("[CREATE] File '{}' content changed, updated hash", filePath);
             notificationService.sendMessageToPermissions(Topic.LOG, LogNotification.info("Finished processing file: " + filePath), Set.of(ADMIN, MANAGE_LIBRARY));
-            return;
+            return Optional.empty();
         }
 
         String currentHash = FileFingerprint.generateHash(path);
@@ -119,15 +147,24 @@ public class BookFileTransactionalHandler {
             pendingDeletionPool.recoverBook(match, libraryPathEntity, fileSubPath, fileName, currentHash);
             log.info("[CREATE] File '{}' matched pending deletion, recovered book id={}", filePath, match.book().bookId());
             notificationService.sendMessageToPermissions(Topic.LOG, LogNotification.info("Finished processing file: " + filePath), Set.of(ADMIN, MANAGE_LIBRARY));
-            return;
+            return Optional.empty();
         }
 
-        Optional<BookFileEntity> movedFrom = bookFilePersistenceService.findMovedFile(currentHash, path, Instant.now().minus(60, ChronoUnit.SECONDS));
+        Instant cutoff = Instant.now().minus(60, ChronoUnit.SECONDS);
+        Optional<BookFileEntity> movedFrom = bookFilePersistenceService.findMovedFile(currentHash, path, cutoff);
         if (movedFrom.isPresent()) {
             bookFilePersistenceService.updatePathIfChanged(movedFrom.get(), libraryEntity, path);
             log.info("[CREATE] File '{}' recognized as moved file, updated existing book's path", filePath);
             notificationService.sendMessageToPermissions(Topic.LOG, LogNotification.info("Finished processing file: " + filePath), Set.of(ADMIN, MANAGE_LIBRARY));
-            return;
+            return Optional.empty();
+        }
+        if (leaveCopies) {
+            Optional<Long> copied = bookFilePersistenceService.findBookCopied(currentHash, cutoff);
+            if (copied.isPresent()) {
+                log.debug("[CREATE] File '{}' copies a file of book id={} that is still there; left until that file "
+                        + "had time to go, in case it was moved by copying", filePath, copied.get());
+                return Optional.of(new CopyOfAStoredFile(copied.get(), currentHash));
+            }
         }
 
         LibraryFile libraryFile = LibraryFile.builder()
@@ -148,10 +185,26 @@ public class BookFileTransactionalHandler {
         }
 
         notificationService.sendMessageToPermissions(Topic.LOG, LogNotification.info("Finished processing file: " + filePath), Set.of(ADMIN, MANAGE_LIBRARY));
+        return Optional.empty();
     }
 
     @Transactional
     public void handleNewFolderAudiobook(long libraryId, Path folderPath) {
+        handleFolderAudiobook(libraryId, folderPath, false);
+    }
+
+    /**
+     * As {@link #handleNewFolderAudiobook}, but a folder with the content of a stored folder audiobook that is still
+     * where it was is left alone, as {@link #handleNewBookFileUnlessCopy} leaves a file.
+     *
+     * @return the book whose folder audiobook it copies, when it left the folder alone
+     */
+    @Transactional
+    public Optional<CopyOfAStoredFile> handleNewFolderAudiobookUnlessCopy(long libraryId, Path folderPath) {
+        return handleFolderAudiobook(libraryId, folderPath, true);
+    }
+
+    private Optional<CopyOfAStoredFile> handleFolderAudiobook(long libraryId, Path folderPath, boolean leaveCopies) {
         LibraryEntity libraryEntity = libraryRepository.findById(libraryId)
                 .orElseThrow(() -> ApiError.LIBRARY_NOT_FOUND.createException(libraryId));
 
@@ -173,7 +226,29 @@ public class BookFileTransactionalHandler {
                     folderName, match.book().bookId());
             notificationService.sendMessageToPermissions(Topic.LOG,
                     LogNotification.info("Finished processing folder audiobook: " + folderPath), Set.of(ADMIN, MANAGE_LIBRARY));
-            return;
+            return Optional.empty();
+        }
+
+        // A folder audiobook is stored with its folder's hash, so it is found moved, or copied, as a file is; one that
+        // a book stores at this very folder, announced again as an overflow re-walk does, is neither, nor its own copy
+        Instant cutoff = Instant.now().minus(60, ChronoUnit.SECONDS);
+        boolean storedHere = bookFilePersistenceService.isStoredByALiveBook(libraryEntity, folderPath);
+        Optional<BookFileEntity> movedFrom = storedHere
+                ? Optional.empty() : bookFilePersistenceService.findMovedFile(folderHash, folderPath, cutoff);
+        if (movedFrom.isPresent()) {
+            bookFilePersistenceService.updatePathIfChanged(movedFrom.get(), libraryEntity, folderPath);
+            log.info("[CREATE] Folder audiobook '{}' recognized as moved, updated existing book's path", folderPath);
+            notificationService.sendMessageToPermissions(Topic.LOG,
+                    LogNotification.info("Finished processing folder audiobook: " + folderPath), Set.of(ADMIN, MANAGE_LIBRARY));
+            return Optional.empty();
+        }
+        if (leaveCopies && !storedHere) {
+            Optional<Long> copied = bookFilePersistenceService.findBookCopied(folderHash, cutoff);
+            if (copied.isPresent()) {
+                log.debug("[CREATE] Folder audiobook '{}' copies that of book id={}, which is still there; left until "
+                        + "that folder had time to go, in case it was moved by copying", folderPath, copied.get());
+                return Optional.of(new CopyOfAStoredFile(copied.get(), folderHash));
+            }
         }
 
         LibraryFile libraryFile = LibraryFile.builder()
@@ -194,6 +269,7 @@ public class BookFileTransactionalHandler {
 
         notificationService.sendMessageToPermissions(Topic.LOG,
                 LogNotification.info("Finished processing folder audiobook: " + folderPath), Set.of(ADMIN, MANAGE_LIBRARY));
+        return Optional.empty();
     }
 
     /**

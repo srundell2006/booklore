@@ -68,7 +68,7 @@ class BookRestorationServiceTest {
         BookEntity book12 = BookEntity.builder().id(12L).deleted(true).deletedAt(Instant.EPOCH).build();
         when(bookRepository.findAllById(List.of(12L))).thenReturn(List.of(book12));
 
-        bookRestorationService.restoreDeletedBooks(library, bookFiles, onDisk, unchangedSinceWalkStart(bookFiles));
+        assertThat(bookRestorationService.restoreDeletedBooks(library, bookFiles, onDisk, unchangedSinceWalkStart(bookFiles))).isTrue();
 
         assertThat(book12.getDeleted()).isFalse();
         assertThat(book12.getDeletedAt()).isNull();
@@ -85,8 +85,8 @@ class BookRestorationServiceTest {
                 row(2, 11, "c.epub", BookFileType.EPUB, false)));
 
         WalkCoverage coverage = unchangedSinceWalkStart(bookFiles);
-        bookRestorationService.restoreDeletedBooks(library, bookFiles, Set.of(Path.of("/books/c.epub")), coverage);
-        bookRestorationService.restoreDeletedBooks(library, bookFiles, Set.of(), coverage);
+        assertThat(bookRestorationService.restoreDeletedBooks(library, bookFiles, Set.of(Path.of("/books/c.epub")), coverage)).isFalse();
+        assertThat(bookRestorationService.restoreDeletedBooks(library, bookFiles, Set.of(), coverage)).isFalse();
 
         verifyNoInteractions(bookRepository, bookMapper, notificationService);
     }

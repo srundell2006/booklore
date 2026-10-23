@@ -20,7 +20,9 @@ import java.util.Map;
  * afresh; the watcher, which handles one file at a time, keeps them for a while instead of reading every fileless
  * book of the library for every new file. A book that gets a file is taken out of the kept index at once; one that
  * becomes fileless meanwhile is only seen when the index is read again, and until then its file becomes a new book,
- * which is the safe way to miss.
+ * which is the safe way to miss. A book edited meanwhile (its title, authors or physical flag) is still found as it
+ * was: {@link ExistingBookAttacher} matches the file against the book as it is now before attaching it, and has the
+ * index read again when they no longer match.
  */
 @Component
 @RequiredArgsConstructor
@@ -42,6 +44,11 @@ public class FilelessShells {
     /** The library's fileless books as the watcher last read them, read again when that was too long ago. */
     public FilelessShellIndex forWatcher(long libraryId) {
         return watcherIndexes.get(libraryId, this::load);
+    }
+
+    /** Has the watcher read the library's fileless books again on its next event: one was edited since they were read. */
+    public void readAgainForWatcher(long libraryId) {
+        watcherIndexes.invalidate(libraryId);
     }
 
     /** Takes a book that got a file, or is gone, out of the watcher's index. */

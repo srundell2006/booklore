@@ -32,6 +32,7 @@ import org.booklore.service.metadata.BookMetadataUpdater;
 import org.booklore.service.reader.FfprobeService;
 import org.booklore.service.task.TaskCronService;
 import org.booklore.service.watcher.BookFileTransactionalHandler;
+import org.booklore.task.options.RescanLibraryContext;
 import jakarta.persistence.EntityManagerFactory;
 import org.hibernate.SessionFactory;
 import org.hibernate.stat.Statistics;
@@ -76,11 +77,12 @@ import static org.mockito.Mockito.mock;
 /**
  * Work on one book must cost the same however many books its library, author, category, mood or tag already has.
  * Each case runs once in an empty library and once in a library of {@value #EXISTING} books that all share the
- * case's author, category, mood and tag, and compares what Hibernate loaded. Time would not show it at this size, and
- * neither would the statement count: loading all of a library's books, or all of a category's, is one statement. With
- * Hibernate's association management, giving a book its library, or a book's metadata a set of categories, adds the
- * book to the other side's collection, which loads that collection in full first; at 129k books that took seconds
- * per book.
+ * case's author, category, mood and tag, and compares what Hibernate loaded and how many statements and queries it
+ * ran. Time would not show it at this size, and the statement count alone would not either: loading all of a
+ * library's books, or all of a category's, is one statement. With Hibernate's association management, giving a book
+ * its library, or a book's metadata a set of categories, adds the book to the other side's collection, which loads
+ * that collection in full first; at 129k books that took seconds per book. The statement and query counts catch work
+ * done per book of the folder or library in queries that load no entity, such as a projection read once per book.
  */
 @SpringBootTest(classes = {
         BookloreApplication.class
@@ -166,6 +168,8 @@ class LibraryScalingIT {
     private BookFileDetachmentService bookFileDetachmentService;
     @Autowired
     private BookFileTransactionalHandler bookFileTransactionalHandler;
+    @Autowired
+    private LibraryProcessingService libraryProcessingService;
 
     @TempDir
     Path tempDir;
@@ -237,7 +241,66 @@ class LibraryScalingIT {
         assertSameCost(empty, large);
     }
 
+    @Test
+    void aWatchedFileInAFolderOfManyBooksCostsTheSameAsInAFolderOfOne() throws Exception {
+        // The watcher matches a new file against the books of its folder: with entities, three statements per book
+        Cost one = watchedFileInAFolderOfBooks(library("crowded-one", 0), 1);
+        Cost many = watchedFileInAFolderOfBooks(library("crowded-many", 0), EXISTING);
+
+        assertSameCost(one, many);
+    }
+
+    @Test
+    void aSecondWatchedFileDoesNotReadTheLibrarysFilelessBooksAgain() throws Exception {
+        Library library = library("watcher-second", EXISTING);
+        attachWatchedFile(library);
+        Path other = Files.createDirectories(library.root().resolve("X/Nobody, Some")).resolve("Unmatched Title.epub");
+        epub(other, "Unmatched Title", library);
+        Statistics statistics = entityManagerFactory.unwrap(SessionFactory.class).getStatistics();
+        statistics.clear();
+
+        bookFileTransactionalHandler.handleNewBookFile(library.entity().getId(), other);
+
+        // The watcher keeps the library's fileless books for a while instead of reading them for every new file
+        assertThat(statistics.getQueries()).noneMatch(query -> query.contains("FilelessBookRow"));
+    }
+
+    @Test
+    void rescanningALibraryWithNewFilesCostsTheSameInALargeLibrary() throws Exception {
+        Cost empty = rescanWithNewFiles(library("rescan-empty", 0), 1);
+        Cost large = rescanWithNewFiles(library("rescan-large", 0), EXISTING);
+
+        assertSameCost(empty, large);
+    }
+
     // ========== the measured work ==========
+
+    private Cost watchedFileInAFolderOfBooks(Library library, int books) throws IOException {
+        seedWithFiles(library, "Crowded", books, false);
+        Path file = Files.createDirectories(library.root().resolve("Crowded")).resolve("Brand New Title.epub");
+        epub(file, "Brand New Title", library);
+
+        return measure(() -> bookFileTransactionalHandler.handleNewBookFile(library.entity().getId(), file));
+    }
+
+    /** A rescan that finds the library's stored books on disk, and three new files it imports. */
+    private Cost rescanWithNewFiles(Library library, int stored) throws IOException {
+        seedWithFiles(library, "Stored", stored, true);
+        for (int i = 0; i < 3; i++) {
+            Path folder = Files.createDirectories(library.root().resolve("New/Author " + i));
+            epub(folder.resolve("New Book " + i + ".epub"), "New Book " + i, library);
+        }
+
+        Cost cost = measure(() -> {
+            try {
+                libraryProcessingService.rescanLibrary(RescanLibraryContext.builder().libraryId(library.entity().getId()).build());
+            } catch (IOException e) {
+                throw new IllegalStateException(e);
+            }
+        });
+        assertThat(bookRepository.countIncludingDeletedByLibraryId(library.entity().getId())).isEqualTo(stored + 3L);
+        return cost;
+    }
 
     private Cost attachWatchedFile(Library library) throws IOException {
         long shellId = filelessBook(library, "The Martian", "Andy Weir");
@@ -314,7 +377,7 @@ class LibraryScalingIT {
      * What one piece of work loaded: books, entities of every kind, and for each inverse many-to-many side of a book's
      * metadata, how often it was loaded in full.
      */
-    record Cost(long bookLoads, long entityLoads, Map<String, Long> inverseSideLoads) {
+    record Cost(long bookLoads, long entityLoads, Map<String, Long> inverseSideLoads, long statements, long queries) {
     }
 
     private Cost measure(Runnable work) {
@@ -326,7 +389,9 @@ class LibraryScalingIT {
         return new Cost(
                 statistics.getEntityStatistics(BookEntity.class.getName()).getLoadCount(),
                 statistics.getEntityLoadCount(),
-                inverseSideLoads);
+                inverseSideLoads,
+                statistics.getPrepareStatementCount(),
+                statistics.getQueryExecutionCount());
     }
 
     private static void assertSameCost(Cost empty, Cost large) {
@@ -334,6 +399,8 @@ class LibraryScalingIT {
         assertThat(empty.inverseSideLoads()).as("inverse sides loaded in full").allSatisfy((role, loads) -> assertThat(loads).as(role).isZero());
         assertThat(large.bookLoads()).as("books loaded").isEqualTo(empty.bookLoads());
         assertThat(large.entityLoads()).as("entities loaded").isEqualTo(empty.entityLoads());
+        assertThat(large.statements()).as("statements").isEqualTo(empty.statements());
+        assertThat(large.queries()).as("queries").isEqualTo(empty.queries());
     }
 
     // ========== fixture ==========
@@ -383,6 +450,35 @@ class LibraryScalingIT {
         map("book_metadata_category_mapping (book_id, category_id) VALUES (?, ?)", ids, categoryId);
         map("book_metadata_mood_mapping (book_id, mood_id) VALUES (?, ?)", ids, moodId);
         map("book_metadata_tag_mapping (book_id, tag_id) VALUES (?, ?)", ids, tagId);
+    }
+
+    /**
+     * Books with one epub each in {@code folder}, by the library's author, written straight to the tables, and to
+     * disk when asked.
+     */
+    private void seedWithFiles(Library library, String folder, int count, boolean onDisk) throws IOException {
+        long libraryId = library.entity().getId();
+        long pathId = library.entity().getLibraryPaths().getFirst().getId();
+        List<Object[]> books = new ArrayList<>();
+        for (int i = 0; i < count; i++) {
+            books.add(new Object[]{libraryId, pathId, Timestamp.from(Instant.now()), false, "cover"});
+        }
+        jdbc.batchUpdate("INSERT INTO book (library_id, library_path_id, added_on, deleted, book_cover_hash) VALUES (?, ?, ?, ?, ?)", books);
+        List<Long> ids = jdbc.queryForList("SELECT id FROM book WHERE library_id = ? ORDER BY id", Long.class, libraryId);
+        jdbc.batchUpdate("INSERT INTO book_metadata (book_id, title, title_changed_by_auto_fetch) VALUES (?, ?, false)",
+                ids.stream().map(id -> new Object[]{id, "Existing " + id}).toList());
+        map("book_metadata_author_mapping (book_id, author_id, sort_order) VALUES (?, ?, 0)", ids,
+                jdbc.queryForObject("SELECT id FROM author WHERE name = ?", Long.class, library.author()));
+        jdbc.batchUpdate("INSERT INTO book_file (book_id, file_name, file_sub_path, is_book, is_folder_based, book_type, "
+                        + "current_hash, initial_hash, added_on) VALUES (?, ?, ?, true, false, 'EPUB', ?, ?, ?)",
+                ids.stream().map(id -> new Object[]{id, "Existing " + id + ".epub", folder, "h" + id, "h" + id,
+                        Timestamp.from(Instant.now().minusSeconds(3600))}).toList());
+        if (onDisk) {
+            Path dir = Files.createDirectories(library.root().resolve(folder));
+            for (long id : ids) {
+                Files.writeString(dir.resolve("Existing " + id + ".epub"), "h" + id);
+            }
+        }
     }
 
     private void map(String tableAndValues, List<Long> bookIds, long targetId) {

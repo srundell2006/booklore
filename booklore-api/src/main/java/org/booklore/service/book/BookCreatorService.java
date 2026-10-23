@@ -272,6 +272,12 @@ public class BookCreatorService {
             String truncatedName = truncate(name, 255);
             ComicCreatorEntity creator = comicCreatorRepository.findByName(truncatedName)
                     .orElseGet(() -> comicCreatorRepository.save(ComicCreatorEntity.builder().name(truncatedName).build()));
+            // A mapping has no key of its own to stop a second one for the same creator and role
+            boolean mapped = comic.getCreatorMappings().stream().anyMatch(existing -> existing.getRole() == role
+                    && existing.getCreator() != null && Objects.equals(existing.getCreator().getId(), creator.getId()));
+            if (mapped) {
+                continue;
+            }
 
             ComicCreatorMappingEntity mapping = ComicCreatorMappingEntity.builder()
                     .comicMetadata(comic)

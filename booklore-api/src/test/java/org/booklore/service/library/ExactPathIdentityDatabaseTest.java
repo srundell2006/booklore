@@ -276,6 +276,28 @@ class ExactPathIdentityDatabaseTest {
     }
 
     @Test
+    void aComicStoredAtExactlyItsPathKeepsItsCharactersAndCreators() throws IOException {
+        long bookId = storedComic("Comics", "Issue.cbz", false);
+        cbz(root.resolve("Comics").resolve("Issue.cbz"), "Jim Lee", "Robin");
+
+        parallelBookImporter.importGroups(Map.of("g", List.of(onDisk("Comics", "Issue.cbz", BookFileType.CBX))), library);
+
+        assertComicUntouched(bookId);
+    }
+
+    @Test
+    void aDeletedComicWithLockedCharactersBroughtBackByItsFileKeepsItsCharactersAndCreators() throws IOException {
+        long bookId = storedComic("Comics", "Issue.cbz", true);
+        cbz(root.resolve("Comics").resolve("Issue.cbz"), "Jim Lee", "Robin");
+
+        parallelBookImporter.importGroups(Map.of("g", List.of(onDisk("Comics", "Issue.cbz", BookFileType.CBX))), library);
+
+        Boolean deleted = tx.execute(status -> bookRepository.findById(bookId).orElseThrow().getDeleted());
+        assertThat(deleted).isFalse();
+        assertComicUntouched(bookId);
+    }
+
+    @Test
     void aWatchedFileWhosePathOnlyComparesEqualIsNotTakenForTheStoredFile() throws IOException {
         long stored = storedBook("Watched", "Book.epub", "Curated", false);
         Path file = root.resolve("Watched").resolve("book.epub");
@@ -312,6 +334,58 @@ class ExactPathIdentityDatabaseTest {
             book.setMetadata(BookMetadataEntity.builder().book(book).title(title).build());
             return bookRepository.save(book).getId();
         });
+    }
+
+    /**
+     * A comic with one file, its characters locked to Batman, and Jim Lee as its penciller, as its owner left it. The
+     * mapping tables have no key that would stop a second, identical creator mapping.
+     */
+    private long storedComic(String subPath, String fileName, boolean deleted) {
+        long bookId = storedBook(subPath, fileName, "Curated", deleted);
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        jdbc.update("UPDATE book_file SET book_type = 'CBX' WHERE book_id = ?", bookId);
+        jdbc.update("INSERT INTO comic_metadata (book_id, characters_locked, black_and_white, manga, reading_direction) "
+                + "VALUES (?, TRUE, FALSE, FALSE, 'ltr')", bookId);
+        if (jdbc.queryForObject("SELECT COUNT(*) FROM comic_character WHERE name = 'Batman'", Integer.class) == 0) {
+            jdbc.update("INSERT INTO comic_character (name) VALUES ('Batman')");
+        }
+        if (jdbc.queryForObject("SELECT COUNT(*) FROM comic_creator WHERE name = 'Jim Lee'", Integer.class) == 0) {
+            jdbc.update("INSERT INTO comic_creator (name) VALUES ('Jim Lee')");
+        }
+        jdbc.update("INSERT INTO comic_metadata_character_mapping (book_id, character_id) "
+                + "SELECT ?, id FROM comic_character WHERE name = 'Batman'", bookId);
+        jdbc.update("INSERT INTO comic_metadata_creator_mapping (book_id, creator_id, role) "
+                + "SELECT ?, id, 'PENCILLER' FROM comic_creator WHERE name = 'Jim Lee'", bookId);
+        return bookId;
+    }
+
+    private void assertComicUntouched(long bookId) {
+        JdbcTemplate jdbc = new JdbcTemplate(dataSource);
+        assertThat(title(bookId)).isEqualTo("Curated");
+        assertThat(jdbc.queryForList("SELECT c.name FROM comic_metadata_character_mapping m JOIN comic_character c "
+                + "ON c.id = m.character_id WHERE m.book_id = ?", String.class, bookId)).containsExactly("Batman");
+        assertThat(jdbc.queryForList("SELECT role FROM comic_metadata_creator_mapping WHERE book_id = ?", String.class, bookId))
+                .containsExactly("PENCILLER");
+    }
+
+    /** A comic book archive whose ComicInfo names a penciller and a character. */
+    private static void cbz(Path file, String penciller, String characters) throws IOException {
+        Files.createDirectories(file.getParent());
+        String comicInfo = """
+                <?xml version="1.0" encoding="utf-8"?>
+                <ComicInfo><Title>From The File</Title><Series>S</Series><Number>1</Number><Penciller>%s</Penciller><Characters>%s</Characters></ComicInfo>
+                """.formatted(penciller, characters);
+        java.awt.image.BufferedImage image = new java.awt.image.BufferedImage(20, 30, java.awt.image.BufferedImage.TYPE_INT_RGB);
+        java.io.ByteArrayOutputStream png = new java.io.ByteArrayOutputStream();
+        javax.imageio.ImageIO.write(image, "png", png);
+        try (ZipOutputStream zip = new ZipOutputStream(Files.newOutputStream(file))) {
+            zip.putNextEntry(new ZipEntry("ComicInfo.xml"));
+            zip.write(comicInfo.getBytes(StandardCharsets.UTF_8));
+            zip.closeEntry();
+            zip.putNextEntry(new ZipEntry("001.png"));
+            zip.write(png.toByteArray());
+            zip.closeEntry();
+        }
     }
 
     /** The book keeps its title and cover, and its file at that path its hash and size. */

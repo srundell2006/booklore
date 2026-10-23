@@ -5,16 +5,19 @@ import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.BookFileType;
+import org.booklore.model.websocket.Topic;
 import org.booklore.repository.BookFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.service.NotificationService;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.api.io.TempDir;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.*;
@@ -190,6 +193,93 @@ class PendingDeletionPoolTest {
 
         assertThat(book.getDeleted()).isTrue();
         verify(bookRepository).save(book);
+        verify(notificationService).sendMessageToPermissions(eq(Topic.BOOKS_REMOVE), eq(Set.of(10L)), any());
+    }
+
+    @Test
+    void expireFileDeletion_keepsABookWhoseFileWasFoundMovedSince() {
+        ScheduledFuture<?> timer = mock(ScheduledFuture.class);
+        pool.addFileDeletion(Path.of("/library/subfolder/test.epub"), 1L, bookFile, book, timer);
+        // Another deletion held for the same file, its folder's, gave the book a new file where it was moved
+        bookFile.setFileSubPath("moved");
+
+        when(bookRepository.findById(10L)).thenReturn(Optional.of(book));
+        when(bookFileRepository.findById(100L)).thenReturn(Optional.of(bookFile));
+
+        pool.expireFileDeletion(Path.of("/library/subfolder/test.epub"));
+
+        assertThat(book.getDeleted()).isFalse();
+        verify(bookRepository, never()).save(any());
+        verify(bookFileRepository, never()).delete(any());
+        verify(bookFileRepository, never()).countByBookId(any());
+    }
+
+    @Test
+    void expireFileDeletion_keepsABookMovedToTheSamePathInAnotherLibraryPath() {
+        ScheduledFuture<?> timer = mock(ScheduledFuture.class);
+        pool.addFileDeletion(Path.of("/library/subfolder/test.epub"), 1L, bookFile, book, timer);
+        LibraryPathEntity other = new LibraryPathEntity();
+        other.setId(2L);
+        other.setPath("/other-disk");
+        book.setLibraryPath(other);
+
+        when(bookRepository.findById(10L)).thenReturn(Optional.of(book));
+        when(bookFileRepository.findById(100L)).thenReturn(Optional.of(bookFile));
+
+        pool.expireFileDeletion(Path.of("/library/subfolder/test.epub"));
+
+        assertThat(book.getDeleted()).isFalse();
+        verify(bookRepository, never()).save(any());
+    }
+
+    @Test
+    void expireFolderDeletion_keepsABookWithAFileFoundMovedOutAndDropsOnlyTheFilesThatWentWithTheFolder(@TempDir Path root) throws Exception {
+        libraryPath.setPath(root.toString());
+        BookFileEntity pdf = BookFileEntity.builder().id(101L).book(book).fileName("test.pdf").fileSubPath("subfolder")
+                .currentHash("def456").isBookFormat(true).bookType(BookFileType.PDF).build();
+        // A file of the book outside the folder, still there
+        Files.createDirectories(root.resolve("elsewhere"));
+        Files.writeString(root.resolve("elsewhere/test.mobi"), "content");
+        BookFileEntity mobi = BookFileEntity.builder().id(102L).book(book).fileName("test.mobi").fileSubPath("elsewhere")
+                .currentHash("ghi789").isBookFormat(true).bookType(BookFileType.MOBI).build();
+        book.setBookFiles(List.of(bookFile, pdf, mobi));
+        ScheduledFuture<?> timer = mock(ScheduledFuture.class);
+        pool.addFolderDeletion(root.resolve("subfolder"), 1L, List.of(book), timer);
+        // The EPUB was found moved out of the folder before the folder's deletion expired
+        bookFile.setFileSubPath("moved");
+
+        when(bookRepository.findById(10L)).thenReturn(Optional.of(book));
+        when(bookFileRepository.findById(100L)).thenReturn(Optional.of(bookFile));
+        when(bookFileRepository.findById(101L)).thenReturn(Optional.of(pdf));
+        when(bookFileRepository.findById(102L)).thenReturn(Optional.of(mobi));
+
+        pool.expireFolderDeletion(root.resolve("subfolder"));
+
+        assertThat(book.getDeleted()).isFalse();
+        verify(bookFileRepository).delete(pdf);
+        verify(bookFileRepository, never()).delete(bookFile);
+        verify(bookFileRepository, never()).delete(mobi);
+        verify(bookRepository, never()).save(any());
+        // Announced as removed, the kept book would drop out of every open client until a reload
+        verify(notificationService, never()).sendMessageToPermissions(eq(Topic.BOOKS_REMOVE), any(), any());
+    }
+
+    @Test
+    void retime_putsOffAHeldDeletionOnlyWhileItWaitsOnTheTimerThatPutsItOff() {
+        ScheduledFuture<?> timer = mock(ScheduledFuture.class);
+        ScheduledFuture<?> later = mock(ScheduledFuture.class);
+        ScheduledFuture<?> stale = mock(ScheduledFuture.class);
+        Path path = Path.of("/library/subfolder/test.epub");
+        pool.addFileDeletion(path, 1L, bookFile, book, timer);
+
+        assertThat(pool.retime(path, timer, later)).isTrue();
+        // The timer it was put off from no longer holds it
+        assertThat(pool.retime(path, timer, stale)).isFalse();
+
+        // Matched, it is no longer held: the later timer is the one cancelled
+        assertThat(pool.matchByHash("abc123")).isPresent();
+        verify(later).cancel(false);
+        assertThat(pool.retime(path, later, stale)).isFalse();
     }
 
     @Test

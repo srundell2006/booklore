@@ -82,6 +82,8 @@ public class LibraryService {
     public void initializeMonitoring() {
         List<Library> libraries = libraryRepository.findAll().stream().map(libraryMapper::toLibrary).collect(Collectors.toList());
         libraryWatchService.registerLibraries(libraries);
+        // What arrived while the application was down, or still waited to be handled when it stopped, gives no event
+        libraryWatchService.announceFilesWithoutBooks(libraries);
         log.info("Monitoring initialized with {} libraries", libraries.size());
     }
 

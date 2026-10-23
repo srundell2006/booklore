@@ -1,6 +1,7 @@
 package org.booklore.service.library;
 
 import org.booklore.model.dto.settings.LibraryFile;
+import org.booklore.model.entity.AuthorEntity;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.BookMetadataEntity;
@@ -9,6 +10,7 @@ import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
+import org.booklore.service.file.FileFingerprint;
 import org.booklore.service.library.matching.ExistingBookMatcher.Kind;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -19,6 +21,7 @@ import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -57,6 +60,8 @@ class ExistingBookAttacherTest {
     @Mock
     private PlatformTransactionManager transactionManager;
 
+    private static final String WEIR = "W/Weir, Andy";
+
     @TempDir
     Path root;
 
@@ -94,7 +99,15 @@ class ExistingBookAttacherTest {
                 book.getBookFiles().add(file);
             }
         }
-        when(bookRepository.findById(id)).thenReturn(Optional.of(book));
+        when(bookRepository.findByIdForUpdate(id)).thenReturn(Optional.of(book));
+        return book;
+    }
+
+    /** A fileless book "The Martian" by Andy Weir, which files in "W/Weir, Andy" match. */
+    private BookEntity shell(long id, String coverHash) {
+        BookEntity book = book(id, null, coverHash, new BookFileType[0]);
+        book.getMetadata().setTitle("The Martian");
+        book.getMetadata().setAuthors(new ArrayList<>(List.of(AuthorEntity.builder().name("Andy Weir").build())));
         return book;
     }
 
@@ -113,8 +126,11 @@ class ExistingBookAttacherTest {
 
         assertThat(attached).containsExactly(pdf);
         InOrder inOrder = inOrder(transactionManager, bookRepository, bookAdditionalFileRepository);
-        inOrder.verify(transactionManager).getTransaction(any());
-        inOrder.verify(bookRepository).findById(11L);
+        ArgumentCaptor<TransactionDefinition> transaction = ArgumentCaptor.forClass(TransactionDefinition.class);
+        inOrder.verify(transactionManager).getTransaction(transaction.capture());
+        // Its own even inside the watcher's, so that it reads the book's files as they are once it holds the book
+        assertThat(transaction.getValue().getPropagationBehavior()).isEqualTo(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        inOrder.verify(bookRepository).findByIdForUpdate(11L);
         ArgumentCaptor<BookFileEntity> saved = ArgumentCaptor.forClass(BookFileEntity.class);
         inOrder.verify(bookAdditionalFileRepository).save(saved.capture());
         inOrder.verify(transactionManager).commit(any());
@@ -131,7 +147,7 @@ class ExistingBookAttacherTest {
         LibraryFile pdf = onDisk("A", "Title.pdf", BookFileType.PDF);
         BookEntity deleted = book(12, path, null, BookFileType.EPUB);
         deleted.setDeleted(true);
-        when(bookRepository.findById(13L)).thenReturn(Optional.empty());
+        when(bookRepository.findByIdForUpdate(13L)).thenReturn(Optional.empty());
 
         assertThat(attacher.attach(12, Kind.SAME_FOLDER, List.of(pdf))).isEmpty();
         assertThat(attacher.attach(13, Kind.SAME_FOLDER, List.of(pdf))).isEmpty();
@@ -156,9 +172,9 @@ class ExistingBookAttacherTest {
 
     @Test
     void aFilelessBookWithACoverKeepsIt() throws IOException {
-        BookEntity shell = book(15, null, "curated", new BookFileType[0]);
-        LibraryFile epub = onDisk("W", "The Martian.epub", BookFileType.EPUB);
-        LibraryFile audio = onDisk("W", "The Martian.m4b", BookFileType.AUDIOBOOK);
+        BookEntity shell = shell(15, "curated");
+        LibraryFile epub = onDisk(WEIR, "The Martian.epub", BookFileType.EPUB);
+        LibraryFile audio = onDisk(WEIR, "The Martian.m4b", BookFileType.AUDIOBOOK);
 
         assertThat(attacher.attach(15, Kind.FILELESS, List.of(epub, audio))).containsExactly(epub, audio);
 
@@ -171,10 +187,10 @@ class ExistingBookAttacherTest {
 
     @Test
     void aFilelessBookWithoutACoverGetsOneAsANewBookWould() throws IOException {
-        book(16, null, null, new BookFileType[0]);
-        LibraryFile audio = onDisk("W", "The Martian.m4b", BookFileType.AUDIOBOOK);
-        LibraryFile pdf = onDisk("W", "The Martian.pdf", BookFileType.PDF);
-        LibraryFile epub = onDisk("W", "The Martian.epub", BookFileType.EPUB);
+        shell(16, null);
+        LibraryFile audio = onDisk(WEIR, "The Martian.m4b", BookFileType.AUDIOBOOK);
+        LibraryFile pdf = onDisk(WEIR, "The Martian.pdf", BookFileType.PDF);
+        LibraryFile epub = onDisk(WEIR, "The Martian.epub", BookFileType.EPUB);
 
         attacher.attach(16, Kind.FILELESS, List.of(audio, pdf, epub));
 
@@ -197,6 +213,133 @@ class ExistingBookAttacherTest {
         verify(fileAsBookProcessor).writeCoverFromFile(book, epub);
         verify(fileAsBookProcessor, never()).writeCoverFromFile(any(), eq(pdf));
         verifyNoInteractions(filelessShells);
+    }
+
+    @Test
+    void aLockedEbookCoverOfAnAudiobookIsNotWrittenByAnAttachedEpub() throws IOException {
+        // The owner locked the ebook cover of an audiobook that has none: a rescan or the watcher attaches an epub
+        BookEntity book = book(21, path, null, BookFileType.AUDIOBOOK);
+        book.getMetadata().setCoverLocked(true);
+        LibraryFile epub = onDisk("A", "Title.epub", BookFileType.EPUB);
+
+        assertThat(attacher.attach(21, Kind.SAME_FOLDER, List.of(epub))).containsExactly(epub);
+
+        verify(fileAsBookProcessor, never()).writeCoverFromFile(any(), any());
+    }
+
+    @Test
+    void aLockedAudiobookCoverOfAnEbookIsNotWrittenByAnAttachedAudiobook() throws IOException {
+        BookEntity book = book(22, path, "h", BookFileType.EPUB);
+        book.getMetadata().setAudiobookCoverLocked(true);
+        LibraryFile audio = onDisk("A", "Title.m4b", BookFileType.AUDIOBOOK);
+
+        assertThat(attacher.attach(22, Kind.SAME_FOLDER, List.of(audio))).containsExactly(audio);
+
+        verify(fileAsBookProcessor, never()).writeCoverFromFile(any(), any());
+    }
+
+    @Test
+    void aCoverOfTheAttachedFilesKindTheBookHasIsKept() throws IOException {
+        // An audiobook with an ebook cover (from its owner or a metadata fetch), and an ebook with an audiobook cover
+        BookEntity audiobook = book(23, path, "chosen", BookFileType.AUDIOBOOK);
+        BookEntity ebook = book(24, path, "h", BookFileType.EPUB);
+        ebook.setAudiobookCoverHash("chosen");
+        LibraryFile epub = onDisk("A", "Title.epub", BookFileType.EPUB);
+        LibraryFile audio = onDisk("B", "Title.m4b", BookFileType.AUDIOBOOK);
+
+        assertThat(attacher.attach(23, Kind.SAME_FOLDER, List.of(epub))).containsExactly(epub);
+        assertThat(attacher.attach(24, Kind.SAME_FOLDER, List.of(audio))).containsExactly(audio);
+
+        verify(fileAsBookProcessor, never()).writeCoverFromFile(any(), any());
+        assertThat(audiobook.getBookCoverHash()).isEqualTo("chosen");
+    }
+
+    @Test
+    void aFilelessBookWithoutACoverGetsNoneOfAKindItsOwnerLocked() throws IOException {
+        BookEntity shell = shell(25, null);
+        shell.getMetadata().setCoverLocked(true);
+        LibraryFile epub = onDisk(WEIR, "The Martian.epub", BookFileType.EPUB);
+        LibraryFile audio = onDisk(WEIR, "The Martian.m4b", BookFileType.AUDIOBOOK);
+
+        assertThat(attacher.attach(25, Kind.FILELESS, List.of(epub, audio))).containsExactly(epub, audio);
+
+        verify(fileAsBookProcessor, never()).writeCoverFromFile(any(), eq(epub));
+        verify(fileAsBookProcessor).writeCoverFromFile(shell, audio);
+    }
+
+    @Test
+    void aFilelessBookRetitledSinceTheMatchGetsNoFile() throws IOException {
+        // The watcher matched against the book as it read it up to ten minutes ago: "The Martian"
+        BookEntity retitled = shell(26, null);
+        retitled.getMetadata().setTitle("Project Hail Mary");
+        retitled.setLibrary(library);
+        LibraryFile epub = onDisk(WEIR, "The Martian.epub", BookFileType.EPUB);
+
+        assertThat(attacher.attach(26, Kind.FILELESS, List.of(epub))).isEmpty();
+
+        verify(bookAdditionalFileRepository, never()).save(any());
+        verifyNoInteractions(fileAsBookProcessor);
+        verify(filelessShells).readAgainForWatcher(1L);
+        assertThat(retitled.getLibraryPath()).isNull();
+    }
+
+    @Test
+    void aFilelessBookByAnotherAuthorSinceTheMatchGetsNoFile() throws IOException {
+        BookEntity reattributed = shell(27, null);
+        reattributed.getMetadata().getAuthors().set(0, AuthorEntity.builder().name("Zadie Smith").build());
+        LibraryFile epub = onDisk(WEIR, "The Martian.epub", BookFileType.EPUB);
+
+        assertThat(attacher.attach(27, Kind.FILELESS, List.of(epub))).isEmpty();
+
+        verify(bookAdditionalFileRepository, never()).save(any());
+    }
+
+    @Test
+    void anAuthorlessFilelessBookNoLongerPhysicalGetsNoFile() throws IOException {
+        // D1: a fileless book without authors takes a file only while it is a physical book
+        BookEntity guide = book(28, null, null, new BookFileType[0]);
+        guide.getMetadata().setTitle("A Field Guide to Birds");
+        guide.setIsPhysical(true);
+        LibraryFile epub = onDisk("Nature", "A Field Guide to Birds.epub", BookFileType.EPUB);
+        LibraryFile pdf = onDisk("Nature", "A Field Guide to Birds.pdf", BookFileType.PDF);
+
+        assertThat(attacher.attach(28, Kind.FILELESS, List.of(epub))).containsExactly(epub);
+        guide.getBookFiles().clear();
+        guide.setIsPhysical(false);
+        assertThat(attacher.attach(28, Kind.FILELESS, List.of(pdf))).isEmpty();
+
+        assertThat(saved(1)).extracting(BookFileEntity::getFileName).containsExactly("A Field Guide to Birds.epub");
+    }
+
+    @Test
+    void theFilesThatGoWithTheOneThatStillMatchesAreAttachedWithIt() throws IOException {
+        // "Survival.pdf" alone does not say which Smith; it goes with the file that does, as the rescan decided
+        BookEntity survival = book(29, null, null, new BookFileType[0]);
+        survival.getMetadata().setTitle("Survival");
+        survival.getMetadata().setAuthors(new ArrayList<>(List.of(AuthorEntity.builder().name("Jane Smith").build())));
+        LibraryFile named = onDisk("S/Smith, J", "Survival - Jane Smith.epub", BookFileType.EPUB);
+        LibraryFile bare = onDisk("S/Smith, J", "Survival.pdf", BookFileType.PDF);
+
+        assertThat(attacher.attach(29, Kind.FILELESS, List.of(bare))).isEmpty();
+        assertThat(attacher.attach(29, Kind.FILELESS, List.of(named, bare))).containsExactly(named, bare);
+    }
+
+    @Test
+    void aFolderAudiobookIsStoredWithItsFolderHashAndSize() throws IOException {
+        shell(30, "curated");
+        Path dir = Files.createDirectories(root.resolve(WEIR).resolve("The Martian"));
+        Files.write(dir.resolve("01.mp3"), new byte[4096]);
+        Files.write(dir.resolve("02.mp3"), new byte[4096]);
+        LibraryFile folder = LibraryFile.builder().libraryEntity(library).libraryPathEntity(path)
+                .fileSubPath(WEIR).fileName("The Martian").bookFileType(BookFileType.AUDIOBOOK).folderBased(true).build();
+
+        assertThat(attacher.attach(30, Kind.FILELESS, List.of(folder))).containsExactly(folder);
+
+        BookFileEntity stored = saved(1).getFirst();
+        assertThat(stored.isFolderBased()).isTrue();
+        assertThat(stored.getCurrentHash()).isEqualTo(FileFingerprint.generateFolderHash(dir));
+        assertThat(stored.getInitialHash()).isEqualTo(stored.getCurrentHash());
+        assertThat(stored.getFileSizeKb()).isEqualTo(8L);
     }
 
     @Test

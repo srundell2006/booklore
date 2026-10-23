@@ -34,11 +34,12 @@ public class BookRestorationService {
      * soft-deleted.
      *
      * @param currentPaths full paths of every file the scan found
+     * @return whether it restored any book, so that the caller's rows, which still have it deleted, are stale
      */
     @Transactional(propagation = Propagation.REQUIRES_NEW)
-    public void restoreDeletedBooks(LibraryEntity libraryEntity, LibraryBookFiles bookFiles, Set<Path> currentPaths,
-                                    WalkCoverage coverage) {
-        if (currentPaths.isEmpty()) return;
+    public boolean restoreDeletedBooks(LibraryEntity libraryEntity, LibraryBookFiles bookFiles, Set<Path> currentPaths,
+                                       WalkCoverage coverage) {
+        if (currentPaths.isEmpty()) return false;
 
         List<Long> restoreIds = bookFiles.primaryFiles(libraryEntity.getFormatPriority()).entrySet().stream()
                 .filter(entry -> entry.getValue().isBookDeleted())
@@ -47,7 +48,7 @@ public class BookRestorationService {
                 .map(Map.Entry::getKey)
                 .toList();
 
-        if (restoreIds.isEmpty()) return;
+        if (restoreIds.isEmpty()) return false;
 
         List<BookEntity> toRestore = bookRepository.findAllById(restoreIds);
         toRestore.forEach(book -> {
@@ -59,6 +60,7 @@ public class BookRestorationService {
         bookRepository.saveAll(toRestore);
 
         log.info("Restored {} books in library: {}", toRestore.size(), libraryEntity.getName());
+        return !toRestore.isEmpty();
     }
 
     private static boolean isOnDisk(Path fullPath, Set<Path> currentPaths) {

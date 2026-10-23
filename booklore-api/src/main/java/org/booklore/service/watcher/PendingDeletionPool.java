@@ -14,6 +14,7 @@ import org.booklore.service.NotificationService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.annotation.Transactional;
 
+import java.nio.file.Files;
 import java.nio.file.Path;
 import java.time.Instant;
 import java.util.*;
@@ -134,6 +135,26 @@ public class PendingDeletionPool {
         return Optional.empty();
     }
 
+    /**
+     * Gives the deletion held at this path a later timer, its expiry put off, if it still waits on this timer.
+     *
+     * @return false when the deletion is no longer held, matched by a new file meanwhile, or held anew on a timer of
+     * its own; the later timer is then the caller's to cancel
+     */
+    public boolean retime(Path path, ScheduledFuture<?> timer, ScheduledFuture<?> later) {
+        PendingDeletion pending = pendingByPath.get(path);
+        if (pending == null || pending.timer() != timer) {
+            return false;
+        }
+        return pendingByPath.replace(path, pending, new PendingDeletion(pending.originalPath(), pending.isDirectory(),
+                pending.libraryId(), pending.timestamp(), later, pending.hashToBookFileId(), pending.affectedBooks()));
+    }
+
+    /** Whether a deletion the pool holds has a book file of this content, which a new file of it was likely moved from. */
+    public boolean holds(String hash) {
+        return hashIndex.containsKey(hash);
+    }
+
     public Optional<FolderMatchResult> matchFolderByHashes(Map<Path, String> fileHashes) {
         if (fileHashes.isEmpty()) return Optional.empty();
 
@@ -192,6 +213,10 @@ public class PendingDeletionPool {
             Optional<BookEntity> bookOpt = bookRepository.findById(bookSnap.bookId());
             if (bookOpt.isEmpty()) continue;
             BookEntity book = bookOpt.get();
+            if (!movedSince(book, bookSnap).isEmpty()) {
+                log.info("[EXPIRED] Book id={} kept: its file was found moved since its deletion came in", book.getId());
+                continue;
+            }
 
             long remainingFiles = bookFileRepository.countByBookId(book.getId());
             if (remainingFiles <= 1) {
@@ -223,20 +248,67 @@ public class PendingDeletionPool {
             hashIndex.remove(hash);
         }
 
+        Set<Long> removed = new LinkedHashSet<>();
         for (BookSnapshot bookSnap : pending.affectedBooks().values()) {
             Optional<BookEntity> bookOpt = bookRepository.findById(bookSnap.bookId());
-            if (bookOpt.isEmpty()) continue;
+            if (bookOpt.isEmpty()) {
+                removed.add(bookSnap.bookId());
+                continue;
+            }
             BookEntity book = bookOpt.get();
+            List<FileSnapshot> moved = movedSince(book, bookSnap);
+            if (!moved.isEmpty()) {
+                // The book lives on where its moved files are, without those that went with the folder
+                for (FileSnapshot fs : bookSnap.files()) {
+                    if (!moved.contains(fs)) {
+                        bookFileRepository.findById(fs.bookFileId()).filter(PendingDeletionPool::isGone).ifPresent(bf -> {
+                            bookFileRepository.delete(bf);
+                            log.info("[EXPIRED] BookFile id={} removed from book id={}", fs.bookFileId(), book.getId());
+                        });
+                    }
+                }
+                notificationService.sendMessageToPermissions(Topic.BOOK_UPDATE, Set.of(book.getId()),
+                        Set.of(PermissionType.ADMIN, PermissionType.MANAGE_LIBRARY));
+                log.info("[EXPIRED] Book id={} kept: {} of its files were found moved out of '{}'", book.getId(), moved.size(), path);
+                continue;
+            }
             book.setDeleted(true);
             book.setDeletedAt(Instant.now());
             bookRepository.save(book);
+            removed.add(book.getId());
             log.info("[EXPIRED] Book id={} marked as deleted (folder deletion expired)", book.getId());
         }
 
-        Set<Long> bookIds = pending.affectedBooks().keySet();
-        if (!bookIds.isEmpty()) {
-            notificationService.sendMessageToPermissions(Topic.BOOKS_REMOVE, bookIds,
+        // Not a book kept: announced as removed, it would drop out of every open client until a reload
+        if (!removed.isEmpty()) {
+            notificationService.sendMessageToPermissions(Topic.BOOKS_REMOVE, removed,
                     Set.of(PermissionType.ADMIN, PermissionType.MANAGE_LIBRARY));
+        }
+    }
+
+    /**
+     * The files of a book held for deletion that are no longer where they were when their deletion came in. A new
+     * file found to be one of them moved gives it its new path, through this pool or by its hash, and the file and the
+     * folder holding it can both be held for one removal: such a book was moved, and is not to be deleted for the path
+     * it left.
+     */
+    private List<FileSnapshot> movedSince(BookEntity book, BookSnapshot bookSnap) {
+        Long libraryPathId = book.getLibraryPath() != null ? book.getLibraryPath().getId() : null;
+        return bookSnap.files().stream()
+                .filter(fs -> bookFileRepository.findById(fs.bookFileId())
+                        .filter(bf -> !Objects.equals(bf.getFileSubPath(), fs.fileSubPath())
+                                || !Objects.equals(bf.getFileName(), fs.fileName())
+                                || !Objects.equals(libraryPathId, bookSnap.libraryPathId()))
+                        .isPresent())
+                .toList();
+    }
+
+    /** Whether a stored file is no longer at its path. One whose path cannot be told is taken as still there. */
+    private static boolean isGone(BookFileEntity file) {
+        try {
+            return !Files.exists(file.getFullFilePath());
+        } catch (IllegalStateException e) {
+            return false;
         }
     }
 
