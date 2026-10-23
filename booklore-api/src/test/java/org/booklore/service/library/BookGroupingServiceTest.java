@@ -1128,6 +1128,23 @@ class BookGroupingServiceTest {
     }
 
     @Test
+    void rescan_autoDetect_aSecondDownloadIsTheBookWhoseSubtitleHasABareNumber() {
+        // "World War II" names no volume: the book has no series number, and "Unbroken (1).epub" is its copy
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shellRows.add(new FilelessBookRow(12L, null, false, "cover", null, "Unbroken",
+                "A World War II Story of Survival, Resilience, and Redemption", null, "Laura Hillenbrand"));
+        LibraryFile copy = newFile(lib, path, "H/Hillenbrand, Laura", "Unbroken (1).epub");
+        Map<String, Decision> decisions = new LinkedHashMap<>();
+
+        var result = rescan(lib, filelessDecisions(decisions), copy);
+
+        assertThat(attached(result)).containsExactly(Map.entry(12L, List.of(copy)));
+        assertThat(result.newBookGroups()).isEmpty();
+        assertThat(decisions.get("Unbroken (1).epub").reason()).contains("read as a copy");
+    }
+
+    @Test
     void rescan_autoDetect_aSecondVolumeMarkerFollowsItsOriginalOnly() {
         // " (2)" reads as the second volume on its own; next to its original it is a copy, and goes with it
         var path = pathEntity(1L, "/books");
