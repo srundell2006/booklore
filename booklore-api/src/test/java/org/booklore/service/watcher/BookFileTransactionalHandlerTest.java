@@ -450,6 +450,41 @@ class BookFileTransactionalHandlerTest {
         }
 
         @Test
+        void bookPerFolder_theFormatsOfARootFileGoToAlikeFilelessBooksOneEach() {
+            // Intended: a file at the library's root is a book of its own, so another format takes the next alike book
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
+            subPath("");
+            twoFormatsAgainstAlikeFilelessBooks("/library/");
+        }
+
+        @Test
+        void bookPerFile_theFormatsOfAFileGoToAlikeFilelessBooksOneEach() {
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FILE);
+            subPath("W/Weir, Andy");
+            twoFormatsAgainstAlikeFilelessBooks("/library/W/Weir, Andy/");
+            verifyNoFolderLookup();
+        }
+
+        private void twoFormatsAgainstAlikeFilelessBooks(String folder) {
+            noEarlierMatch();
+            shells(shellRow(12L, 1L, "The Martian", "Andy Weir"), shellRow(40L, 1L, "The Martian", "Andy Weir"));
+            when(existingBookAttacher.attach(anyLong(), any(), anyList())).thenAnswer(inv -> {
+                filelessShells.notFileless(inv.getArgument(0));
+                return inv.getArgument(2);
+            });
+
+            handler.handleNewBookFile(1L, Path.of(folder + "The Martian - Andy Weir.epub"));
+            handler.handleNewBookFile(1L, Path.of(folder + "The Martian - Andy Weir.pdf"));
+
+            InOrder inOrder = inOrder(existingBookAttacher);
+            inOrder.verify(existingBookAttacher).attach(eq(12L), eq(Kind.FILELESS), argThat(files ->
+                    files.getFirst().getFileName().equals("The Martian - Andy Weir.epub")));
+            inOrder.verify(existingBookAttacher).attach(eq(40L), eq(Kind.FILELESS), argThat(files ->
+                    files.getFirst().getFileName().equals("The Martian - Andy Weir.pdf")));
+            verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
+        }
+
+        @Test
         void bookPerFolder_attachesToBookInSameFolder() {
             library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
             noEarlierMatch();
