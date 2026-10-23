@@ -435,6 +435,41 @@ class WatcherMovedFileDatabaseTest {
         moveOneFileIntoANewFolderWhileAnotherIsWritten();
     }
 
+    @Test
+    void filesMovedOneByOneIntoANewFolderForLongerThanTheGracePeriodEachMoveTheirBook() throws Exception {
+        // A mover that copies each file into a new folder and removes its source at once, a file every 4 s: each file
+        // puts the folder's handling off again, so it is handled once the last came, past the first deletions' grace
+        Path foundation = epub(root.resolve("Asimov/Foundation.epub"), "Foundation " + System.nanoTime());
+        Path pdf = Files.writeString(root.resolve("Asimov/Foundation.pdf"), "%PDF-1.4 Foundation " + System.nanoTime());
+        long foundationBook = storedBook(
+                new StoredFile("Asimov", "Foundation.epub", FileFingerprint.generateHash(foundation), BookFileType.EPUB, false),
+                new StoredFile("Asimov", "Foundation.pdf", FileFingerprint.generateHash(pdf), BookFileType.PDF, false));
+        Path robot = epub(root.resolve("Asimov/I, Robot.epub"), "I, Robot " + System.nanoTime());
+        long robotBook = storedBook("Asimov", "I, Robot.epub", FileFingerprint.generateHash(robot), false);
+        Path caves = epub(root.resolve("Asimov/The Caves of Steel.epub"), "The Caves of Steel " + System.nanoTime());
+        long cavesBook = storedBook("Asimov", "The Caves of Steel.epub", FileFingerprint.generateHash(caves), false);
+        Path folder = Files.createDirectories(root.resolve("Moved"));
+
+        libraryFileEventProcessor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, library.getId(), folder, true);
+        for (Path source : List.of(foundation, robot, caves)) {
+            Path copy = settled(Files.copy(source, folder.resolve(source.getFileName())));
+            libraryFileEventProcessor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, library.getId(), copy, false);
+            Files.delete(source);
+            libraryFileEventProcessor.processEvent(StandardWatchEventKinds.ENTRY_DELETE, library.getId(), source, false);
+            Thread.sleep(4000);
+        }
+
+        waitUntil(() -> pathsOf(cavesBook).equals(List.of("Moved/The Caves of Steel.epub")));
+        Thread.sleep(9000);
+        assertThat(pathsOf(foundationBook)).containsExactlyInAnyOrder("Moved/Foundation.epub", "Asimov/Foundation.pdf");
+        assertThat(pathsOf(robotBook)).containsExactly("Moved/I, Robot.epub");
+        assertThat(pathsOf(cavesBook)).containsExactly("Moved/The Caves of Steel.epub");
+        assertNotDeleted(foundationBook);
+        assertNotDeleted(robotBook);
+        assertNotDeleted(cavesBook);
+        assertThat(bookRepository.countIncludingDeletedByLibraryId(library.getId())).isEqualTo(3);
+    }
+
     /**
      * GNU mv with several sources across devices, or a file-by-file importer: Foundation.epub is copied into a new folder
      * and its source removed at once, while another file is written into that folder for longer than the pool holds the

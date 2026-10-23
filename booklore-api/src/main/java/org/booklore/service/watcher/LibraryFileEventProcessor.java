@@ -30,6 +30,7 @@ import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.LongSupplier;
+import java.util.function.Predicate;
 
 @Slf4j
 @Service
@@ -382,9 +383,8 @@ public class LibraryFileEventProcessor {
             bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(libPathEntity.getId(), fileSubPath, fileName)
                     .ifPresentOrElse(bookFile -> {
                         var book = bookFile.getBook();
-                        ScheduledFuture<?> timer = scheduler.schedule(
-                                () -> pendingDeletionPool.expireFileDeletion(path),
-                                PENDING_DELETION_GRACE_MS, TimeUnit.MILLISECONDS);
+                        ScheduledFuture<?> timer = scheduleExpiry(libraryPaths(library), path,
+                                () -> pendingDeletionPool.expireFileDeletion(path), PENDING_DELETION_GRACE_MS, clock.getAsLong());
                         pendingDeletionPool.addFileDeletion(path, library.getId(), bookFile, book, timer);
                         log.info("[PENDING_DELETE] Book '{}' deferred deletion (grace period {}ms)", fileName, PENDING_DELETION_GRACE_MS);
                         // A new file waiting as its copy is where it was moved: the pool now hands it the book
@@ -446,8 +446,7 @@ public class LibraryFileEventProcessor {
         for (Path file : bookFilesUnder(folderPath)) {
             filesByFolder.computeIfAbsent(file.getParent(), parent -> new ArrayList<>()).add(file);
         }
-        Set<Path> libraryPaths = new HashSet<>();
-        library.getLibraryPaths().forEach(lp -> libraryPaths.add(Paths.get(lp.getPath()).toAbsolutePath().normalize()));
+        Set<Path> libraryPaths = libraryPaths(library);
 
         filesByFolder.forEach((folder, files) -> {
             // A folder with a book file other than audio, or a library path's root: each file is a book of its own
@@ -736,6 +735,45 @@ public class LibraryFileEventProcessor {
         return unmatched;
     }
 
+    /**
+     * Expires a deletion held in the pool once its grace period is over, unless new files in its library still wait to
+     * be handled: a new folder whose handling each file copied into it puts off again, a folder waiting for a file
+     * still being written, a new file settling, or a create queued. A mover that copies files into a new folder and
+     * removes each source as soon as it copied it leaves the book in the pool while its file waits there; the book was
+     * moved, and is not to be deleted for the path it left. Puts the expiry off for as long as a copy waits at most.
+     *
+     * @param heldSince when the deletion came in
+     */
+    private ScheduledFuture<?> scheduleExpiry(Set<Path> libraryPaths, Path path, Runnable expire, long delayMs, long heldSince) {
+        AtomicReference<ScheduledFuture<?>> timer = new AtomicReference<>();
+        timer.set(scheduler.schedule(() -> {
+            if (newFilesWaitIn(libraryPaths) && clock.getAsLong() - heldSince < copySourceMaxWaitMs) {
+                ScheduledFuture<?> later = scheduleExpiry(libraryPaths, path, expire, STABILITY_CHECK_INTERVAL_MS, heldSince);
+                if (!pendingDeletionPool.retime(path, timer.get(), later)) {
+                    // Matched by a new file meanwhile, or held again for a later deletion with a timer of its own
+                    later.cancel(false);
+                }
+                return;
+            }
+            expire.run();
+        }, delayMs, TimeUnit.MILLISECONDS));
+        return timer.get();
+    }
+
+    /** Whether a new folder or file in one of these library paths waits to be handled. */
+    private boolean newFilesWaitIn(Set<Path> libraryPaths) {
+        Predicate<Path> inLibrary = p -> libraryPaths.stream().anyMatch(p::startsWith);
+        return pendingFolderCreates.keySet().stream().anyMatch(inLibrary)
+                || settlingFiles.stream().anyMatch(inLibrary)
+                || eventQueue.stream().anyMatch(e -> e.eventKind() == StandardWatchEventKinds.ENTRY_CREATE && inLibrary.test(e.fullPath()));
+    }
+
+    private static Set<Path> libraryPaths(LibraryEntity library) {
+        Set<Path> libraryPaths = new HashSet<>();
+        library.getLibraryPaths().forEach(lp -> libraryPaths.add(Paths.get(lp.getPath()).toAbsolutePath().normalize()));
+        return libraryPaths;
+    }
+
     private void handleFolderDelete(LibraryEntity library, Path folderPath) {
         log.info("[FOLDER_DELETE] '{}'", folderPath);
         try {
@@ -754,9 +792,8 @@ public class LibraryFileEventProcessor {
                 return;
             }
 
-            ScheduledFuture<?> timer = scheduler.schedule(
-                    () -> pendingDeletionPool.expireFolderDeletion(folderPath),
-                    PENDING_DELETION_GRACE_MS, TimeUnit.MILLISECONDS);
+            ScheduledFuture<?> timer = scheduleExpiry(libraryPaths(library), folderPath,
+                    () -> pendingDeletionPool.expireFolderDeletion(folderPath), PENDING_DELETION_GRACE_MS, clock.getAsLong());
             pendingDeletionPool.addFolderDeletion(folderPath, library.getId(), booksWithFiles, timer);
             log.info("[PENDING_DELETE] {} books under '{}' deferred deletion (grace period {}ms)",
                     booksWithFiles.size(), folderPath, PENDING_DELETION_GRACE_MS);

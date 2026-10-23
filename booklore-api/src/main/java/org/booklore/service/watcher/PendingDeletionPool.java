@@ -135,6 +135,21 @@ public class PendingDeletionPool {
         return Optional.empty();
     }
 
+    /**
+     * Gives the deletion held at this path a later timer, its expiry put off, if it still waits on this timer.
+     *
+     * @return false when the deletion is no longer held, matched by a new file meanwhile, or held anew on a timer of
+     * its own; the later timer is then the caller's to cancel
+     */
+    public boolean retime(Path path, ScheduledFuture<?> timer, ScheduledFuture<?> later) {
+        PendingDeletion pending = pendingByPath.get(path);
+        if (pending == null || pending.timer() != timer) {
+            return false;
+        }
+        return pendingByPath.replace(path, pending, new PendingDeletion(pending.originalPath(), pending.isDirectory(),
+                pending.libraryId(), pending.timestamp(), later, pending.hashToBookFileId(), pending.affectedBooks()));
+    }
+
     /** Whether a deletion the pool holds has a book file of this content, which a new file of it was likely moved from. */
     public boolean holds(String hash) {
         return hashIndex.containsKey(hash);

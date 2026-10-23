@@ -265,6 +265,24 @@ class PendingDeletionPoolTest {
     }
 
     @Test
+    void retime_putsOffAHeldDeletionOnlyWhileItWaitsOnTheTimerThatPutsItOff() {
+        ScheduledFuture<?> timer = mock(ScheduledFuture.class);
+        ScheduledFuture<?> later = mock(ScheduledFuture.class);
+        ScheduledFuture<?> stale = mock(ScheduledFuture.class);
+        Path path = Path.of("/library/subfolder/test.epub");
+        pool.addFileDeletion(path, 1L, bookFile, book, timer);
+
+        assertThat(pool.retime(path, timer, later)).isTrue();
+        // The timer it was put off from no longer holds it
+        assertThat(pool.retime(path, timer, stale)).isFalse();
+
+        // Matched, it is no longer held: the later timer is the one cancelled
+        assertThat(pool.matchByHash("abc123")).isPresent();
+        verify(later).cancel(false);
+        assertThat(pool.retime(path, later, stale)).isFalse();
+    }
+
+    @Test
     void hasPendingForPaths_detectsPendingDeletion() {
         ScheduledFuture<?> timer = mock(ScheduledFuture.class);
         pool.addFileDeletion(Path.of("/library/subfolder/test.epub"), 1L, bookFile, book, timer);
