@@ -23,6 +23,7 @@ import org.springframework.stereotype.Service;
 import java.io.IOException;
 import java.io.UncheckedIOException;
 import java.nio.file.*;
+import java.nio.file.attribute.BasicFileAttributes;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
 import java.time.temporal.ChronoUnit;
@@ -886,22 +887,40 @@ public class LibraryFileEventProcessor {
     /**
      * Goes on noting the writes to a file handed on while still being written, once it reached the settling limit,
      * until it is written: the copies waiting in its library wait as long as a mover still writes, as it removes the
-     * sources it copied only once it is done. Bounded by the longest wait of a copy, which is all it serves.
+     * sources it copied only once it is done. A file is written to while it changes from one check to the next: its
+     * modification time alone can be ahead of this host's clock, as a share whose clock runs ahead stamps it, and would
+     * hold the copies until the clock caught up. Bounded by the longest wait of a copy, which is all it serves.
      */
     private void noteWritesWhileGrowing(long libraryId, Path file) {
-        if (beingWritten(file) && growingFiles.add(file)) {
+        FileState state = FileState.of(file);
+        if (state != null && growingFiles.add(file)) {
             noteWrite(libraryId);
             long since = clock.getAsLong();
-            scheduler.schedule(() -> stillGrowing(libraryId, file, since), STABILITY_CHECK_INTERVAL_MS, TimeUnit.MILLISECONDS);
+            scheduler.schedule(() -> stillGrowing(libraryId, file, state, since), STABILITY_CHECK_INTERVAL_MS, TimeUnit.MILLISECONDS);
         }
     }
 
-    private void stillGrowing(long libraryId, Path file, long since) {
-        if (beingWritten(file) && clock.getAsLong() - since < copySourceMaxWaitMs) {
+    private void stillGrowing(long libraryId, Path file, FileState before, long since) {
+        FileState state = FileState.of(file);
+        if (state != null && !state.equals(before) && clock.getAsLong() - since < copySourceMaxWaitMs) {
             noteWrite(libraryId);
-            scheduler.schedule(() -> stillGrowing(libraryId, file, since), STABILITY_CHECK_INTERVAL_MS, TimeUnit.MILLISECONDS);
+            scheduler.schedule(() -> stillGrowing(libraryId, file, state, since), STABILITY_CHECK_INTERVAL_MS, TimeUnit.MILLISECONDS);
         } else {
             growingFiles.remove(file);
+        }
+    }
+
+    /** A file's size and modification time, which change while it is written. */
+    private record FileState(long size, long modified) {
+
+        /** Null when the file cannot be read, as when it is gone. */
+        static FileState of(Path file) {
+            try {
+                BasicFileAttributes attributes = Files.readAttributes(file, BasicFileAttributes.class);
+                return new FileState(attributes.size(), attributes.lastModifiedTime().toMillis());
+            } catch (IOException e) {
+                return null;
+            }
         }
     }
 

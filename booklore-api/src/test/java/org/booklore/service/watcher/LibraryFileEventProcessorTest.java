@@ -506,6 +506,28 @@ class LibraryFileEventProcessorTest {
         }
 
         @Test
+        void aFileWhoseModificationTimeIsAheadOfTheClockHoldsTheCopiesNoLongerThanAFileStillBeingWritten() throws Exception {
+            // A share whose clock runs ahead of this host stamps a file it has finished with a time still to come: it
+            // looks written to until then, but it no longer changes
+            processor.setCopySourceWaitMs(4000);
+            processor.setStabilityMaxWaitMs(2000);
+            Path copy = settledFile("copy.epub");
+            when(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(1L, copy))
+                    .thenReturn(Optional.of(new BookFileTransactionalHandler.CopyOfAStoredFile(7L, "hash")));
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, copy, false);
+            waitUntil(() -> processor.waitsAsCopy(copy));
+
+            Path skewed = Files.writeString(tempDir.resolve("skewed.epub"), "written");
+            Files.setLastModifiedTime(skewed, FileTime.from(Instant.now().plusSeconds(120)));
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, skewed, false);
+
+            // Handed on at the settling limit, as a new file still is, and the copy is taken for a copy once the
+            // library is quiet, not once this host's clock reaches the file's time
+            verify(bookFileTransactionalHandler, timeout(8000)).handleNewBookFileUnlessCopy(1L, skewed);
+            verify(bookFileTransactionalHandler, timeout(12000)).handleNewBookFile(1L, copy);
+        }
+
+        @Test
         void aCopyWaitsWhileFilesKeepArrivingForAsLongAsALargeMoveAcrossDevicesCopies() {
             // A mover copies the whole tree before it removes any of it: hours, for a large library on a slow disk or
             // share. A copy whose wait ended before then would be a second book, and the source's removal would delete
