@@ -332,6 +332,27 @@ class ExistingBookMatcherTest {
         }
 
         @Test
+        void anotherYearInBracketsIsAnotherEdition() {
+            // No identity holds a year in brackets, so the identities alone would call two yearly editions alike
+            ShellCandidate older = shell(12, "Rick Steves Italy (2020)", "Rick Steves");
+            ShellCandidate newer = shell(40, "Rick Steves Italy (2023)", "Rick Steves");
+            assertThat(older.identities()).isEqualTo(newer.identities());
+            assertThat(older.years()).containsExactly(2020);
+
+            Decision decision = shellMatch(file("S/Steves, Rick", "Rick Steves Italy (2023).epub"), older, newer);
+
+            assertThat(decision).isInstanceOf(Ambiguous.class);
+            assertThat(((Ambiguous) decision).bookIds()).containsExactlyInAnyOrder(12L, 40L);
+            assertThat(shellMatch(file("S/Steves, Rick", "Rick Steves Italy.epub"), older, newer)).isInstanceOf(Ambiguous.class);
+            // A year and none may be two editions as well
+            assertThat(shellMatch(file("S/Steves, Rick", "Rick Steves Italy.epub"), older, shell(41, "Rick Steves Italy", "Rick Steves")))
+                    .isInstanceOf(Ambiguous.class);
+            // The same year twice is one edition entered twice
+            assertThat(matchedId(shellMatch(file("S/Steves, Rick", "Rick Steves Italy (2020).epub"),
+                    shell(40, "Rick Steves Italy (2020)", "Rick Steves"), older))).isEqualTo(12);
+        }
+
+        @Test
         void otherAuthorsAreAnotherBook() {
             // A co-author more, or another given name the path agrees with as well
             assertThat(shellMatch(file("S/Smith, Ann", "Survival.epub"),

@@ -11,7 +11,7 @@ import java.util.regex.Pattern;
 
 /**
  * A fileless book (one without any book_file row) as {@link ExistingBookMatcher} sees it: the identities its title
- * reads as, its authors and its series number. Built from plain projection rows, never from entities, so a rescan can
+ * reads as, the years it gives, its authors and its series number. Built from plain projection rows, never from entities, so a rescan can
  * hold every fileless book of a large library at once.
  *
  * @param libraryPathId the library path the book belongs to, or null when it has none yet (a physical book)
@@ -19,6 +19,8 @@ import java.util.regex.Pattern;
  * @param title         the title as the metadata has it, for log lines
  * @param identities    the {@link TitleKey#identity}s the book is found under: its title, its title with its subtitle,
  *                      and the title without a metadata provider's "(Series, #N)" suffix
+ * @param years         the publication years its titles give in brackets ("Rick Steves Italy (2020)"), as
+ *                      {@link TitleKey#years} reads them; no identity holds them, so they alone tell two editions apart
  * @param authors       its authors, parsed
  * @param seriesNumber  its place in its series when that is a whole number: the metadata's series number, else the
  *                      number of a "(Series, #N)" suffix; null otherwise
@@ -35,6 +37,7 @@ public record ShellCandidate(long bookId,
                              boolean hasCover,
                              String title,
                              Set<String> identities,
+                             Set<Integer> years,
                              List<PersonName> authors,
                              Integer seriesNumber,
                              Float seriesPlace,
@@ -49,6 +52,7 @@ public record ShellCandidate(long bookId,
 
     public ShellCandidate {
         identities = Set.copyOf(identities);
+        years = Set.copyOf(years);
         authors = List.copyOf(authors);
         volumeNumbers = List.copyOf(volumeNumbers);
     }
@@ -76,16 +80,18 @@ public record ShellCandidate(long bookId,
             keys.add(TitleKey.ofTitle(cleanTitle + ": " + subtitle.trim(), context));
         }
         Set<String> identities = new LinkedHashSet<>();
+        Set<Integer> years = new LinkedHashSet<>();
         Set<String> volumeNumbers = new LinkedHashSet<>();
         for (TitleKey key : keys) {
             if (!key.identity().isEmpty()) {
                 identities.add(key.identity());
+                years.addAll(key.years());
                 volumeNumbers.addAll(key.keywordNumbers());
             }
         }
 
         Integer number = wholeNumber(seriesNumber);
-        return new ShellCandidate(bookId, libraryPathId, physical, hasCover, fullTitle, identities, authors,
+        return new ShellCandidate(bookId, libraryPathId, physical, hasCover, fullTitle, identities, years, authors,
                 number != null ? number : wholeNumber(suffixPlace), seriesNumber != null ? seriesNumber : suffixPlace,
                 List.copyOf(volumeNumbers));
     }

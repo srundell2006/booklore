@@ -1224,6 +1224,23 @@ class BookGroupingServiceTest {
     }
 
     @Test
+    void rescan_autoDetect_filelessEditionsOfTwoYearsAreNotAlike() {
+        // The file names the 2023 edition; the editions' titles differ only by their years, which no identity holds
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shell(12, "Rick Steves Italy (2020)", "Rick Steves");
+        shell(40, "Rick Steves Italy (2023)", "Rick Steves");
+        LibraryFile italy = newFile(lib, path, "S/Steves, Rick", "Rick Steves Italy (2023).epub");
+        Map<String, Decision> decisions = new LinkedHashMap<>();
+
+        var result = rescan(lib, filelessDecisions(decisions), italy);
+
+        assertThat(result.filesToAttach()).isEmpty();
+        assertThat(newBooks(result)).containsExactly(List.of("Rick Steves Italy (2023).epub"));
+        assertThat(decisions.get("Rick Steves Italy (2023).epub").reason()).startsWith("2 fileless books qualify");
+    }
+
+    @Test
     void rescan_autoDetect_rootFilesAttachByExactTitleToo() {
         // New: a root file was never attached; "Dune.pdf" next to "Dune.epub" shares its sidecar files, and the
         // initial scan groups root files by exact title as well

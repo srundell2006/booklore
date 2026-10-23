@@ -39,11 +39,12 @@ import java.util.stream.Collectors;
  *       ("Survival", "King") needs the author's first given name written as the book has it, not an initial for a
  *       name. A fileless book without authors only matches when it is a physical book;</li>
  *   <li>when a leading series number was taken off the name ("01 - Title"), have that series number;</li>
- *   <li>be the only fileless book that qualifies, or one of several alike ones: the same titles, the same series
- *       number (as given, so 1.5 is not 2.5) and the same authors, as a book entered twice or a paper copy's record
- *       next to its ebook's are. The file goes to one that is not physical, since an ebook file belongs with the
- *       record whose file was lost, else to the one with the lowest id. Books without authors are never alike:
- *       nothing says they are one book.</li>
+ *   <li>be the only fileless book that qualifies, or one of several alike ones: the same titles, with the same
+ *       years in brackets (so "Rick Steves Italy (2020)" is not the 2023 edition), the same series number (as given,
+ *       so 1.5 is not 2.5) and the same authors, as a book entered twice or a paper copy's record next to its ebook's
+ *       are. The file goes to one that is not physical, since an ebook file belongs with the record whose file was
+ *       lost, else to the one with the lowest id. Books without authors are never alike: nothing says they are one
+ *       book.</li>
  * </ul>
  * A name ending in " (1)", as a browser names a second download, is also read without it, by the same rules:
  * "Started Early, Took My Dog (1).epub" is the fileless book "Started Early, Took My Dog" as well as its first volume.
@@ -313,7 +314,8 @@ public final class ExistingBookMatcher {
      * of the ebook, and the file is either one's. A book that is not physical goes first, since an ebook file belongs
      * with the record whose file was lost, then the lowest id. Null when one of them differs from the others, or they
      * have no authors to tell them by. Series numbers are compared as given: 1.5 and 2.5, or 0.5 and none, are two
-     * places in a series, although neither is a whole number.
+     * places in a series, although neither is a whole number. Years in brackets, which no identity holds, are compared
+     * too: "Rick Steves Italy (2020)" and "Rick Steves Italy (2023)" are two editions, and "(2020)" and none may be.
      */
     private static Accepted oneOfAlike(Collection<Accepted> qualifying) {
         ShellCandidate first = qualifying.iterator().next().shell();
@@ -323,7 +325,8 @@ public final class ExistingBookMatcher {
         }
         for (Accepted next : qualifying) {
             ShellCandidate shell = next.shell();
-            if (!shell.identities().equals(first.identities()) || !Objects.equals(shell.seriesNumber(), first.seriesNumber())
+            if (!shell.identities().equals(first.identities()) || !shell.years().equals(first.years())
+                    || !Objects.equals(shell.seriesNumber(), first.seriesNumber())
                     || !Objects.equals(shell.seriesPlace(), first.seriesPlace()) || !Set.copyOf(shell.authors()).equals(authors)) {
                 return null;
             }
