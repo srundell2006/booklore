@@ -49,9 +49,10 @@ import java.util.stream.Collectors;
  * "Started Early, Took My Dog (1).epub" is the fileless book "Started Early, Took My Dog" as well as its first volume.
  * A book found only that way that says it is another volume than 1 is turned down when nothing else in the name is a
  * number, since " (1)" may as well mean volume 1: its series number is another (2, or 2.5), or its title or subtitle
- * names volumes and none of them is 1 ("Saga: Volume Two"). With a leading series number ("03 - Title (1).epub") or
- * another number in the name the " (1)" is a copy, and the series number rule decides. A comic's " (1)" is an issue,
- * and " (2)" to " (9)" stay volume numbers.
+ * names volumes after a series keyword and none of them is 1 ("Saga: Volume Two"). A bare number in a subtitle names
+ * no volume: "Unbroken (1).epub" is the copy of "Unbroken: A World War II Story of Survival, Resilience, and
+ * Redemption". With a leading series number ("03 - Title (1).epub") or another number in the name the " (1)" is a
+ * copy, and the series number rule decides. A comic's " (1)" is an issue, and " (2)" to " (9)" stay volume numbers.
  * <p>
  * A rescan matches every new file against the same fileless books, so {@link #resolveShellClaims} then leaves alone a
  * fileless book claimed from more than one folder, or by two different files of one format. Files that match alike
@@ -286,15 +287,16 @@ public final class ExistingBookMatcher {
 
     /**
      * Why the book is no volume 1, which a " (1)" may mean: its place in its series is another, fractions included, or
-     * its titles name volumes and none of them is 1 ("Saga: Volume Two", "The Walking Dead: Vol. 2: Miles Behind Us").
+     * its titles name volumes after a series keyword and none of them is 1 ("Saga: Volume Two", "The Walking Dead: Vol.
+     * 2: Miles Behind Us"). A bare number says nothing: "World War II" or "1936" in a subtitle is what a book is about.
      * Null when nothing says so. Never evidence against the book, of which the file may be a copy all the same.
      */
     private static Rejection anotherVolumeThanOne(ShellCandidate shell) {
         if (shell.seriesPlace() != null && shell.seriesPlace() != 1f) {
             return new Rejection("is number " + number(shell.seriesPlace()) + " of its series, and \" (1)\" may mean volume 1", false);
         }
-        if (!shell.titleNumbers().isEmpty() && !shell.titleNumbers().contains("1")) {
-            return new Rejection("has number " + String.join(", ", shell.titleNumbers())
+        if (!shell.volumeNumbers().isEmpty() && !shell.volumeNumbers().contains("1")) {
+            return new Rejection("names volume " + String.join(", ", shell.volumeNumbers())
                     + " in its title or subtitle, and \" (1)\" may mean volume 1", false);
         }
         return null;

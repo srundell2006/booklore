@@ -29,15 +29,18 @@ import java.util.regex.Pattern;
  * compared with), or when the last part is written with initials ("J.R.R. Tolkien"). A part that merely looks like a
  * name stays in the title: "Assignment - Karachi" is not "Assignment", and "KING - Las Vegas Bad Boys" is not "King".
  *
- * @param title       the title's words, lower case, without accents, punctuation, numbers or a leading article
- * @param numbers     every volume or series number, in order and without leading zeros ("Henry IV Part 2" is [4, 2])
- * @param years       publication years written in brackets ("(2009)")
- * @param part        for an audio file, the part or disc of a book split over several files; null otherwise
- * @param copy        a duplicate's copy marker at the end of a file name; null when there is none
- * @param droppedName the part dropped as an author, as written; null when none was
+ * @param title          the title's words, lower case, without accents, punctuation, numbers or a leading article
+ * @param numbers        every volume or series number, in order and without leading zeros ("Henry IV Part 2" is [4, 2])
+ * @param keywordNumbers the numbers of {@link #numbers} a series keyword introduced ("Vol. 2", "Book Two", "#3"), in
+ *                       order: those say which volume a name is, where a bare number may as well be part of what it
+ *                       is about ("A World War II Story", "the 1936 Berlin Olympics")
+ * @param years          publication years written in brackets ("(2009)")
+ * @param part           for an audio file, the part or disc of a book split over several files; null otherwise
+ * @param copy           a duplicate's copy marker at the end of a file name; null when there is none
+ * @param droppedName    the part dropped as an author, as written; null when none was
  */
-public record TitleKey(String title, List<String> numbers, Set<Integer> years, Integer part, CopyMarker copy,
-                       String droppedName) {
+public record TitleKey(String title, List<String> numbers, List<String> keywordNumbers, Set<Integer> years, Integer part,
+                       CopyMarker copy, String droppedName) {
 
     /**
      * " (1)" as a browser names a second download, or " - Copy" / "(copy)" as a file manager names a duplicate.
@@ -103,6 +106,7 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
 
     public TitleKey {
         numbers = List.copyOf(numbers);
+        keywordNumbers = List.copyOf(keywordNumbers);
         years = Collections.unmodifiableSet(new TreeSet<>(years));
     }
 
@@ -267,7 +271,7 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
                 TitleKey folder = prepare(ctx.leafName(), false, false, false).read(ctx);
                 Set<Integer> allYears = new TreeSet<>(years);
                 allYears.addAll(folder.years());
-                return new TitleKey(folder.title(), folder.numbers(), allYears, part, copy, null);
+                return new TitleKey(folder.title(), folder.numbers(), folder.keywordNumbers(), allYears, part, copy, null);
             }
             List<String> segments = segments(text, comic);
             List<String> beforeBy = beforeBy(segments);
@@ -312,13 +316,16 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
             String joined = String.join(" ", segments.stream().map(TitleKey::articleToFront).toList());
             List<String> titleWords = new ArrayList<>();
             List<String> numbers = new ArrayList<>();
+            List<String> keywordNumbers = new ArrayList<>();
             List<String> tokens = withoutDescriptorRuns(words(joined), comic);
             for (int i = 0; i < tokens.size(); i++) {
                 String token = tokens.get(i);
                 if (TitleWords.SERIES_KEYWORDS.contains(token) && i + 1 < tokens.size()) {
                     String number = TitleWords.numberAfter(token, tokens.get(i + 1));
                     if (number != null) {
-                        numbers.add(comic && TitleWords.ISSUE_KEYWORDS.contains(token) ? ISSUE + number : number);
+                        String read = comic && TitleWords.ISSUE_KEYWORDS.contains(token) ? ISSUE + number : number;
+                        numbers.add(read);
+                        keywordNumbers.add(read);
                         i++;
                         continue;
                     }
@@ -337,7 +344,7 @@ public record TitleKey(String title, List<String> numbers, Set<Integer> years, I
             if (titleWords.size() > 1 && TitleWords.ARTICLES.contains(titleWords.getFirst())) {
                 titleWords.removeFirst();
             }
-            return new TitleKey(String.join(" ", titleWords), numbers, years, part, copy, droppedName);
+            return new TitleKey(String.join(" ", titleWords), numbers, keywordNumbers, years, part, copy, droppedName);
         }
     }
 

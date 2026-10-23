@@ -1124,7 +1124,7 @@ class BookGroupingServiceTest {
         assertThat(attached(result)).containsExactly(Map.entry(8L, List.of(second)));
         assertThat(newBooks(result)).containsExactly(List.of("Saga (1).epub"));
         assertThat(decisions.get("Saga (1).epub").reason())
-                .isEqualTo("book#8 \"Saga\" has number 2 in its title or subtitle, and \" (1)\" may mean volume 1");
+                .isEqualTo("book#8 \"Saga\" names volume 2 in its title or subtitle, and \" (1)\" may mean volume 1");
     }
 
     @Test

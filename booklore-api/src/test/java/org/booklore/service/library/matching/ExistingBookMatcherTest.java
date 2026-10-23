@@ -424,7 +424,7 @@ class ExistingBookMatcherTest {
             Decision first = shellMatch(file("V/Vaughan, Brian K.", "Saga (1).epub"), saga);
 
             assertThat(first).isEqualTo(new NoMatch(
-                    "book#8 \"Saga\" has number 2 in its title or subtitle, and \" (1)\" may mean volume 1"));
+                    "book#8 \"Saga\" names volume 2 in its title or subtitle, and \" (1)\" may mean volume 1"));
             assertThat(((NoMatch) first).refused()).isEmpty();
             assertThat(matchedId(shellMatch(file("V/Vaughan, Brian K.", "Saga (2).epub"), saga))).isEqualTo(8);
             ShellCandidate walkingDead = ShellCandidate.of(9, PATH, false, true, "The Walking Dead", "Vol. 2: Miles Behind Us",
@@ -435,6 +435,24 @@ class ExistingBookMatcherTest {
             assertThat(shellMatch(file("V/Vaughan, Brian K.", "Saga (1).epub"), second)).isInstanceOf(NoMatch.class);
             ShellCandidate firstBySuffix = ShellCandidate.of(8, PATH, false, true, "Saga (Saga, #1)", null, null, List.of("Brian K. Vaughan"));
             assertThat(matchedId(shellMatch(file("V/Vaughan, Brian K.", "Saga (1).epub"), firstBySuffix))).isEqualTo(8);
+        }
+
+        @Test
+        void aBareNumberInASubtitleNamesNoVolume() {
+            // "World War II" and "1936" are what the books are about; neither has a series number
+            ShellCandidate unbroken = ShellCandidate.of(1, PATH, false, true, "Unbroken",
+                    "A World War II Story of Survival, Resilience, and Redemption", null, List.of("Laura Hillenbrand"));
+            ShellCandidate boys = ShellCandidate.of(2, PATH, false, true, "The Boys in the Boat",
+                    "Nine Americans and Their Epic Quest for Gold at the 1936 Berlin Olympics", null, List.of("Daniel James Brown"));
+
+            assertThat(shellMatch(file("H/Hillenbrand, Laura", "Unbroken (1).epub"), unbroken)).isEqualTo(new Match(1, Kind.FILELESS,
+                    "title and author agree with book#1 \"Unbroken\" (\" (1)\" read as a copy)"));
+            assertThat(shellMatch(file("B/Brown, Daniel James", "The Boys in the Boat (1).epub"), boys)).isEqualTo(new Match(2,
+                    Kind.FILELESS, "title and author agree with book#2 \"The Boys in the Boat\" (\" (1)\" read as a copy)"));
+            // Its series number still says which volume it is
+            ShellCandidate second = ShellCandidate.of(1, PATH, false, true, "Unbroken",
+                    "A World War II Story of Survival, Resilience, and Redemption", 2f, List.of("Laura Hillenbrand"));
+            assertThat(shellMatch(file("H/Hillenbrand, Laura", "Unbroken (1).epub"), second)).isInstanceOf(NoMatch.class);
         }
 
         @Test
