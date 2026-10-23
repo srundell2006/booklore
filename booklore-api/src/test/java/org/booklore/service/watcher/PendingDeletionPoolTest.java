@@ -5,6 +5,7 @@ import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.LibraryPathEntity;
 import org.booklore.model.enums.BookFileType;
+import org.booklore.model.websocket.Topic;
 import org.booklore.repository.BookFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.service.NotificationService;
@@ -192,6 +193,7 @@ class PendingDeletionPoolTest {
 
         assertThat(book.getDeleted()).isTrue();
         verify(bookRepository).save(book);
+        verify(notificationService).sendMessageToPermissions(eq(Topic.BOOKS_REMOVE), eq(Set.of(10L)), any());
     }
 
     @Test
@@ -258,6 +260,8 @@ class PendingDeletionPoolTest {
         verify(bookFileRepository, never()).delete(bookFile);
         verify(bookFileRepository, never()).delete(mobi);
         verify(bookRepository, never()).save(any());
+        // Announced as removed, the kept book would drop out of every open client until a reload
+        verify(notificationService, never()).sendMessageToPermissions(eq(Topic.BOOKS_REMOVE), any(), any());
     }
 
     @Test

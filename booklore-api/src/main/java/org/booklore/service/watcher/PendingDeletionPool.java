@@ -228,9 +228,13 @@ public class PendingDeletionPool {
             hashIndex.remove(hash);
         }
 
+        Set<Long> removed = new LinkedHashSet<>();
         for (BookSnapshot bookSnap : pending.affectedBooks().values()) {
             Optional<BookEntity> bookOpt = bookRepository.findById(bookSnap.bookId());
-            if (bookOpt.isEmpty()) continue;
+            if (bookOpt.isEmpty()) {
+                removed.add(bookSnap.bookId());
+                continue;
+            }
             BookEntity book = bookOpt.get();
             List<FileSnapshot> moved = movedSince(book, bookSnap);
             if (!moved.isEmpty()) {
@@ -251,12 +255,13 @@ public class PendingDeletionPool {
             book.setDeleted(true);
             book.setDeletedAt(Instant.now());
             bookRepository.save(book);
+            removed.add(book.getId());
             log.info("[EXPIRED] Book id={} marked as deleted (folder deletion expired)", book.getId());
         }
 
-        Set<Long> bookIds = pending.affectedBooks().keySet();
-        if (!bookIds.isEmpty()) {
-            notificationService.sendMessageToPermissions(Topic.BOOKS_REMOVE, bookIds,
+        // Not a book kept: announced as removed, it would drop out of every open client until a reload
+        if (!removed.isEmpty()) {
+            notificationService.sendMessageToPermissions(Topic.BOOKS_REMOVE, removed,
                     Set.of(PermissionType.ADMIN, PermissionType.MANAGE_LIBRARY));
         }
     }
