@@ -29,6 +29,7 @@ import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.LongSupplier;
 
 @Slf4j
 @Service
@@ -75,17 +76,26 @@ public class LibraryFileEventProcessor {
      */
     private final ConcurrentMap<Path, PendingCopy> pendingCopies = new ConcurrentHashMap<>();
     private final Object copyLock = new Object();
-    /** When each library last saw a file arrive, or one still being written. */
+    /** Numbers each waiting copy's timer, so a timer can tell whether the copy still waits on it. Under copyLock. */
+    private long copyTimers;
+    /** When each library last saw a file arrive, or one still being written, on {@link #clock}. */
     private final ConcurrentMap<Long, Long> lastWriteSeen = new ConcurrentHashMap<>();
     private long copySourceWaitMs = COPY_SOURCE_WAIT_MS;
     private long copySourceMaxWaitMs = COPY_SOURCE_MAX_WAIT_MS;
+    /**
+     * Now, in milliseconds, for timing the waits: the clock the scheduler counts its delays on. The wall clock can be
+     * stepped back or ahead, by an NTP correction or a VM resumed, and a wait timed on it then ends too soon or never.
+     */
+    private LongSupplier clock = () -> TimeUnit.NANOSECONDS.toMillis(System.nanoTime());
 
     /**
-     * @param hashes the contents it copies; a deletion of one of them hands it back at once
-     * @param folder whether it is a folder, handed back as a folder create
-     * @param since  when it began to wait
+     * @param hashes  the contents it copies; a deletion of one of them hands it back at once
+     * @param folder  whether it is a folder, handed back as a folder create
+     * @param since   when it began to wait
+     * @param timerId the number of the timer it waits on
      */
-    private record PendingCopy(long libraryId, Set<String> hashes, boolean folder, long since, ScheduledFuture<?> recheck) {
+    private record PendingCopy(long libraryId, Set<String> hashes, boolean folder, long since, long timerId,
+                               ScheduledFuture<?> recheck) {
     }
 
     /** For tests, which cannot wait the full time. */
@@ -96,6 +106,11 @@ public class LibraryFileEventProcessor {
     /** For tests, which cannot wait the full time. */
     void setCopySourceMaxWaitMs(long copySourceMaxWaitMs) {
         this.copySourceMaxWaitMs = copySourceMaxWaitMs;
+    }
+
+    /** For tests, which step the clock. */
+    void setClock(LongSupplier clock) {
+        this.clock = clock;
     }
 
     /** Whether the file or folder at this path waits as a copy of a stored file. For tests. */
@@ -185,7 +200,7 @@ public class LibraryFileEventProcessor {
 
     /** A file arrived in the library, or one is still being written: a copy into it may still be going on. */
     private void noteWrite(long libraryId) {
-        lastWriteSeen.put(libraryId, System.currentTimeMillis());
+        lastWriteSeen.put(libraryId, clock.getAsLong());
     }
 
     private void handleEvent(FileEvent event) {
@@ -253,8 +268,8 @@ public class LibraryFileEventProcessor {
     }
 
     /** When something began to wait as a copy: now, unless it comes back from that wait. */
-    private static long waitingSince(Wait waited, long since) {
-        return waited == Wait.COPY ? since : System.currentTimeMillis();
+    private long waitingSince(Wait waited, long since) {
+        return waited == Wait.COPY ? since : clock.getAsLong();
     }
 
     /**
@@ -269,32 +284,37 @@ public class LibraryFileEventProcessor {
             if (previous != null) {
                 previous.recheck().cancel(false);
             }
-            long delay = Math.max(0L, from + copySourceWaitMs - System.currentTimeMillis());
-            pendingCopies.put(path, new PendingCopy(libraryId, Set.copyOf(hashes), folder, from,
-                    scheduler.schedule(() -> copyWaitEnds(path), delay, TimeUnit.MILLISECONDS)));
+            long delay = Math.max(0L, from + copySourceWaitMs - clock.getAsLong());
+            pendingCopies.put(path, armed(path, libraryId, hashes, folder, from, delay));
         }
         log.info("[FILE_CREATE] '{}' {}; taken for a copy unless that file goes within {}ms", path, what, copySourceWaitMs);
     }
 
+    /** A waiting copy with a timer of its own, which ends the wait unless the copy is handed back or waits anew first. */
+    private PendingCopy armed(Path path, long libraryId, Set<String> hashes, boolean folder, long since, long delayMs) {
+        long timerId = ++copyTimers;
+        return new PendingCopy(libraryId, Set.copyOf(hashes), folder, since, timerId,
+                scheduler.schedule(() -> copyWaitEnds(path, timerId), delayMs, TimeUnit.MILLISECONDS));
+    }
+
     /**
      * A waiting copy's wait is over, unless files kept arriving or growing in its library: a mover that copies a
-     * large tree removes the source only once it is all written, which can take longer than the wait.
+     * large tree removes the source only once it is all written, which can take longer than the wait. A timer that
+     * finds the wait not over, as one would after the clock was stepped, waits again for the rest.
      */
-    private void copyWaitEnds(Path path) {
+    private void copyWaitEnds(Path path, long timerId) {
         synchronized (copyLock) {
             PendingCopy pending = pendingCopies.get(path);
-            long now = System.currentTimeMillis();
-            if (pending == null || now - pending.since() < copySourceWaitMs) {
-                // Handed back already, or waiting again with a timer of its own
+            if (pending == null || pending.timerId() != timerId) {
+                // Handed back already, or waiting anew on a timer of its own
                 return;
             }
-            long lastWrite = lastWriteSeen.getOrDefault(pending.libraryId(), 0L);
-            if (now - lastWrite < copySourceWaitMs && now - pending.since() < copySourceMaxWaitMs) {
-                long delay = lastWrite + copySourceWaitMs - now;
-                // This timer's own, unless it fired as it was replaced: one timer per waiting copy
-                pending.recheck().cancel(false);
-                pendingCopies.put(path, new PendingCopy(pending.libraryId(), pending.hashes(), pending.folder(),
-                        pending.since(), scheduler.schedule(() -> copyWaitEnds(path), delay, TimeUnit.MILLISECONDS)));
+            long now = clock.getAsLong();
+            long quietSince = Math.max(pending.since(), lastWriteSeen.getOrDefault(pending.libraryId(), pending.since()));
+            long over = Math.min(quietSince + copySourceWaitMs, pending.since() + copySourceMaxWaitMs);
+            if (now < over) {
+                pendingCopies.put(path, armed(path, pending.libraryId(), pending.hashes(), pending.folder(),
+                        pending.since(), over - now));
                 log.debug("[FILE_CREATE] '{}' waits on as a copy: files are still arriving in its library", path);
                 return;
             }
@@ -431,7 +451,7 @@ public class LibraryFileEventProcessor {
         if (event.waited() != Wait.NONE && event.waited() != Wait.SETTLING) {
             return false;
         }
-        long now = System.currentTimeMillis();
+        long now = clock.getAsLong();
         long since = event.waited() == Wait.SETTLING ? event.since() : now;
         Optional<Path> written = fileBeingWritten(folderPath);
         if (written.isEmpty()) {
@@ -793,7 +813,7 @@ public class LibraryFileEventProcessor {
             onStable.run();
             settlingFiles.remove(path);
         };
-        scheduler.schedule(() -> checkStability(libraryId, path, queue, System.currentTimeMillis()), 0, TimeUnit.MILLISECONDS);
+        scheduler.schedule(() -> checkStability(libraryId, path, queue, clock.getAsLong()), 0, TimeUnit.MILLISECONDS);
     }
 
     private void checkStability(long libraryId, Path path, Runnable onStable, long startTime) {
@@ -803,7 +823,7 @@ public class LibraryFileEventProcessor {
                 return;
             }
 
-            long elapsed = System.currentTimeMillis() - startTime;
+            long elapsed = clock.getAsLong() - startTime;
             if (elapsed >= STABILITY_MAX_WAIT_MS) {
                 log.warn("[STABILITY] Max wait exceeded for '{}', processing anyway", path);
                 onStable.run();

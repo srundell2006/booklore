@@ -35,6 +35,7 @@ import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.ConcurrentHashMap;
 import java.util.concurrent.CountDownLatch;
 import java.util.concurrent.TimeUnit;
+import java.util.concurrent.atomic.AtomicLong;
 import java.util.function.BooleanSupplier;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -475,6 +476,26 @@ class LibraryFileEventProcessorTest {
 
             // Taken for a copy while files were still arriving
             verify(bookFileTransactionalHandler).handleNewBookFile(1L, copy);
+        }
+
+        @Test
+        void aCopyIsHandedBackOnceItsWaitIsOverWhenTheClockStepsBackWhileItWaits() throws Exception {
+            processor.setCopySourceWaitMs(1500);
+            AtomicLong steppedBack = new AtomicLong();
+            processor.setClock(() -> TimeUnit.NANOSECONDS.toMillis(System.nanoTime()) - steppedBack.get());
+            Path copy = settledFile("copy.epub");
+            when(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(1L, copy))
+                    .thenReturn(Optional.of(new BookFileTransactionalHandler.CopyOfAStoredFile(7L, "hash")));
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, copy, false);
+            waitUntil(() -> processor.waitsAsCopy(copy));
+            // The clock the wait is timed on steps back, as the wall clock can: its timer fires before the wait is
+            // over by that clock, and must wait again for the rest rather than leave the copy waiting for good
+            steppedBack.set(2000);
+
+            verify(bookFileTransactionalHandler, timeout(8000)).handleNewBookFile(1L, copy);
+            waitUntil(() -> !processor.hasPendingEventsForPaths(Set.of(tempDir)));
+            verify(bookFileTransactionalHandler, times(1)).handleNewBookFile(1L, copy);
         }
 
         /** New files arrive in the library, one every few hundred milliseconds, for this long. */
