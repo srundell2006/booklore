@@ -161,7 +161,7 @@ public class BookFileTransactionalHandler {
         if (leaveCopies) {
             Optional<Long> copied = bookFilePersistenceService.findBookCopied(currentHash, cutoff);
             if (copied.isPresent()) {
-                log.info("[CREATE] File '{}' copies a file of book id={} that is still there; left until that file "
+                log.debug("[CREATE] File '{}' copies a file of book id={} that is still there; left until that file "
                         + "had time to go, in case it was moved by copying", filePath, copied.get());
                 return Optional.of(new CopyOfAStoredFile(copied.get(), currentHash));
             }
@@ -245,7 +245,7 @@ public class BookFileTransactionalHandler {
         if (leaveCopies && !storedHere) {
             Optional<Long> copied = bookFilePersistenceService.findBookCopied(folderHash, cutoff);
             if (copied.isPresent()) {
-                log.info("[CREATE] Folder audiobook '{}' copies that of book id={}, which is still there; left until "
+                log.debug("[CREATE] Folder audiobook '{}' copies that of book id={}, which is still there; left until "
                         + "that folder had time to go, in case it was moved by copying", folderPath, copied.get());
                 return Optional.of(new CopyOfAStoredFile(copied.get(), folderHash));
             }

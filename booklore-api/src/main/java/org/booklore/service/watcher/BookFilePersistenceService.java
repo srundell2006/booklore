@@ -60,7 +60,8 @@ public class BookFilePersistenceService {
         }
         List<BookFileEntity> moved = origin.moved();
         if (moved.isEmpty()) {
-            log.info("[FILE_CREATE] '{}' has the content of a file of book id={} that is still where it was; taken for a copy",
+            // The caller says what it does with such a copy, which may first wait for its source to go
+            log.debug("[FILE_CREATE] '{}' has the content of a file of book id={} that is still where it was; not a move",
                     path, books.iterator().next());
             return Optional.empty();
         }
