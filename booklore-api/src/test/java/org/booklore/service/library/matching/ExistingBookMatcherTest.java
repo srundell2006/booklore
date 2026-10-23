@@ -695,7 +695,8 @@ class ExistingBookMatcherTest {
 
         @Test
         void alikeBooksClaimedFromTwoFoldersGetNone() {
-            // Every file claims the one alike book chosen, so the claim rules hold for alike books as for one
+            // Every file that sees the same alike books claims the one chosen, so the claim rules hold for them as for
+            // one book
             FilelessShellIndex index = FilelessShellIndex.of(List.of(shell(40, "Survival", "Ann Smith"), shell(12, "Survival", "Ann Smith")));
             List<Claim<FileEvidence>> claims = claims(index,
                     file("S/Smith, Ann", "Survival.epub"),
@@ -706,6 +707,27 @@ class ExistingBookMatcherTest {
 
             assertThat(resolution.accepted()).isEmpty();
             assertThat(resolution.rejected()).containsOnlyKeys(12L);
+        }
+
+        @Test
+        void filesOfTwoLibraryPathsMaySeeDifferentAlikeBooksAndGetOneEach() {
+            // A file only sees the books in its own library path or in none: the file of path 1 sees both books and
+            // gets book#12, the file of path 2 sees book#40 only. Each book is claimed from one folder, so both attach
+            ShellCandidate inPathOne = ShellCandidate.of(12, PATH, false, true, "Survival", null, null, List.of("Ann Smith"));
+            ShellCandidate inNoPath = ShellCandidate.of(40, null, false, true, "Survival", null, null, List.of("Ann Smith"));
+            FileEvidence ofPathOne = FileEvidence.of(PATH, "S/Smith, Ann", "Survival.epub", false);
+            FileEvidence ofPathTwo = FileEvidence.of(2L, "S/Smith, Ann", "Survival.epub", false);
+            List<Claim<FileEvidence>> claims = claims(FilelessShellIndex.of(List.of(inPathOne, inNoPath)), ofPathOne, ofPathTwo);
+            assertThat(claims).extracting(Claim::bookId).containsExactly(12L, 40L);
+
+            ClaimResolution<FileEvidence> resolution = ExistingBookMatcher.resolveShellClaims(claims);
+
+            assertThat(resolution.accepted()).containsOnlyKeys(12L, 40L);
+            // Where a single book in no path, claimed from both, gets neither
+            ClaimResolution<FileEvidence> single = ExistingBookMatcher.resolveShellClaims(
+                    claims(FilelessShellIndex.of(List.of(inNoPath)), ofPathOne, ofPathTwo));
+            assertThat(single.accepted()).isEmpty();
+            assertThat(single.rejected()).containsOnlyKeys(40L);
         }
 
         @Test

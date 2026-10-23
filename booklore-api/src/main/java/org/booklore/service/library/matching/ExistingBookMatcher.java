@@ -58,10 +58,13 @@ import java.util.stream.Collectors;
  * copy, and the series number rule decides. A comic's " (1)" is an issue, and " (2)" to " (9)" stay volume numbers.
  * <p>
  * A rescan matches every new file against the same fileless books, so {@link #resolveShellClaims} then leaves alone a
- * fileless book claimed from more than one folder, or by two different files of one format. Files that match alike
- * books all claim the same one of them, so those rules hold for alike books as for one. The watcher takes one file at
- * a time and no longer offers a book once a file was attached to it, so a later file that matches the same alike books
- * gets the next of them.
+ * fileless book claimed from more than one folder, or by two different files of one format. Files that match the same
+ * alike books all claim the same one of them, so for those the rules hold as for one book. A file only sees the books
+ * in its own library path or in none, though, so files of two library paths may see different ones of alike books and
+ * each get one: with alike books in path 1 and in no path, a "Survival.epub" of path 1 gets the first and one of path
+ * 2 the second, where a single book in no path would get neither. The watcher takes one file at a time and no longer
+ * offers a book once a file was attached to it, so a later file that matches the same alike books gets the next of
+ * them.
  */
 public final class ExistingBookMatcher {
 
