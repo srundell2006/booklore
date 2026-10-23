@@ -66,7 +66,6 @@ public class LibraryFileEventProcessor {
     private final ScheduledExecutorService scheduler = Executors.newScheduledThreadPool(1);
     private final ConcurrentMap<Path, ScheduledFuture<?>> pendingDeletes = new ConcurrentHashMap<>();
     private final ConcurrentMap<Path, ScheduledFuture<?>> pendingFolderCreates = new ConcurrentHashMap<>();
-    private final Set<Path> filesFromPendingFolder = ConcurrentHashMap.newKeySet();
     /** New files whose stability check has not found them written in full yet. */
     private final Set<Path> settlingFiles = ConcurrentHashMap.newKeySet();
     /**
@@ -163,7 +162,6 @@ public class LibraryFileEventProcessor {
                 for (var entry : pendingFolderCreates.entrySet()) {
                     if (path.startsWith(entry.getKey())) {
                         insidePendingFolder = true;
-                        filesFromPendingFolder.add(path);
                         Path folderPath = entry.getKey();
                         scheduleFolderCreate(libraryId, folderPath, FOLDER_CREATE_DEBOUNCE_MS, Wait.NONE, 0L);
                         log.debug("[DEBOUNCE] File '{}' tracked, reset folder debounce for '{}'", path.getFileName(), folderPath);
@@ -188,7 +186,6 @@ public class LibraryFileEventProcessor {
     private void scheduleFolderCreate(long libraryId, Path folderPath, long delayMs, Wait waited, long since) {
         AtomicReference<ScheduledFuture<?>> timer = new AtomicReference<>();
         timer.set(scheduler.schedule(() -> {
-            filesFromPendingFolder.removeIf(f -> f.startsWith(folderPath));
             eventQueue.offer(new FileEvent(StandardWatchEventKinds.ENTRY_CREATE, libraryId, folderPath, true, waited, since));
             pendingFolderCreates.remove(folderPath, timer.get());
         }, delayMs, TimeUnit.MILLISECONDS));
@@ -379,242 +376,220 @@ public class LibraryFileEventProcessor {
     }
 
     /**
-     * A new folder, or one that comes back from waiting. Its new files, or the folder audiobook it is, are handled as a
-     * new file is: one that copies a stored file still there waits for that file to go.
+     * A new folder, or one that comes back from waiting. Each of its book files is handled as a new file is, as soon as
+     * it is written: one still being written goes through the stability check of a single new file, so the files
+     * already written are not held back for it. A mover that removes each source as soon as it copied it leaves the
+     * book in the pool only for the grace period, and a book held past it is deleted. What groups the folder's files
+     * waits for the files it groups: a folder audiobook, and a BOOK_PER_FOLDER folder's new files.
      */
     private void handleFolderCreate(LibraryEntity library, Path folderPath, FileEvent event) {
-        log.info("[FOLDER_CREATE] '{}'", folderPath);
+        if (event.waited() == Wait.SETTLING) {
+            log.debug("[FOLDER_CREATE] '{}' again, once its files are written", folderPath);
+        } else {
+            log.info("[FOLDER_CREATE] '{}'", folderPath);
+        }
 
         pendingFolderCreates.entrySet().removeIf(entry -> {
             if (entry.getKey().startsWith(folderPath) && !entry.getKey().equals(folderPath)) {
                 entry.getValue().cancel(false);
-                filesFromPendingFolder.removeIf(f -> f.startsWith(entry.getKey()));
                 log.debug("[DEBOUNCE] Cancelled child folder debounce for '{}'", entry.getKey());
                 return true;
             }
             return false;
         });
 
-        if (putOffWhileAFileIsWritten(library.getId(), folderPath, event)) {
+        if (Files.exists(folderPath.resolve(".ignore"))) {
+            log.debug("[SKIP] Folder has .ignore file: '{}'", folderPath);
             return;
         }
 
         var mode = library.getOrganizationMode() != null
                 ? library.getOrganizationMode() : LibraryOrganizationMode.AUTO_DETECT;
-
-        if (mode == LibraryOrganizationMode.BOOK_PER_FILE) {
-            processFilesInFolderIndividually(library, folderPath);
-            return;
-        }
-
-        if (mode == LibraryOrganizationMode.BOOK_PER_FOLDER) {
-            processFilesInFolderAsOneBook(library, folderPath, event);
-            return;
-        }
-
-        // AUTO_DETECT: existing audiobook folder detection logic
-        FolderAnalysis analysis = analyzeFolderForAudiobook(folderPath);
-
-        if (analysis.isFolderBasedAudiobook()) {
-            log.info("[FOLDER_AUDIOBOOK] Detected folder-based audiobook: {} ({} audio files)",
-                    folderPath.getFileName(), analysis.audioFileCount());
-            try {
-                handleNewFolderAudiobook(library.getId(), folderPath, event);
-                int cleared = 0;
-                var iterator = filesFromPendingFolder.iterator();
-                while (iterator.hasNext()) {
-                    if (iterator.next().startsWith(folderPath)) {
-                        iterator.remove();
-                        cleared++;
-                    }
-                }
-                if (cleared > 0) {
-                    log.debug("[FOLDER_AUDIOBOOK] Cleared {} tracked files that are now part of folder audiobook", cleared);
-                }
-            } catch (Exception e) {
-                log.warn("[ERROR] Processing folder audiobook '{}': {}", folderPath, e.getMessage());
-            }
-        } else {
-            processTrackedAndWalkedFiles(library, folderPath);
+        switch (mode) {
+            case BOOK_PER_FILE -> handleEachFile(library.getId(), bookFilesUnder(folderPath));
+            case BOOK_PER_FOLDER -> processFilesInFolderAsOneBook(library, folderPath, event);
+            case AUTO_DETECT -> processFilesInFolderAutoDetected(library, folderPath, event);
         }
     }
 
     /**
-     * Puts a new folder's create off while a book file in it is still being written, as when a copy into the folder
-     * outlasts the folder's debounce: the copy's finished files would be taken while the rest is still on its way, and
-     * a file half written would be read as a book of its own, with a content no stored file has. Waits as long as a
-     * single new file waits to settle; a folder that comes back from waiting as a copy is not put off.
+     * AUTO_DETECT, grouped as a library scan groups files: a folder whose own book files are two audio files or more,
+     * and not a series of single-file audiobooks, is a folder audiobook, at whatever depth of the new folder it is, as
+     * in Author/Title/tracks; every other book file is a book of its own. A folder that can be a folder audiobook waits
+     * while an audio file of its own is still being written, as what it is, and its hash, depend on all of them.
+     */
+    private void processFilesInFolderAutoDetected(LibraryEntity library, Path folderPath, FileEvent event) {
+        Map<Path, List<Path>> filesByFolder = new LinkedHashMap<>();
+        for (Path file : bookFilesUnder(folderPath)) {
+            filesByFolder.computeIfAbsent(file.getParent(), parent -> new ArrayList<>()).add(file);
+        }
+        Set<Path> libraryPaths = new HashSet<>();
+        library.getLibraryPaths().forEach(lp -> libraryPaths.add(Paths.get(lp.getPath()).toAbsolutePath().normalize()));
+
+        filesByFolder.forEach((folder, files) -> {
+            // A folder with a book file other than audio, or a library path's root: each file is a book of its own
+            if (libraryPaths.contains(folder) || !files.stream().allMatch(LibraryFileEventProcessor::isAudioFile)) {
+                handleEachFile(library.getId(), files);
+                return;
+            }
+            // Only the event's own folder comes back from a wait
+            Wait waited = folder.equals(folderPath) ? event.waited() : Wait.NONE;
+            long since = folder.equals(folderPath) ? event.since() : 0L;
+            if (putOffWhileAFileIsWritten(library.getId(), folder, files, waited, since)) {
+                handleFilesMovedFromAPendingDeletion(library.getId(), files);
+                return;
+            }
+            if (files.size() >= MIN_AUDIO_FILES_FOR_FOLDER_AUDIOBOOK && !FileUtils.isSeriesFolder(files)) {
+                log.info("[FOLDER_AUDIOBOOK] Detected folder-based audiobook: {} ({} audio files)",
+                        folder.getFileName(), files.size());
+                try {
+                    handleNewFolderAudiobook(library.getId(), folder, waited, since);
+                } catch (Exception e) {
+                    log.warn("[ERROR] Processing folder audiobook '{}': {}", folder, e.getMessage());
+                }
+            } else {
+                handleEachFile(library.getId(), files);
+            }
+        });
+    }
+
+    /**
+     * Hands each file on as a new file: at once if it is written, and after the stability check a single new file
+     * goes through if it is still being written.
+     */
+    private void handleEachFile(long libraryId, List<Path> files) {
+        for (Path file : files) {
+            if (beingWritten(file)) {
+                scheduleWithStabilityCheck(libraryId, file, () ->
+                        eventQueue.offer(new FileEvent(StandardWatchEventKinds.ENTRY_CREATE, libraryId, file, false)));
+            } else if (fileHasContent(file)) {
+                try {
+                    handleNewFile(libraryId, file, Wait.NONE, 0L);
+                } catch (Exception e) {
+                    log.warn("[ERROR] Processing file '{}': {}", file, e.getMessage());
+                }
+            }
+        }
+    }
+
+    /**
+     * Handles at once those written files, of a folder put off, with the content of a book file whose deletion the pool
+     * holds: a book's single-file audiobook moved here by a mover that removes each source as it goes, which the
+     * folder's wait would otherwise hold until that book was deleted.
+     */
+    private void handleFilesMovedFromAPendingDeletion(long libraryId, List<Path> files) {
+        for (Path file : files) {
+            if (beingWritten(file) || !fileHasContent(file)) {
+                continue;
+            }
+            try {
+                if (pendingDeletionPool.holds(FileFingerprint.generateHash(file))) {
+                    handleNewFile(libraryId, file, Wait.NONE, 0L);
+                }
+            } catch (Exception e) {
+                log.warn("[ERROR] Processing file '{}': {}", file, e.getMessage());
+            }
+        }
+    }
+
+    /**
+     * Puts a folder's create off while one of these files, which the folder groups, is still being written, as when a
+     * copy into the folder outlasts its debounce: a file half written would be grouped with a content no stored file
+     * has. Waits as long as a single new file waits to settle; a folder that comes back from waiting as a copy is not
+     * put off.
      *
      * @return whether the create was put off
      */
-    private boolean putOffWhileAFileIsWritten(long libraryId, Path folderPath, FileEvent event) {
-        if (event.waited() != Wait.NONE && event.waited() != Wait.SETTLING) {
+    private boolean putOffWhileAFileIsWritten(long libraryId, Path folderPath, List<Path> files, Wait waited, long since) {
+        if (waited != Wait.NONE && waited != Wait.SETTLING) {
             return false;
         }
-        long now = clock.getAsLong();
-        long since = event.waited() == Wait.SETTLING ? event.since() : now;
-        Optional<Path> written = fileBeingWritten(folderPath);
+        List<Path> written = files.stream().filter(this::beingWritten).toList();
         if (written.isEmpty()) {
             return false;
         }
-        if (now - since >= STABILITY_MAX_WAIT_MS) {
+        long now = clock.getAsLong();
+        long from = waited == Wait.SETTLING ? since : now;
+        if (now - from >= STABILITY_MAX_WAIT_MS) {
             log.warn("[STABILITY] '{}' is still being written after {}ms; handling folder '{}' anyway",
-                    written.get(), STABILITY_MAX_WAIT_MS, folderPath);
+                    written.getFirst(), STABILITY_MAX_WAIT_MS, folderPath);
             return false;
         }
         noteWrite(libraryId);
-        log.info("[FOLDER_CREATE] '{}' is still being written; folder '{}' waits for it", written.get().getFileName(), folderPath);
-        scheduleFolderCreate(libraryId, folderPath, STABILITY_CHECK_INTERVAL_MS, Wait.SETTLING, since);
+        if (waited == Wait.NONE) {
+            log.info("[FOLDER_CREATE] '{}' is still being written; folder '{}' waits for it", written.getFirst().getFileName(), folderPath);
+        } else {
+            log.debug("[FOLDER_CREATE] '{}' is still being written; folder '{}' waits on", written.getFirst().getFileName(), folderPath);
+        }
+        scheduleFolderCreate(libraryId, folderPath, STABILITY_CHECK_INTERVAL_MS, Wait.SETTLING, from);
         return true;
     }
 
-    /** A book file in the folder, or below it, written to within the stability interval. */
-    private Optional<Path> fileBeingWritten(Path folderPath) {
-        long now = System.currentTimeMillis();
+    /** The book files in the folder and below it, but for those in a folder marked to be ignored. */
+    private List<Path> bookFilesUnder(Path folderPath) {
         try (var stream = Files.walk(folderPath)) {
             return stream.filter(Files::isRegularFile)
                     .filter(p -> !isUnderIgnoredDirectory(p, folderPath))
                     .filter(p -> isBookFile(p.getFileName().toString()))
-                    .filter(p -> {
-                        try {
-                            return now - Files.getLastModifiedTime(p).toMillis() < STABILITY_CHECK_INTERVAL_MS;
-                        } catch (IOException e) {
-                            return false;
-                        }
-                    })
-                    .findFirst();
+                    .sorted()
+                    .toList();
         } catch (IOException | UncheckedIOException e) {
-            log.debug("[STABILITY] Error walking folder '{}': {}", folderPath, e.getMessage());
-            return Optional.empty();
+            log.warn("[ERROR] Walking folder '{}': {}", folderPath, e.getMessage());
+            return List.of();
         }
     }
 
+    /** Whether a file was written to within the stability interval, as one still being copied is. */
+    private boolean beingWritten(Path file) {
+        try {
+            return System.currentTimeMillis() - Files.getLastModifiedTime(file).toMillis() < STABILITY_CHECK_INTERVAL_MS;
+        } catch (IOException e) {
+            return false;
+        }
+    }
+
+    private static boolean isAudioFile(Path file) {
+        return BookFileExtension.fromFileName(file.getFileName().toString())
+                .filter(ext -> ext.getType() == BookFileType.AUDIOBOOK)
+                .isPresent();
+    }
+
     /** A folder audiobook, which waits as a new file does when a stored folder audiobook still there has its content. */
-    private void handleNewFolderAudiobook(long libraryId, Path folderPath, FileEvent event) {
-        if (event.waited() == Wait.COPY_OVER) {
+    private void handleNewFolderAudiobook(long libraryId, Path folderPath, Wait waited, long since) {
+        if (waited == Wait.COPY_OVER) {
             bookFileTransactionalHandler.handleNewFolderAudiobook(libraryId, folderPath);
             return;
         }
         bookFileTransactionalHandler.handleNewFolderAudiobookUnlessCopy(libraryId, folderPath).ifPresent(copy ->
-                waitAsCopy(libraryId, folderPath, Set.of(copy.hash()), true, waitingSince(event.waited(), event.since()),
+                waitAsCopy(libraryId, folderPath, Set.of(copy.hash()), true, waitingSince(waited, since),
                         "copies the folder audiobook of book id=" + copy.bookId()));
     }
 
-    private void processFilesInFolderIndividually(LibraryEntity library, Path folderPath) {
-        if (Files.exists(folderPath.resolve(".ignore"))) {
-            log.debug("[SKIP] Folder has .ignore file: '{}'", folderPath);
-            clearTrackedFilesFor(folderPath);
-            return;
-        }
-        clearTrackedFilesFor(folderPath);
-        try (var stream = Files.walk(folderPath)) {
-            stream.filter(Files::isRegularFile)
-                    .filter(p -> !isUnderIgnoredDirectory(p, folderPath))
-                    .filter(p -> isBookFile(p.getFileName().toString()))
-                    .filter(this::fileHasContent)
-                    .forEach(p -> {
-                        try {
-                            handleNewFile(library.getId(), p, Wait.NONE, 0L);
-                        } catch (Exception e) {
-                            log.warn("[ERROR] Processing file '{}': {}", p, e.getMessage());
-                        }
-                    });
-        } catch (IOException e) {
-            log.warn("[ERROR] Walking folder '{}': {}", folderPath, e.getMessage());
-        }
-    }
-
     /**
-     * BOOK_PER_FOLDER: the folder's new files as one book. A file that a stored file, still there, has the content of
-     * makes all the new files wait, so that a folder of copies of a book's files moves that book once the files they
-     * copy go, and a folder that is a copy becomes one book after the wait, as it did at once before.
+     * BOOK_PER_FOLDER: the folder's new files as one book. The files written are matched at once, while the pool still
+     * holds the books whose sources a mover removed as it went; the new files then wait for those still being written,
+     * as they are one book. A file that a stored file, still there, has the content of makes all the new files wait, so
+     * that a folder of copies of a book's files moves that book once the files they copy go, and a folder that is a
+     * copy becomes one book after the wait, as it did at once before.
      */
     private void processFilesInFolderAsOneBook(LibraryEntity library, Path folderPath, FileEvent event) {
-        if (Files.exists(folderPath.resolve(".ignore"))) {
-            log.debug("[SKIP] Folder has .ignore file: '{}'", folderPath);
-            clearTrackedFilesFor(folderPath);
-            return;
-        }
-        clearTrackedFilesFor(folderPath);
-
-        List<Path> bookFiles = new ArrayList<>();
-        try (var stream = Files.walk(folderPath)) {
-            stream.filter(Files::isRegularFile)
-                    .filter(p -> !isUnderIgnoredDirectory(p, folderPath))
-                    .filter(p -> isBookFile(p.getFileName().toString()))
-                    .filter(this::fileHasContent)
-                    // A file a book has at its path is no new file: it would be taken for a copy of itself, and a
-                    // folder that comes back from waiting holds the files the pool gave their books meanwhile
-                    .filter(p -> !bookFilePersistenceService.isStoredByALiveBook(library, p))
-                    .forEach(bookFiles::add);
-        } catch (IOException e) {
-            log.warn("[ERROR] Walking folder '{}': {}", folderPath, e.getMessage());
-        }
-
+        List<Path> bookFiles = bookFilesUnder(folderPath).stream()
+                // A file a book has at its path is no new file: it would be taken for a copy of itself, and a folder
+                // that comes back from waiting, or from a wait for its files to be written, holds the files the pool
+                // gave their books meanwhile
+                .filter(p -> !bookFilePersistenceService.isStoredByALiveBook(library, p))
+                .toList();
         if (bookFiles.isEmpty()) {
             return;
         }
 
-        // Try folder-level pool matching first
-        Map<Path, String> fileHashes = new HashMap<>();
-        for (Path p : bookFiles) {
-            try {
-                fileHashes.put(p, FileFingerprint.generateHash(p));
-            } catch (Exception e) {
-                log.warn("[ERROR] Hash computation for '{}': {}", p, e.getMessage());
-            }
-        }
-
-        Optional<PendingDeletionPool.FolderMatchResult> folderMatch = pendingDeletionPool.matchFolderByHashes(fileHashes);
-        if (folderMatch.isPresent()) {
-            var match = folderMatch.get();
-            String matchedLibPath = bookFilePersistenceService.findMatchingLibraryPath(library, folderPath);
-            LibraryPathEntity matchedLibPathEntity = bookFilePersistenceService.getLibraryPathEntityForFile(library, matchedLibPath);
-
-            for (var bookEntry : match.pending().affectedBooks().entrySet()) {
-                var bookSnap = bookEntry.getValue();
-                bookFilePersistenceService.recoverFolderBook(bookSnap, matchedLibPathEntity, folderPath, fileHashes);
-            }
-            log.info("[FOLDER_CREATE] Folder '{}' matched pending deletion, recovered {} books",
-                    folderPath, match.pending().affectedBooks().size());
+        List<Path> written = bookFiles.stream().filter(p -> !beingWritten(p)).toList();
+        Map<Path, String> unmatched = new LinkedHashMap<>(matchMovedFiles(library, folderPath, written));
+        if (putOffWhileAFileIsWritten(library.getId(), folderPath, bookFiles, event.waited(), event.since())) {
             return;
         }
-
-        // Try hash-based move detection for each file
-        List<Path> unmatched = new ArrayList<>();
-        for (Path p : bookFiles) {
-            try {
-                String hash = fileHashes.get(p);
-                if (hash == null) {
-                    unmatched.add(p);
-                    continue;
-                }
-
-                Optional<PendingDeletionPool.MatchResult> poolMatch = pendingDeletionPool.matchByHash(hash);
-                if (poolMatch.isPresent()) {
-                    var pmatch = poolMatch.get();
-                    String libPath = bookFilePersistenceService.findMatchingLibraryPath(library, p);
-                    LibraryPathEntity lpEntity = bookFilePersistenceService.getLibraryPathEntityForFile(library, libPath);
-                    String subPath = FileUtils.getRelativeSubPath(lpEntity.getPath(), p);
-                    pendingDeletionPool.recoverBook(pmatch, lpEntity, subPath, p.getFileName().toString(), hash);
-                    log.info("[FOLDER_CREATE] File '{}' matched pending deletion, recovered book id={}", p, pmatch.book().bookId());
-                    continue;
-                }
-
-                Optional<BookFileEntity> movedFrom = bookFilePersistenceService.findMovedFile(
-                        hash, p, Instant.now().minus(60, ChronoUnit.SECONDS));
-                if (movedFrom.isPresent()) {
-                    bookFilePersistenceService.updatePathIfChanged(movedFrom.get(), library, p);
-                    log.info("[FOLDER_CREATE] File '{}' recognized as moved file, updated existing book's path", p);
-                } else {
-                    unmatched.add(p);
-                }
-            } catch (Exception e) {
-                log.warn("[ERROR] Hash check for '{}': {}", p, e.getMessage());
-                unmatched.add(p);
-            }
-        }
-
+        // Those written since, and those still being written once the folder waited as long as a new file does
+        unmatched.putAll(matchMovedFiles(library, folderPath, bookFiles.stream().filter(p -> !written.contains(p)).toList()));
         if (unmatched.isEmpty()) {
             return;
         }
@@ -622,12 +597,11 @@ public class LibraryFileEventProcessor {
         if (event.waited() != Wait.COPY_OVER) {
             Instant cutoff = Instant.now().minus(60, ChronoUnit.SECONDS);
             Map<String, Long> copied = new LinkedHashMap<>();
-            for (Path p : unmatched) {
-                String hash = fileHashes.get(p);
+            unmatched.forEach((p, hash) -> {
                 if (hash != null) {
                     bookFilePersistenceService.findBookCopied(hash, cutoff).ifPresent(bookId -> copied.put(hash, bookId));
                 }
-            }
+            });
             if (!copied.isEmpty()) {
                 waitAsCopy(library.getId(), folderPath, copied.keySet(), true, waitingSince(event.waited(), event.since()),
                         "has " + unmatched.size() + " new files, of which " + copied.size() + " copy files of books "
@@ -640,7 +614,7 @@ public class LibraryFileEventProcessor {
         LibraryPathEntity libPathEntity = bookFilePersistenceService.getLibraryPathEntityForFile(library, libraryPath);
 
         List<LibraryFile> libraryFiles = new ArrayList<>();
-        for (Path p : unmatched) {
+        for (Path p : unmatched.keySet()) {
             String fileName = p.getFileName().toString();
             var ext = BookFileExtension.fromFileName(fileName);
             if (ext.isPresent()) {
@@ -659,83 +633,83 @@ public class LibraryFileEventProcessor {
         }
     }
 
-    private void processTrackedAndWalkedFiles(LibraryEntity library, Path folderPath) {
-        var trackedFiles = filesFromPendingFolder.stream()
-                .filter(p -> p.startsWith(folderPath))
-                .filter(p -> !isUnderIgnoredDirectory(p, folderPath))
-                .filter(p -> isBookFile(p.getFileName().toString()))
-                .filter(this::fileHasContent)
-                .toList();
-
-        if (!trackedFiles.isEmpty()) {
-            log.info("[FOLDER_CREATE] Processing {} tracked files individually", trackedFiles.size());
-            for (Path filePath : trackedFiles) {
-                try {
-                    handleNewFile(library.getId(), filePath, Wait.NONE, 0L);
-                } catch (Exception e) {
-                    log.warn("[ERROR] Processing tracked file '{}': {}", filePath, e.getMessage());
-                }
-                filesFromPendingFolder.remove(filePath);
+    /**
+     * Gives the books whose deletions the pool holds, or whose files were found moved, their files among these, and
+     * returns the rest, with their hashes where they could be read: the folder's new files.
+     */
+    private Map<Path, String> matchMovedFiles(LibraryEntity library, Path folderPath, List<Path> files) {
+        Map<Path, String> fileHashes = new LinkedHashMap<>();
+        for (Path p : files) {
+            if (!fileHasContent(p)) {
+                continue;
+            }
+            try {
+                fileHashes.put(p, FileFingerprint.generateHash(p));
+            } catch (Exception e) {
+                log.warn("[ERROR] Hash computation for '{}': {}", p, e.getMessage());
+                fileHashes.put(p, null);
             }
         }
-
-        try (var stream = Files.walk(folderPath)) {
-            stream.filter(Files::isRegularFile)
-                    .filter(p -> !isUnderIgnoredDirectory(p, folderPath))
-                    .filter(p -> isBookFile(p.getFileName().toString()))
-                    .filter(this::fileHasContent)
-                    .filter(p -> !trackedFiles.contains(p))
-                    .forEach(p -> {
-                        try {
-                            handleNewFile(library.getId(), p, Wait.NONE, 0L);
-                        } catch (Exception e) {
-                            log.warn("[ERROR] Processing file '{}': {}", p, e.getMessage());
-                        }
-                    });
-        } catch (IOException e) {
-            log.warn("[ERROR] Walking folder '{}': {}", folderPath, e.getMessage());
+        if (fileHashes.isEmpty()) {
+            return fileHashes;
         }
-    }
 
-    private void clearTrackedFilesFor(Path folderPath) {
-        filesFromPendingFolder.removeIf(p -> p.startsWith(folderPath));
-    }
-
-    private FolderAnalysis analyzeFolderForAudiobook(Path folderPath) {
-        List<Path> audioFiles = new ArrayList<>();
-        boolean hasNonAudioBook = false;
-
-        try (var stream = Files.walk(folderPath)) {
-            var files = stream.filter(Files::isRegularFile)
-                    .filter(p -> !isUnderIgnoredDirectory(p, folderPath))
-                    .filter(this::fileHasContent)
-                    .toList();
-
-            for (Path file : files) {
-                String fileName = file.getFileName().toString();
-                var ext = BookFileExtension.fromFileName(fileName);
-                if (ext.isPresent()) {
-                    if (ext.get().getType() == BookFileType.AUDIOBOOK) {
-                        audioFiles.add(file);
-                    } else {
-                        hasNonAudioBook = true;
-                    }
-                }
+        // Try folder-level pool matching first
+        Map<Path, String> hashed = new HashMap<>();
+        fileHashes.forEach((p, hash) -> {
+            if (hash != null) {
+                hashed.put(p, hash);
             }
-        } catch (IOException e) {
-            log.warn("[ERROR] Analyzing folder '{}': {}", folderPath, e.getMessage());
+        });
+        Optional<PendingDeletionPool.FolderMatchResult> folderMatch = pendingDeletionPool.matchFolderByHashes(hashed);
+        if (folderMatch.isPresent()) {
+            var match = folderMatch.get();
+            String matchedLibPath = bookFilePersistenceService.findMatchingLibraryPath(library, folderPath);
+            LibraryPathEntity matchedLibPathEntity = bookFilePersistenceService.getLibraryPathEntityForFile(library, matchedLibPath);
+
+            for (var bookEntry : match.pending().affectedBooks().entrySet()) {
+                var bookSnap = bookEntry.getValue();
+                bookFilePersistenceService.recoverFolderBook(bookSnap, matchedLibPathEntity, folderPath, hashed);
+            }
+            log.info("[FOLDER_CREATE] Folder '{}' matched pending deletion, recovered {} books",
+                    folderPath, match.pending().affectedBooks().size());
+            return Map.of();
         }
 
-        boolean isSeriesFolder = audioFiles.size() >= MIN_AUDIO_FILES_FOR_FOLDER_AUDIOBOOK
-                && FileUtils.isSeriesFolder(audioFiles);
+        // Try hash-based move detection for each file
+        Map<Path, String> unmatched = new LinkedHashMap<>();
+        fileHashes.forEach((p, hash) -> {
+            try {
+                if (hash == null) {
+                    unmatched.put(p, null);
+                    return;
+                }
 
-        return new FolderAnalysis(audioFiles.size(), hasNonAudioBook, isSeriesFolder);
-    }
+                Optional<PendingDeletionPool.MatchResult> poolMatch = pendingDeletionPool.matchByHash(hash);
+                if (poolMatch.isPresent()) {
+                    var pmatch = poolMatch.get();
+                    String libPath = bookFilePersistenceService.findMatchingLibraryPath(library, p);
+                    LibraryPathEntity lpEntity = bookFilePersistenceService.getLibraryPathEntityForFile(library, libPath);
+                    String subPath = FileUtils.getRelativeSubPath(lpEntity.getPath(), p);
+                    pendingDeletionPool.recoverBook(pmatch, lpEntity, subPath, p.getFileName().toString(), hash);
+                    log.info("[FOLDER_CREATE] File '{}' matched pending deletion, recovered book id={}", p, pmatch.book().bookId());
+                    return;
+                }
 
-    private record FolderAnalysis(int audioFileCount, boolean hasNonAudioBook, boolean isSeriesFolder) {
-        boolean isFolderBasedAudiobook() {
-            return audioFileCount >= MIN_AUDIO_FILES_FOR_FOLDER_AUDIOBOOK && !hasNonAudioBook && !isSeriesFolder;
-        }
+                Optional<BookFileEntity> movedFrom = bookFilePersistenceService.findMovedFile(
+                        hash, p, Instant.now().minus(60, ChronoUnit.SECONDS));
+                if (movedFrom.isPresent()) {
+                    bookFilePersistenceService.updatePathIfChanged(movedFrom.get(), library, p);
+                    log.info("[FOLDER_CREATE] File '{}' recognized as moved file, updated existing book's path", p);
+                } else {
+                    unmatched.put(p, hash);
+                }
+            } catch (Exception e) {
+                log.warn("[ERROR] Hash check for '{}': {}", p, e.getMessage());
+                unmatched.put(p, hash);
+            }
+        });
+        return unmatched;
     }
 
     private void handleFolderDelete(LibraryEntity library, Path folderPath) {

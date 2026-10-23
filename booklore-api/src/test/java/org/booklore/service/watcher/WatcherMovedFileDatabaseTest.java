@@ -33,6 +33,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.nio.file.StandardOpenOption;
 import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.attribute.FileTime;
 import java.time.Instant;
@@ -419,6 +420,97 @@ class WatcherMovedFileDatabaseTest {
         assertThat(pathsOf(bookId)).containsExactly("Asimov/Foundation/Foundation.epub");
         assertNotDeleted(bookId);
         assertThat(bookRepository.countIncludingDeletedByLibraryId(library.getId())).isEqualTo(2);
+    }
+
+    // ========== moved by a mover that removes each source as soon as it copied it ==========
+
+    @Test
+    void aFileMovedIntoANewFolderWhileAnotherFileThereIsStillWrittenMovesItsBookAtOnce() throws Exception {
+        moveOneFileIntoANewFolderWhileAnotherIsWritten();
+    }
+
+    @Test
+    void bookPerFolder_aFileMovedIntoANewFolderWhileAnotherFileThereIsStillWrittenMovesItsBookAtOnce() throws Exception {
+        organizedAs(LibraryOrganizationMode.BOOK_PER_FOLDER);
+        moveOneFileIntoANewFolderWhileAnotherIsWritten();
+    }
+
+    /**
+     * GNU mv with several sources across devices, or a file-by-file importer: Foundation.epub is copied into a new folder
+     * and its source removed at once, while another file is written into that folder for longer than the pool holds the
+     * book. The book has a PDF too, so had its deletion expired, the moved EPUB's row would have been deleted with it.
+     */
+    private void moveOneFileIntoANewFolderWhileAnotherIsWritten() throws Exception {
+        Path source = epub(root.resolve("Asimov/Foundation.epub"), "Foundation " + System.nanoTime());
+        Path pdf = Files.writeString(root.resolve("Asimov/Foundation.pdf"), "%PDF-1.4 Foundation " + System.nanoTime());
+        long bookId = storedBook(
+                new StoredFile("Asimov", "Foundation.epub", FileFingerprint.generateHash(source), BookFileType.EPUB, false),
+                new StoredFile("Asimov", "Foundation.pdf", FileFingerprint.generateHash(pdf), BookFileType.PDF, false));
+        Path folder = Files.createDirectories(root.resolve("Moved"));
+        settled(Files.copy(source, folder.resolve("Foundation.epub")));
+        Path other = Files.writeString(folder.resolve("Other Book.pdf"), "%PDF-1.4 Other Book " + System.nanoTime());
+
+        libraryFileEventProcessor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, library.getId(), folder, true);
+        Files.delete(source);
+        libraryFileEventProcessor.processEvent(StandardWatchEventKinds.ENTRY_DELETE, library.getId(), source, false);
+        long until = System.currentTimeMillis() + 15000;
+        while (System.currentTimeMillis() < until) {
+            Files.writeString(other, " more", StandardOpenOption.APPEND);
+            Thread.sleep(500);
+        }
+
+        assertThat(pathsOf(bookId)).containsExactlyInAnyOrder("Moved/Foundation.epub", "Asimov/Foundation.pdf");
+        assertNotDeleted(bookId);
+        // The other file is handled once it is written
+        waitUntil(() -> bookIdAt("Moved", "Other Book.pdf") != null);
+        assertThat(pathsOf(bookId)).contains("Moved/Foundation.epub", "Asimov/Foundation.pdf");
+        assertNotDeleted(bookId);
+    }
+
+    // ========== an author folder holding a folder audiobook ==========
+
+    @Test
+    void anAuthorFolderHoldingAFolderAudiobookMovedByCopyingThenRemovedMovesTheBook() throws Exception {
+        Path sourceAuthor = root.resolve("Audio/Herbert");
+        Path source = sourceAuthor.resolve("Dune");
+        audio(source.resolve("Dune - 01.mp3"));
+        audio(source.resolve("Dune - 02.mp3"));
+        long bookId = storedBook(new StoredFile("Audio/Herbert", "Dune", FileFingerprint.generateFolderHash(source), BookFileType.AUDIOBOOK, true));
+        Path destinationAuthor = root.resolve("Listening/Herbert");
+        copyTree(source, destinationAuthor.resolve("Dune"));
+
+        libraryFileEventProcessor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, library.getId(), destinationAuthor, true);
+        waitUntil(() -> libraryFileEventProcessor.waitsAsCopy(destinationAuthor.resolve("Dune")));
+        removeTree(sourceAuthor);
+        libraryFileEventProcessor.processEvent(StandardWatchEventKinds.ENTRY_DELETE, library.getId(), source, true);
+        libraryFileEventProcessor.processEvent(StandardWatchEventKinds.ENTRY_DELETE, library.getId(), sourceAuthor, true);
+
+        waitUntil(() -> pathsOf(bookId).equals(List.of("Listening/Herbert/Dune")));
+        Thread.sleep(9000);
+        assertThat(pathsOf(bookId)).containsExactly("Listening/Herbert/Dune");
+        assertNotDeleted(bookId);
+        assertThat(bookRepository.countIncludingDeletedByLibraryId(library.getId())).isEqualTo(1);
+    }
+
+    @Test
+    void anAuthorFolderHoldingAFolderAudiobookRenamedMovesTheBook() throws Exception {
+        Path sourceAuthor = root.resolve("Audio/Herbert");
+        Path source = sourceAuthor.resolve("Dune");
+        audio(source.resolve("Dune - 01.mp3"));
+        audio(source.resolve("Dune - 02.mp3"));
+        long bookId = storedBook(new StoredFile("Audio/Herbert", "Dune", FileFingerprint.generateFolderHash(source), BookFileType.AUDIOBOOK, true));
+        Path destinationAuthor = Files.createDirectories(root.resolve("Listening")).resolve("Herbert");
+        Files.move(sourceAuthor, destinationAuthor);
+
+        // What a rename reports: the folder's deletion, and its creation where it went
+        libraryFileEventProcessor.processEvent(StandardWatchEventKinds.ENTRY_DELETE, library.getId(), sourceAuthor, true);
+        libraryFileEventProcessor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, library.getId(), destinationAuthor, true);
+
+        waitUntil(() -> pathsOf(bookId).equals(List.of("Listening/Herbert/Dune")));
+        Thread.sleep(9000);
+        assertThat(pathsOf(bookId)).containsExactly("Listening/Herbert/Dune");
+        assertNotDeleted(bookId);
+        assertThat(bookRepository.countIncludingDeletedByLibraryId(library.getId())).isEqualTo(1);
     }
 
     @Test

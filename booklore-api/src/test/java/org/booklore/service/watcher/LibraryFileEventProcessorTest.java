@@ -686,24 +686,134 @@ class LibraryFileEventProcessorTest {
             verify(bookFileTransactionalHandler, never()).handleNewFolderAudiobook(anyLong(), any());
             verify(bookFileTransactionalHandler, timeout(5000)).handleNewFolderAudiobook(1L, folder);
         }
+    }
 
-        @Test
-        void aNewFolderWaitsWhileAFileInItIsStillBeingWritten() throws Exception {
-            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FILE);
-            Path folder = Files.createDirectory(tempDir.resolve("Arriving"));
-            Path file = Files.writeString(folder.resolve("Big.m4b"), "the start");
+    /**
+     * A new folder's files that are written are handled at once, and each one still being written once it is: a mover
+     * that removes each source as soon as it copied it leaves the book in the pool only for its grace period, which a
+     * large file written into the same folder outlasts. What groups files waits for the files it groups.
+     */
+    @Nested
+    class FilesStillBeingWrittenInNewFolders {
 
-            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, folder, true);
-            // Still being written well past the folder's debounce, as a large file copied into a new folder is
-            long until = System.currentTimeMillis() + 8000;
+        private Path settled(Path file, String content) throws IOException {
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, content);
+            Files.setLastModifiedTime(file, FileTime.from(Instant.now().minusSeconds(60)));
+            return file;
+        }
+
+        /** Appends to the file for this long, as a mover copying a large file into the library writes it. */
+        private void writeFor(Path file, long millis) throws Exception {
+            long until = System.currentTimeMillis() + millis;
             while (System.currentTimeMillis() < until) {
                 Files.writeString(file, " and more", StandardOpenOption.APPEND);
                 Thread.sleep(500);
             }
+        }
 
+        @ParameterizedTest
+        @EnumSource(value = LibraryOrganizationMode.class, names = {"AUTO_DETECT", "BOOK_PER_FILE"})
+        void aNewFolderHandlesItsWrittenFilesAtOnceAndAFileStillBeingWrittenOnceItIsWritten(LibraryOrganizationMode mode) throws Exception {
+            library.setOrganizationMode(mode);
+            Path folder = Files.createDirectory(tempDir.resolve("Arriving"));
+            Path written = settled(folder.resolve("Foundation.epub"), "written");
+            Path big = Files.writeString(folder.resolve("Big.m4b"), "the start");
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, folder, true);
+            // Still being written well past the folder's debounce, as a large file copied into a new folder is
+            writeFor(big, 9000);
+
+            verify(bookFileTransactionalHandler).handleNewBookFileUnlessCopy(1L, written);
+            verify(bookFileTransactionalHandler, never()).handleNewBookFileUnlessCopy(1L, big);
+            // Handled once it is written in full, not half written
+            verify(bookFileTransactionalHandler, timeout(8000)).handleNewBookFileUnlessCopy(1L, big);
+        }
+
+        @Test
+        void bookPerFolder_aFolderWaitingForAFileStillBeingWrittenGivesABookInThePoolItsWrittenFileAtOnce() throws Exception {
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
+            Path folder = Files.createDirectory(tempDir.resolve("Arriving"));
+            Path moved = settled(folder.resolve("Foundation.epub"), "moved content");
+            String movedHash = FileFingerprint.generateHash(moved);
+            Path big = Files.writeString(folder.resolve("Big.pdf"), "the start");
+            // The mover removed the file's source as soon as it copied it: the pool holds its book
+            Set<String> recovered = ConcurrentHashMap.newKeySet();
+            when(pendingDeletionPool.matchFolderByHashes(any())).thenReturn(Optional.empty());
+            when(pendingDeletionPool.matchByHash(anyString())).thenAnswer(inv ->
+                    movedHash.equals(inv.getArgument(0)) && recovered.add(movedHash) ? Optional.of(poolMatch(movedHash)) : Optional.empty());
+            when(bookFilePersistenceService.isStoredByALiveBook(eq(library), any())).thenAnswer(inv ->
+                    inv.getArgument(1, Path.class).equals(moved) && !recovered.isEmpty());
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, folder, true);
+            writeFor(big, 9000);
+
+            verify(pendingDeletionPool).recoverBook(argThat(m -> m.file().currentHash().equals(movedHash)), eq(libraryPath),
+                    eq("Arriving"), eq("Foundation.epub"), eq(movedHash));
+            verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
+            // Once it is written, the folder's new file is a book, without the file the pool gave its book
+            verify(libraryProcessingService, timeout(8000)).processLibraryFiles(argThat(files -> files.size() == 1
+                    && files.getFirst().getFileName().equals("Big.pdf")), eq(library));
+        }
+
+        @Test
+        void aFolderThatCanBeAFolderAudiobookWaitsForItsAudioFilesButHandsOnAtOnceOneMovedFromABookThePoolHolds() throws Exception {
+            Path folder = Files.createDirectory(tempDir.resolve("Herbert"));
+            Path moved = settled(folder.resolve("Dune.m4b"), "dune");
+            Path big = Files.writeString(folder.resolve("Children of Dune.m4b"), "the start");
+            // A single-file audiobook whose source the mover removed as soon as it copied it
+            when(pendingDeletionPool.holds(FileFingerprint.generateHash(moved))).thenReturn(true, false);
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, folder, true);
+            writeFor(big, 9000);
+
+            verify(bookFileTransactionalHandler).handleNewBookFileUnlessCopy(1L, moved);
+            verify(bookFileTransactionalHandler, never()).handleNewBookFileUnlessCopy(1L, big);
+            verify(bookFileTransactionalHandler, never()).handleNewFolderAudiobookUnlessCopy(anyLong(), any());
+            // Once written, two single-file audiobooks of different titles are a series: each a book of its own
+            verify(bookFileTransactionalHandler, timeout(8000)).handleNewBookFileUnlessCopy(1L, big);
+            verify(bookFileTransactionalHandler, never()).handleNewFolderAudiobookUnlessCopy(anyLong(), any());
+        }
+
+        @Test
+        void aNewFolderHoldingFolderAudiobooksInFoldersOfTheirOwnHandsEachToTheFolderAudiobookFlow() throws Exception {
+            // Author/Title/tracks: the author folder is no folder audiobook, each title folder is
+            Path author = tempDir.resolve("Listening").resolve("Herbert");
+            Path dune = author.resolve("Dune");
+            Path messiah = author.resolve("Dune Messiah");
+            settled(dune.resolve("Dune - 01.mp3"), "dune 1");
+            settled(dune.resolve("Dune - 02.mp3"), "dune 2");
+            settled(messiah.resolve("Dune Messiah - 01.mp3"), "messiah 1");
+            settled(messiah.resolve("Dune Messiah - 02.mp3"), "messiah 2");
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, author, true);
+
+            verify(bookFileTransactionalHandler, timeout(8000)).handleNewFolderAudiobookUnlessCopy(1L, dune);
+            verify(bookFileTransactionalHandler, timeout(3000)).handleNewFolderAudiobookUnlessCopy(1L, messiah);
+            verify(bookFileTransactionalHandler, never()).handleNewFolderAudiobookUnlessCopy(1L, author);
             verify(bookFileTransactionalHandler, never()).handleNewBookFileUnlessCopy(anyLong(), any());
-            // Handled once it is written in full
-            verify(bookFileTransactionalHandler, timeout(8000)).handleNewBookFileUnlessCopy(1L, file);
+        }
+
+        @Test
+        void aFolderAudiobookNextToAnEbookKeepsItsTracksTogether() throws Exception {
+            Path author = tempDir.resolve("Herbert");
+            Path dune = author.resolve("Dune");
+            settled(dune.resolve("Dune - 01.mp3"), "dune 1");
+            settled(dune.resolve("Dune - 02.mp3"), "dune 2");
+            Path ebook = settled(author.resolve("Dune.epub"), "ebook");
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, author, true);
+
+            verify(bookFileTransactionalHandler, timeout(8000)).handleNewFolderAudiobookUnlessCopy(1L, dune);
+            verify(bookFileTransactionalHandler, timeout(3000)).handleNewBookFileUnlessCopy(1L, ebook);
+            verify(bookFileTransactionalHandler, never()).handleNewBookFileUnlessCopy(eq(1L),
+                    argThat(p -> p.getFileName().toString().endsWith(".mp3")));
+        }
+
+        private PendingDeletionPool.MatchResult poolMatch(String hash) {
+            var file = new PendingDeletionPool.FileSnapshot(70L, "Foundation.epub", "Asimov", hash, false, BookFileType.EPUB);
+            var book = new PendingDeletionPool.BookSnapshot(7L, 1L, "Asimov", List.of(file));
+            return new PendingDeletionPool.MatchResult(null, book, file);
         }
     }
 

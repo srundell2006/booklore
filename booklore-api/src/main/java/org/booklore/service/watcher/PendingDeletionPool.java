@@ -135,6 +135,11 @@ public class PendingDeletionPool {
         return Optional.empty();
     }
 
+    /** Whether a deletion the pool holds has a book file of this content, which a new file of it was likely moved from. */
+    public boolean holds(String hash) {
+        return hashIndex.containsKey(hash);
+    }
+
     public Optional<FolderMatchResult> matchFolderByHashes(Map<Path, String> fileHashes) {
         if (fileHashes.isEmpty()) return Optional.empty();
 
