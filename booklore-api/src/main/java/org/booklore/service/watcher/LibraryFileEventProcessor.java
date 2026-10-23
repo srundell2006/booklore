@@ -49,11 +49,13 @@ public class LibraryFileEventProcessor {
      */
     static final long COPY_SOURCE_WAIT_MS = 30000L;
     /**
-     * The longest such a file waits while files keep arriving in its library. A move of a large folder across devices
-     * copies the whole tree before it removes any of it, and the watcher takes each finished folder of the tree as it
-     * comes.
+     * The longest such a file waits while files keep arriving or growing in its library: a day. A move of a large folder
+     * across devices copies the whole tree before it removes any of it, which takes hours for a large library on a slow
+     * disk or share, and the watcher takes each finished folder of the tree as it comes; one whose wait ended before its
+     * source was removed would be a second book, and the source's removal would then delete the first. A real copy made
+     * while the library is this busy only appears once it is quiet.
      */
-    static final long COPY_SOURCE_MAX_WAIT_MS = 600000L;
+    static final long COPY_SOURCE_MAX_WAIT_MS = TimeUnit.HOURS.toMillis(24);
 
     private final BlockingQueue<FileEvent> eventQueue = new LinkedBlockingQueue<>();
     private final LibraryRepository libraryRepository;
@@ -68,6 +70,8 @@ public class LibraryFileEventProcessor {
     private final ConcurrentMap<Path, ScheduledFuture<?>> pendingFolderCreates = new ConcurrentHashMap<>();
     /** New files whose stability check has not found them written in full yet. */
     private final Set<Path> settlingFiles = ConcurrentHashMap.newKeySet();
+    /** New files handed on while still being written, once they reached the settling limit, until they are written. */
+    private final Set<Path> growingFiles = ConcurrentHashMap.newKeySet();
     /**
      * What copies a stored file still there, by path, until that file goes or the wait is over: a new file, a folder
      * audiobook, or the new files of a BOOK_PER_FOLDER folder, which wait as one. Changed under {@link #copyLock}, so a
@@ -81,6 +85,7 @@ public class LibraryFileEventProcessor {
     private final ConcurrentMap<Long, Long> lastWriteSeen = new ConcurrentHashMap<>();
     private long copySourceWaitMs = COPY_SOURCE_WAIT_MS;
     private long copySourceMaxWaitMs = COPY_SOURCE_MAX_WAIT_MS;
+    private long stabilityMaxWaitMs = STABILITY_MAX_WAIT_MS;
     /**
      * Now, in milliseconds, for timing the waits: the clock the scheduler counts its delays on. The wall clock can be
      * stepped back or ahead, by an NTP correction or a VM resumed, and a wait timed on it then ends too soon or never.
@@ -105,6 +110,11 @@ public class LibraryFileEventProcessor {
     /** For tests, which cannot wait the full time. */
     void setCopySourceMaxWaitMs(long copySourceMaxWaitMs) {
         this.copySourceMaxWaitMs = copySourceMaxWaitMs;
+    }
+
+    /** For tests, which cannot wait the full time. */
+    void setStabilityMaxWaitMs(long stabilityMaxWaitMs) {
+        this.stabilityMaxWaitMs = stabilityMaxWaitMs;
     }
 
     /** For tests, which step the clock. */
@@ -510,9 +520,10 @@ public class LibraryFileEventProcessor {
         }
         long now = clock.getAsLong();
         long from = waited == Wait.SETTLING ? since : now;
-        if (now - from >= STABILITY_MAX_WAIT_MS) {
+        if (now - from >= stabilityMaxWaitMs) {
             log.warn("[STABILITY] '{}' is still being written after {}ms; handling folder '{}' anyway",
-                    written.getFirst(), STABILITY_MAX_WAIT_MS, folderPath);
+                    written.getFirst(), stabilityMaxWaitMs, folderPath);
+            written.forEach(file -> noteWritesWhileGrowing(libraryId, file));
             return false;
         }
         noteWrite(libraryId);
@@ -798,8 +809,9 @@ public class LibraryFileEventProcessor {
             }
 
             long elapsed = clock.getAsLong() - startTime;
-            if (elapsed >= STABILITY_MAX_WAIT_MS) {
+            if (elapsed >= stabilityMaxWaitMs) {
                 log.warn("[STABILITY] Max wait exceeded for '{}', processing anyway", path);
+                noteWritesWhileGrowing(libraryId, path);
                 onStable.run();
                 return;
             }
@@ -818,6 +830,28 @@ public class LibraryFileEventProcessor {
         } catch (IOException e) {
             log.debug("[STABILITY] Error checking mtime for '{}': {}", path, e.getMessage());
             onStable.run();
+        }
+    }
+
+    /**
+     * Goes on noting the writes to a file handed on while still being written, once it reached the settling limit,
+     * until it is written: the copies waiting in its library wait as long as a mover still writes, as it removes the
+     * sources it copied only once it is done. Bounded by the longest wait of a copy, which is all it serves.
+     */
+    private void noteWritesWhileGrowing(long libraryId, Path file) {
+        if (beingWritten(file) && growingFiles.add(file)) {
+            noteWrite(libraryId);
+            long since = clock.getAsLong();
+            scheduler.schedule(() -> stillGrowing(libraryId, file, since), STABILITY_CHECK_INTERVAL_MS, TimeUnit.MILLISECONDS);
+        }
+    }
+
+    private void stillGrowing(long libraryId, Path file, long since) {
+        if (beingWritten(file) && clock.getAsLong() - since < copySourceMaxWaitMs) {
+            noteWrite(libraryId);
+            scheduler.schedule(() -> stillGrowing(libraryId, file, since), STABILITY_CHECK_INTERVAL_MS, TimeUnit.MILLISECONDS);
+        } else {
+            growingFiles.remove(file);
         }
     }
 

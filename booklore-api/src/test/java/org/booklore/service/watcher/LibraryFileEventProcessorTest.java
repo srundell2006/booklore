@@ -479,6 +479,40 @@ class LibraryFileEventProcessorTest {
         }
 
         @Test
+        void aCopyWaitsOnWhileAFileHandedOnAtTheSettlingLimitStillGrows() throws Exception {
+            // A mover still writing a file whose copy outlasts the settling limit removes no source until it is done
+            processor.setCopySourceWaitMs(4000);
+            processor.setStabilityMaxWaitMs(2000);
+            Path copy = settledFile("copy.epub");
+            when(bookFileTransactionalHandler.handleNewBookFileUnlessCopy(1L, copy))
+                    .thenReturn(Optional.of(new BookFileTransactionalHandler.CopyOfAStoredFile(7L, "hash")));
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, copy, false);
+            waitUntil(() -> processor.waitsAsCopy(copy));
+
+            Path big = Files.writeString(tempDir.resolve("Big.m4b"), "the start");
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, big, false);
+            long until = System.currentTimeMillis() + 12000;
+            while (System.currentTimeMillis() < until) {
+                Files.writeString(big, " and more", StandardOpenOption.APPEND);
+                Thread.sleep(500);
+            }
+
+            // Handed on half written at the limit, as a new file still is, while the copy waits for the mover
+            verify(bookFileTransactionalHandler).handleNewBookFileUnlessCopy(1L, big);
+            verify(bookFileTransactionalHandler, never()).handleNewBookFile(1L, copy);
+            // Taken for a copy once the library is quiet
+            verify(bookFileTransactionalHandler, timeout(12000)).handleNewBookFile(1L, copy);
+        }
+
+        @Test
+        void aCopyWaitsWhileFilesKeepArrivingForAsLongAsALargeMoveAcrossDevicesCopies() {
+            // A mover copies the whole tree before it removes any of it: hours, for a large library on a slow disk or
+            // share. A copy whose wait ended before then would be a second book, and the source's removal would delete
+            // the first.
+            assertThat(LibraryFileEventProcessor.COPY_SOURCE_MAX_WAIT_MS).isGreaterThanOrEqualTo(TimeUnit.HOURS.toMillis(12));
+        }
+
+        @Test
         void aCopyIsHandedBackOnceItsWaitIsOverWhenTheClockStepsBackWhileItWaits() throws Exception {
             processor.setCopySourceWaitMs(1500);
             AtomicLong steppedBack = new AtomicLong();
@@ -753,6 +787,21 @@ class LibraryFileEventProcessorTest {
             verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
             // Once it is written, the folder's new file is a book, without the file the pool gave its book
             verify(libraryProcessingService, timeout(8000)).processLibraryFiles(argThat(files -> files.size() == 1
+                    && files.getFirst().getFileName().equals("Big.pdf")), eq(library));
+        }
+
+        @Test
+        void bookPerFolder_aFolderWaitsForAFileStillBeingWrittenNoLongerThanANewFileWaitsToSettle() throws Exception {
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
+            processor.setStabilityMaxWaitMs(4000);
+            Path folder = Files.createDirectory(tempDir.resolve("Arriving"));
+            Path big = Files.writeString(folder.resolve("Big.pdf"), "the start");
+
+            processor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, 1L, folder, true);
+            writeFor(big, 14000);
+
+            // Handled at the limit while still being written, as a single new file is
+            verify(libraryProcessingService).processLibraryFiles(argThat(files -> files.size() == 1
                     && files.getFirst().getFileName().equals("Big.pdf")), eq(library));
         }
 
