@@ -79,6 +79,34 @@ class LibraryWatchServiceTest {
     }
 
     @Test
+    void announceFilesWithoutBooks_hasTheWatchedLibrariesAnnouncedOnAThreadOfItsOwn() throws Exception {
+        Library watched = library(5L, true);
+        Library unwatched = library(6L, false);
+        service.registerLibraries(List.of(watched, unwatched));
+        CompletableFuture<Thread> announcedOn = new CompletableFuture<>();
+        doAnswer(inv -> announcedOn.complete(Thread.currentThread())).when(processor).announceFilesWithoutBooks(5L);
+
+        service.announceFilesWithoutBooks(List.of(watched, unwatched));
+
+        // The walk can take long, and new folders must go on being watched meanwhile
+        Thread announcer = announcedOn.get(10, TimeUnit.SECONDS);
+        assertThat(announcer).isNotSameAs(Thread.currentThread());
+        assertThat(announcer.isDaemon()).isTrue();
+        assertThat(announcer.isVirtual()).isFalse();
+        Thread.sleep(500);
+        verify(processor, never()).announceFilesWithoutBooks(6L);
+    }
+
+    private static Library library(long id, boolean watch) {
+        Library library = mock(Library.class);
+        when(library.getId()).thenReturn(id);
+        when(library.isWatch()).thenReturn(watch);
+        when(library.getPaths()).thenReturn(List.of());
+        when(library.getName()).thenReturn("library " + id);
+        return library;
+    }
+
+    @Test
     void registerLibrary_registersAllDirectoriesUnderLibraryPath() throws Exception {
         Path root = tmp.resolve("libroot");
         Path a = root.resolve("a");

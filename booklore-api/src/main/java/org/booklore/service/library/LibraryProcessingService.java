@@ -80,6 +80,18 @@ public class LibraryProcessingService {
     }
 
     /**
+     * The book files a rescan would import now: those its walk finds, in the formats the library allows, that no
+     * book has. Changes nothing. The rows are read after the walk, so a file imported while it ran is not among them;
+     * a path the walk could not read gives none.
+     */
+    public List<LibraryFile> findFilesWithoutBooks(long libraryId) throws IOException {
+        LibraryEntity libraryEntity = loadLibrary(libraryId);
+        List<LibraryFile> walked = libraryFileHelper.filterByAllowedFormats(
+                libraryFileHelper.scanAllLibraryFiles(libraryEntity).files(), libraryEntity.getAllowedFormats());
+        return detectNewBookPaths(walked, loadBookFiles(libraryEntity));
+    }
+
+    /**
      * A rescan. One that cannot vouch for the library's files (a library path it cannot read, or
      * a walk that finds none of the library's books) stops before changing anything, with an
      * {@link APIException} whose message says why, for the caller to report.

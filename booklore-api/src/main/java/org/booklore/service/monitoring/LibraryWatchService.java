@@ -177,6 +177,26 @@ public class LibraryWatchService {
         log.info("Registered {} folders for library '{}'", count[0], library.getName());
     }
 
+    /**
+     * Has the processor announce the book files without a book of those of these libraries that are watched, once
+     * their folders are: what arrived while the application was down, or still waited to be handled when it stopped,
+     * gives no event. On a thread of its own, as the walk takes long on a large library or a network share, and the
+     * registrar must go on watching new folders meanwhile.
+     */
+    public void announceFilesWithoutBooks(List<Library> libraries) {
+        List<Long> watched = libraries.stream().map(Library::getId).filter(this::isLibraryMonitored).toList();
+        if (watched.isEmpty()) {
+            return;
+        }
+        Thread.ofPlatform().daemon(true).name("watch-catch-up").start(() -> watched.forEach(libraryId -> {
+            try {
+                eventProcessor.announceFilesWithoutBooks(libraryId);
+            } catch (Exception e) {
+                log.warn("Could not announce the files without a book of library {}: {}", libraryId, e.getMessage());
+            }
+        }));
+    }
+
     public void unregisterLibrary(Long libraryId) {
         Set<Path> pathsToRemove = watches.entrySet().stream()
                 .filter(e -> e.getValue().libraryId() == libraryId)

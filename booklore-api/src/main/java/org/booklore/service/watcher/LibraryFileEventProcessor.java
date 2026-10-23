@@ -11,6 +11,7 @@ import org.booklore.model.enums.BookFileType;
 import org.booklore.model.enums.LibraryOrganizationMode;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
+import org.booklore.repository.projection.BookFileScanRow;
 import org.booklore.service.file.FileFingerprint;
 import org.booklore.service.library.LibraryProcessingService;
 import org.booklore.util.FileUtils;
@@ -30,8 +31,10 @@ import java.time.temporal.ChronoUnit;
 import java.util.*;
 import java.util.concurrent.*;
 import java.util.concurrent.atomic.AtomicReference;
+import java.util.function.Function;
 import java.util.function.LongSupplier;
 import java.util.function.Predicate;
+import java.util.stream.Stream;
 
 @Slf4j
 @Service
@@ -79,13 +82,15 @@ public class LibraryFileEventProcessor {
      * What copies a stored file still there, by path, until that file goes or the wait is over: a new file, a folder
      * audiobook, or the new files of a BOOK_PER_FOLDER folder, which wait as one. Changed under {@link #copyLock}, so a
      * timer and a deletion cannot both hand one back, and a timer that fires as it is replaced sees the replacement.
-     * Kept only in memory: one still waiting when the application stops is imported by the next rescan of its library,
-     * as the shutdown log says, since a file already on disk gives no event.
+     * Kept only in memory: a file already on disk gives no event, so one still waiting when the application stops is
+     * announced again once it is back, by {@link #announceFilesWithoutBooks}, and waits anew.
      */
     private final ConcurrentMap<Path, PendingCopy> pendingCopies = new ConcurrentHashMap<>();
     private final Object copyLock = new Object();
     /** Numbers each waiting copy's timer, so a timer can tell whether the copy still waits on it. Under copyLock. */
     private long copyTimers;
+    /** The paths of each library whose book files without a book are being looked for. */
+    private final ConcurrentMap<Long, Set<Path>> catchingUp = new ConcurrentHashMap<>();
     /** When each library last saw a file arrive, or one still being written, on {@link #clock}. */
     private final ConcurrentMap<Long, Long> lastWriteSeen = new ConcurrentHashMap<>();
     private long copySourceWaitMs = COPY_SOURCE_WAIT_MS;
@@ -224,6 +229,86 @@ public class LibraryFileEventProcessor {
         noteWrite(libraryId);
         Path path = fullPath.toAbsolutePath().normalize();
         scheduler.execute(() -> noteWritesWhileGrowing(libraryId, path));
+    }
+
+    /**
+     * Announces, as the watcher announces what arrives, the book files of a watched library that no book has: those
+     * that arrived while the application was down, and those that still waited when it stopped, as copies, settling or
+     * queued, as a file already on disk gives no event. Each is handled as it would have been: one that copies a stored
+     * file still there waits for that file to go again, so a mover that removes the source once the application is
+     * back still moves its book, and one whose stored file is gone is that file moved. The files are those a rescan
+     * would import, each announced in its folder, as a new folder is, unless that folder holds books' files, where it
+     * is announced on its own, as a file arriving there is. A file in a stored folder audiobook's folder, and a folder
+     * audiobook whose folder holds books' files, only group otherwise than their books do, and are left to a rescan.
+     * The library's deletions are held while the files are looked for. Run once the library's folders are watched.
+     */
+    public void announceFilesWithoutBooks(long libraryId) {
+        LibraryEntity library = libraryRepository.findById(libraryId).orElse(null);
+        if (library == null) {
+            return;
+        }
+        Set<Path> roots = libraryPaths(library);
+        catchingUp.put(libraryId, roots);
+        try {
+            List<LibraryFile> files = libraryProcessingService.findFilesWithoutBooks(libraryId);
+            Map<String, List<BookFileScanRow>> rowsByFolder = new HashMap<>();
+            Function<LibraryFile, List<BookFileScanRow>> rowsOfOwnFolder = file -> {
+                long libraryPathId = file.getLibraryPathEntity().getId();
+                String folder = BookFileScanRow.ownFolder(file.getFileSubPath(), file.getFileName(), file.isFolderBased());
+                return rowsByFolder.computeIfAbsent(libraryPathId + ":" + folder, key -> rowsOwnedByFolder(libraryPathId, folder));
+            };
+            Set<Path> folders = new TreeSet<>();
+            Set<Path> singleFiles = new TreeSet<>();
+            for (LibraryFile file : files) {
+                Path path = file.getFullPath().toAbsolutePath().normalize();
+                if (file.isFolderBased()) {
+                    if (rowsOfOwnFolder.apply(file).isEmpty()) {
+                        folders.add(path);
+                    }
+                } else if (roots.contains(path.getParent())) {
+                    singleFiles.add(path);
+                } else {
+                    List<BookFileScanRow> rows = rowsOfOwnFolder.apply(file);
+                    if (rows.isEmpty()) {
+                        folders.add(path.getParent());
+                    } else if (rows.stream().noneMatch(BookFileScanRow::folderBased)) {
+                        singleFiles.add(path);
+                    }
+                }
+            }
+            // A folder sorts before what it holds, and its handling takes in all of that
+            List<Path> announcedFolders = new ArrayList<>();
+            for (Path folder : folders) {
+                if (announcedFolders.stream().noneMatch(folder::startsWith)) {
+                    announcedFolders.add(folder);
+                }
+            }
+            List<Path> announcedFiles = singleFiles.stream()
+                    .filter(file -> announcedFolders.stream().noneMatch(file::startsWith))
+                    .toList();
+            announcedFolders.forEach(folder -> processEvent(StandardWatchEventKinds.ENTRY_CREATE, libraryId, folder, true));
+            announcedFiles.forEach(file -> processEvent(StandardWatchEventKinds.ENTRY_CREATE, libraryId, file, false));
+            if (!files.isEmpty()) {
+                log.info("[CATCH_UP] Library '{}' has {} book files without a book; announced {} folders and {} files: {}",
+                        library.getName(), files.size(), announcedFolders.size(), announcedFiles.size(),
+                        Stream.concat(announcedFolders.stream(), announcedFiles.stream()).limit(50).toList());
+            }
+        } catch (Exception e) {
+            log.warn("[CATCH_UP] Could not look for the book files without a book of library '{}': {}", library.getName(), e.getMessage());
+        } finally {
+            // Once what it announced is pending, which holds the deletions in their turn
+            catchingUp.remove(libraryId);
+        }
+    }
+
+    /** The book formats, of live books or not, whose own folder is this one: files stored in it, or it as a folder audiobook. */
+    private List<BookFileScanRow> rowsOwnedByFolder(long libraryPathId, String folder) {
+        int lastSep = folder.lastIndexOf('/');
+        String parent = lastSep < 0 ? "" : folder.substring(0, lastSep);
+        String leaf = folder.substring(lastSep + 1);
+        return bookRepository.findBookFormatRowsOwnedByFolder(libraryPathId, folder, parent, leaf).stream()
+                .filter(row -> folder.equals(row.ownFolder()))
+                .toList();
     }
 
     private void handleEvent(FileEvent event) {
@@ -762,9 +847,11 @@ public class LibraryFileEventProcessor {
     /**
      * Expires a deletion held in the pool once its grace period is over, unless new files in its library still wait to
      * be handled: a new folder whose handling each file copied into it puts off again, a folder waiting for a file
-     * still being written, a new file settling, or a create queued. A mover that copies files into a new folder and
-     * removes each source as soon as it copied it leaves the book in the pool while its file waits there; the book was
-     * moved, and is not to be deleted for the path it left. Puts the expiry off for as long as a copy waits at most.
+     * still being written, a new file settling, a create queued, or the files without a book that the library is
+     * looked through for once the application is back (see {@link #announceFilesWithoutBooks}). A mover that copies
+     * files into a new folder and removes each source as soon as it copied it leaves the book in the pool while its
+     * file waits there; the book was moved, and is not to be deleted for the path it left. Puts the expiry off for as
+     * long as a copy waits at most.
      *
      * @param heldSince when the deletion came in
      */
@@ -784,10 +871,14 @@ public class LibraryFileEventProcessor {
         return timer.get();
     }
 
-    /** Whether a new folder or file in one of these library paths waits to be handled. */
+    /**
+     * Whether a new folder or file in one of these library paths waits to be handled, or the library's files without
+     * a book are still being looked for.
+     */
     private boolean newFilesWaitIn(Set<Path> libraryPaths) {
         Predicate<Path> inLibrary = p -> libraryPaths.stream().anyMatch(p::startsWith);
-        return pendingFolderCreates.keySet().stream().anyMatch(inLibrary)
+        return catchingUp.values().stream().anyMatch(paths -> !Collections.disjoint(paths, libraryPaths))
+                || pendingFolderCreates.keySet().stream().anyMatch(inLibrary)
                 || settlingFiles.stream().anyMatch(inLibrary)
                 || eventQueue.stream().anyMatch(e -> e.eventKind() == StandardWatchEventKinds.ENTRY_CREATE && inLibrary.test(e.fullPath()));
     }
@@ -957,8 +1048,9 @@ public class LibraryFileEventProcessor {
         eventQueue.stream().filter(e -> e.eventKind() == StandardWatchEventKinds.ENTRY_CREATE)
                 .forEach(e -> unhandled.add(e.fullPath()));
         if (!unhandled.isEmpty()) {
-            log.warn("[SHUTDOWN] {} new files or folders were still waiting and are not imported; a rescan of their "
-                    + "library imports them: {}", unhandled.size(), unhandled.stream().limit(50).toList());
+            log.warn("[SHUTDOWN] {} new files or folders were still waiting and are not imported; they are announced "
+                    + "again when the application starts while their library is watched, and a rescan of their library "
+                    + "imports them: {}", unhandled.size(), unhandled.stream().limit(50).toList());
         }
         log.info("Shutting down LibraryFileEventProcessor...");
     }

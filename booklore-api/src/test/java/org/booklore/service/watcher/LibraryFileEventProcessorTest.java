@@ -1,5 +1,6 @@
 package org.booklore.service.watcher;
 
+import org.booklore.model.dto.settings.LibraryFile;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.BookFileEntity;
 import org.booklore.model.entity.LibraryEntity;
@@ -8,6 +9,7 @@ import org.booklore.model.enums.BookFileType;
 import org.booklore.model.enums.LibraryOrganizationMode;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
+import org.booklore.repository.projection.BookFileScanRow;
 import org.booklore.service.file.FileFingerprint;
 import org.booklore.service.library.LibraryProcessingService;
 import org.booklore.util.FileUtils;
@@ -1087,6 +1089,130 @@ class LibraryFileEventProcessorTest {
             Thread.sleep(2000);
 
             verify(pendingDeletionPool, never()).addFolderDeletion(any(), anyLong(), any(), any());
+        }
+    }
+
+    /**
+     * Once the application is back, the book files without a book (what arrived while it was down, or still waited
+     * when it stopped) are announced as the watcher announces what arrives: in a new folder as that folder, in a folder
+     * with books on their own.
+     */
+    @Nested
+    class OnceTheApplicationIsBack {
+
+        private Path settled(String relative) throws IOException {
+            Path file = tempDir.resolve(relative);
+            Files.createDirectories(file.getParent());
+            Files.writeString(file, "content of " + relative);
+            Files.setLastModifiedTime(file, FileTime.from(Instant.now().minusSeconds(60)));
+            return file;
+        }
+
+        private LibraryFile withoutABook(String subPath, String fileName, boolean folderBased) {
+            return LibraryFile.builder().libraryEntity(library).libraryPathEntity(libraryPath).fileSubPath(subPath)
+                    .fileName(fileName).bookFileType(BookFileType.EPUB).folderBased(folderBased).build();
+        }
+
+        private void givenFilesWithoutBooks(LibraryFile... files) throws IOException {
+            when(libraryProcessingService.findFilesWithoutBooks(1L)).thenReturn(List.of(files));
+        }
+
+        /** The book formats whose own folder is this one, as the repository gives them. */
+        private void givenRowsOwnedBy(String folder, BookFileScanRow... rows) {
+            int lastSep = folder.lastIndexOf('/');
+            when(bookRepository.findBookFormatRowsOwnedByFolder(1L, folder, lastSep < 0 ? "" : folder.substring(0, lastSep),
+                    folder.substring(lastSep + 1))).thenReturn(List.of(rows));
+        }
+
+        private BookFileScanRow row(String subPath, String fileName, boolean folderBased) {
+            return new BookFileScanRow(70L, 7L, 1L, tempDir.toString(), subPath, fileName, true,
+                    BookFileType.EPUB, false, folderBased);
+        }
+
+        @Test
+        void filesWithoutABookInANewFolderAreAnnouncedAsThatFolder() throws Exception {
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
+            settled("Moved/Foundation.epub");
+            settled("Moved/Foundation.pdf");
+            givenFilesWithoutBooks(withoutABook("Moved", "Foundation.epub", false), withoutABook("Moved", "Foundation.pdf", false));
+
+            processor.announceFilesWithoutBooks(1L);
+
+            // Handled as one book, as a new folder is in BOOK_PER_FOLDER
+            verify(libraryProcessingService, timeout(10000)).processLibraryFiles(argThat(files -> files.size() == 2), eq(library));
+            verify(bookFileTransactionalHandler, never()).handleNewBookFileUnlessCopy(anyLong(), any());
+        }
+
+        @Test
+        void aFileWithoutABookInAFolderWithBooksIsAnnouncedOnItsOwn() throws Exception {
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
+            settled("Asimov/Foundation.epub");
+            Path pdf = settled("Asimov/Foundation.pdf");
+            givenFilesWithoutBooks(withoutABook("Asimov", "Foundation.pdf", false));
+            givenRowsOwnedBy("Asimov", row("Asimov", "Foundation.epub", false));
+
+            processor.announceFilesWithoutBooks(1L);
+
+            // As a file arriving in the folder of a book is: matched to that book on its own
+            verify(bookFileTransactionalHandler, timeout(3000)).handleNewBookFileUnlessCopy(1L, pdf);
+            Thread.sleep(6000);
+            verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
+            verify(bookFileTransactionalHandler, times(1)).handleNewBookFileUnlessCopy(anyLong(), any());
+        }
+
+        @Test
+        void aFileWithoutABookAtTheRootOfTheLibraryIsAnnouncedOnItsOwn() throws Exception {
+            Path file = settled("Foundation.epub");
+            givenFilesWithoutBooks(withoutABook("", "Foundation.epub", false));
+
+            processor.announceFilesWithoutBooks(1L);
+
+            // Not as the library's folder, whose handling would go through every file of the library
+            verify(bookFileTransactionalHandler, timeout(2000)).handleNewBookFileUnlessCopy(1L, file);
+        }
+
+        @Test
+        void whatOnlyGroupsOtherwiseThanItsBookIsLeftToARescan() throws Exception {
+            // A file in the folder of a stored folder audiobook, and a folder audiobook whose tracks are stored as books
+            settled("Audio/Dune/Dune.epub");
+            settled("Audio/Series/One.mp3");
+            settled("Audio/Series/Two.mp3");
+            givenFilesWithoutBooks(withoutABook("Audio/Dune", "Dune.epub", false), withoutABook("Audio", "Series", true));
+            givenRowsOwnedBy("Audio/Dune", row("Audio", "Dune", true));
+            givenRowsOwnedBy("Audio/Series", row("Audio/Series", "One.mp3", false), row("Audio/Series", "Two.mp3", false));
+
+            processor.announceFilesWithoutBooks(1L);
+
+            assertThat(processor.hasPendingEventsForPaths(Set.of(tempDir))).isFalse();
+            Thread.sleep(6000);
+            verifyNoInteractions(bookFileTransactionalHandler);
+        }
+
+        @Test
+        void aDeletionInTheLibraryIsHeldWhileItsFilesWithoutABookAreLookedFor() throws Exception {
+            CountDownLatch walked = new CountDownLatch(1);
+            when(libraryProcessingService.findFilesWithoutBooks(1L)).thenAnswer(inv -> {
+                walked.await(30, TimeUnit.SECONDS);
+                return List.of();
+            });
+            BookEntity book = BookEntity.builder().id(7L).library(library).libraryPath(libraryPath).build();
+            BookFileEntity stored = BookFileEntity.builder().id(70L).book(book).fileSubPath("Asimov").fileName("Foundation.epub")
+                    .currentHash("hash").isBookFormat(true).bookType(BookFileType.EPUB).build();
+            when(bookFilePersistenceService.findBookFileByLibraryPathSubPathAndFileName(1L, "Asimov", "Foundation.epub"))
+                    .thenReturn(Optional.of(stored));
+            Path source = tempDir.resolve("Asimov").resolve("Foundation.epub");
+            CompletableFuture<Void> catchingUp = CompletableFuture.runAsync(() -> processor.announceFilesWithoutBooks(1L));
+            verify(libraryProcessingService, timeout(3000)).findFilesWithoutBooks(1L);
+
+            // The source of a file moved while the application was down, or of one that waited when it stopped, may go
+            // before the walk finds the file: the book is not deleted for it meanwhile
+            processor.processEvent(StandardWatchEventKinds.ENTRY_DELETE, 1L, source, false);
+            verify(pendingDeletionPool, timeout(3000)).addFileDeletion(eq(source), eq(1L), eq(stored), eq(book), any());
+            verify(pendingDeletionPool, timeout(12000)).retime(eq(source), any(), any());
+            verify(pendingDeletionPool, never()).expireFileDeletion(any());
+
+            walked.countDown();
+            catchingUp.get(5, TimeUnit.SECONDS);
         }
     }
 

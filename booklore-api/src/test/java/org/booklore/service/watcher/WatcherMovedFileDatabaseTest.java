@@ -601,6 +601,77 @@ class WatcherMovedFileDatabaseTest {
         assertThat(bookRepository.countIncludingDeletedByLibraryId(library.getId())).isEqualTo(1);
     }
 
+    // ========== once the application is back ==========
+    // What waited when the application stopped is kept only in memory, and a file already on disk gives no event: the
+    // files without a book are announced again once the library is watched, as LibraryService.initializeMonitoring has
+    // them announced.
+
+    @Test
+    void aCopyThatWaitedWhenTheApplicationStoppedWaitsAgainOnceItIsBackAndMovesTheBookWhenItsSourceGoes() throws Exception {
+        Path source = epub(root.resolve("Asimov/Foundation.epub"), "Foundation " + System.nanoTime());
+        long bookId = storedBook("Asimov", "Foundation.epub", FileFingerprint.generateHash(source), false);
+        // Copied into a new folder before the application stopped, its source not yet removed
+        Path destination = settled(Files.copy(source, Files.createDirectories(root.resolve("Moved")).resolve("Foundation.epub")));
+
+        libraryFileEventProcessor.announceFilesWithoutBooks(library.getId());
+        waitUntil(() -> libraryFileEventProcessor.waitsAsCopy(destination));
+        // The mover removes the source once the application is back
+        Files.delete(source);
+        libraryFileEventProcessor.processEvent(StandardWatchEventKinds.ENTRY_DELETE, library.getId(), source, false);
+
+        waitUntil(() -> pathsOf(bookId).equals(List.of("Moved/Foundation.epub")));
+        Thread.sleep(9000);
+        assertThat(pathsOf(bookId)).containsExactly("Moved/Foundation.epub");
+        assertNotDeleted(bookId);
+        assertThat(bookRepository.countIncludingDeletedByLibraryId(library.getId())).isEqualTo(1);
+    }
+
+    @Test
+    void aCopyThatWaitedWhenTheApplicationStoppedIsANewBookOnceItsWaitIsOverAndItsOriginalStays() throws Exception {
+        libraryFileEventProcessor.setCopySourceWaitMs(1500);
+        Path original = epub(root.resolve("Asimov/Foundation.epub"), "Foundation " + System.nanoTime());
+        long bookId = storedBook("Asimov", "Foundation.epub", FileFingerprint.generateHash(original), false);
+        Path copy = settled(Files.copy(original, Files.createDirectories(root.resolve("Copies")).resolve("Foundation.epub")));
+
+        libraryFileEventProcessor.announceFilesWithoutBooks(library.getId());
+        waitUntil(() -> libraryFileEventProcessor.waitsAsCopy(copy));
+
+        waitUntil(() -> bookIdAt("Copies", "Foundation.epub") != null);
+        assertThat(bookIdAt("Copies", "Foundation.epub")).isNotEqualTo(bookId);
+        assertThat(pathsOf(bookId)).containsExactly("Asimov/Foundation.epub");
+        assertNotDeleted(bookId);
+    }
+
+    @Test
+    void aFileMovedWhileTheApplicationWasDownIsItsBooksFileOnceItIsBack() throws Exception {
+        // Moved by copying, the source removed while the application was down, so no event came for either
+        Path moved = epub(root.resolve("Moved/Foundation.epub"), "Foundation " + System.nanoTime());
+        long bookId = storedBook("Asimov", "Foundation.epub", FileFingerprint.generateHash(moved), false);
+        settled(moved);
+
+        libraryFileEventProcessor.announceFilesWithoutBooks(library.getId());
+
+        waitUntil(() -> pathsOf(bookId).equals(List.of("Moved/Foundation.epub")));
+        assertNotDeleted(bookId);
+        assertThat(bookRepository.countIncludingDeletedByLibraryId(library.getId())).isEqualTo(1);
+    }
+
+    @Test
+    void theFilesOfBooksAreNotAnnouncedAgainOnceTheApplicationIsBack() throws Exception {
+        Path stored = epub(root.resolve("Asimov/Foundation.epub"), "Foundation " + System.nanoTime());
+        long bookId = storedBook("Asimov", "Foundation.epub", FileFingerprint.generateHash(stored), false);
+        Path folder = root.resolve("Audio/Dune");
+        audio(folder.resolve("Dune - 01.mp3"));
+        audio(folder.resolve("Dune - 02.mp3"));
+        storedBook(new StoredFile("Audio", "Dune", FileFingerprint.generateFolderHash(folder), BookFileType.AUDIOBOOK, true));
+
+        libraryFileEventProcessor.announceFilesWithoutBooks(library.getId());
+
+        assertThat(libraryFileEventProcessor.hasPendingEventsForPaths(Set.of(root))).isFalse();
+        assertThat(pathsOf(bookId)).containsExactly("Asimov/Foundation.epub");
+        assertThat(bookRepository.countIncludingDeletedByLibraryId(library.getId())).isEqualTo(2);
+    }
+
     // ========== fixture ==========
 
     /** What the watcher does with the deletion of a stored file: the pool holds its book for a grace period. */

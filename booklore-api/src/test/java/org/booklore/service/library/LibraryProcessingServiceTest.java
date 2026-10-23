@@ -178,6 +178,28 @@ class LibraryProcessingServiceTest {
         return captor.getValue();
     }
 
+    // ---- files without books, for the watcher at startup ----
+
+    @Test
+    void findFilesWithoutBooks_givesTheFilesARescanWouldImportAndChangesNothing() throws IOException {
+        givenLibrary();
+        libraryEntity.setAllowedFormats(List.of(BookFileType.EPUB));
+        givenScan(libraryFile("Asimov", "Foundation.epub"), libraryFile("Moved", "Foundation.epub"));
+        givenRows(row(1, 11, "Asimov", "Foundation.epub"));
+
+        List<LibraryFile> files = libraryProcessingService.findFilesWithoutBooks(LIBRARY_ID);
+
+        assertThat(files).extracting(LibraryFile::getFileSubPath).containsExactly("Moved");
+        // As the rescan finds them, in the formats the library allows, and the rows read once the walk is done, so
+        // a file imported while it ran is not among them
+        InOrder order = inOrder(libraryFileHelper, bookAdditionalFileRepository);
+        order.verify(libraryFileHelper).scanAllLibraryFiles(libraryEntity);
+        order.verify(libraryFileHelper).filterByAllowedFormats(anyList(), eq(List.of(BookFileType.EPUB)));
+        order.verify(bookAdditionalFileRepository).findScanRowsByLibraryId(LIBRARY_ID);
+        verifyNoInteractions(fileAsBookProcessor, bookGroupingService, bookDeletionService, bookRestorationService,
+                existingBookAttacher, notificationService);
+    }
+
     // ---- initial scan ----
 
     @Test
