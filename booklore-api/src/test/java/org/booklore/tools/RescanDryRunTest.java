@@ -143,7 +143,35 @@ class RescanDryRunTest {
                 .containsEntry("claim: claimed by files of N folders [...]", 3)
                 .containsEntry("fileless: has no author to check the file against", 1)
                 .containsEntry("folder: N books in the folder have this title", 1)
-                .containsEntry("fileless: is number N of its series, and \" (N)\" may mean volume N", 1);
+                .containsEntry("fileless: is number N of its series, and \" (1)\" may mean volume 1", 1);
+    }
+
+    @Test
+    void countsOneRuleOnceWhateverItsNumbers() throws IOException {
+        // A place in a series of 2, 2.5 or 3, and one volume or two named, are particulars; the " (1)" and the volume
+        // 1 it may mean are the reason's own words
+        Files.writeString(dir.resolve("shells.tsv"), """
+                1\t1\t0\t1\tSaga\tNULL\t2\tBrian K. Vaughan
+                2\t1\t0\t1\tFables\tNULL\t2.5\tBill Willingham
+                3\t1\t0\t1\tY The Last Man\tNULL\t3\tBrian K. Vaughan
+                4\t1\t0\t1\tMonstress\tVolume Two\tNULL\tMarjorie Liu
+                5\t1\t0\t1\tPaper Girls\tVolume 2, Part 3\tNULL\tBrian K. Vaughan
+                """);
+        Files.writeString(dir.resolve("existing.tsv"), "");
+        Files.writeString(dir.resolve("newfiles.tsv"), """
+                1\tV/Brian K. Vaughan\tSaga (1).epub
+                1\tW/Bill Willingham\tFables (1).epub
+                1\tV/Brian K. Vaughan\tY The Last Man (1).epub
+                1\tL/Marjorie Liu\tMonstress (1).epub
+                1\tV/Brian K. Vaughan\tPaper Girls (1).epub
+                """);
+
+        Report report = run();
+
+        assertThat(report.decisions()).containsExactly(entry("new-book", 5));
+        assertThat(report.rejections()).containsExactly(
+                entry("fileless: is number N of its series, and \" (1)\" may mean volume 1", 3),
+                entry("fileless: names volume N in its title or subtitle, and \" (1)\" may mean volume 1", 2));
     }
 
     @Test

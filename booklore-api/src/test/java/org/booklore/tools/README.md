@@ -57,9 +57,12 @@ The report ends with lines starting with `#`:
 - the count of each decision;
 - for files that become new books (`new-book` and `ambiguous`), the count of each reason an
   existing book was turned down. Book ids, numbers and quoted names are replaced, so alike
-  reasons are counted together. For example: `fileless: is not by '...'`,
+  reasons are counted together: a number, a fraction or a list of numbers (`2`, `2.5`, `2, 3`)
+  is one `N`, but the `" (1)" may mean volume 1` of the rule for a lone ` (1)` stays as it is.
+  For example: `fileless: is not by '...'`,
   `claim: claimed by files of N folders [...]`,
-  `fileless: has a one-word title, which needs its author's given name in the path as the book has it`.
+  `fileless: has a one-word title, which needs its author's given name in the path as the book has it`,
+  `fileless: is number N of its series, and " (1)" may mean volume 1`.
 
 Useful cuts:
 

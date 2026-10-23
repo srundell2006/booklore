@@ -38,6 +38,7 @@ import java.util.List;
 import java.util.Map;
 import java.util.Set;
 import java.util.TreeMap;
+import java.util.regex.Matcher;
 import java.util.regex.Pattern;
 import java.util.stream.Collectors;
 
@@ -262,7 +263,10 @@ public final class RescanDryRun {
 
         private static final Pattern BOOK = Pattern.compile("book#\\d+( \"[^\"]*\")?");
         private static final Pattern QUOTED = Pattern.compile("'[^']*'");
-        private static final Pattern NUMBER = Pattern.compile("\\d+");
+        /** A number, a fraction or a list of them ("2", "2.5", "2, 3"): one particular. */
+        private static final Pattern NUMBER = Pattern.compile("\\d+(?:\\.\\d+)?(?:, \\d+(?:\\.\\d+)?)*");
+        /** A reason's own words that hold a number, which is no particular: a " (1)" is always a " (1)". */
+        private static final Pattern OWN_NUMBERS = Pattern.compile("\" \\(1\\)\" may mean volume 1");
         private static final Pattern ID_LIST = Pattern.compile("\\[[^\\]]*]");
 
         final Map<LibraryFile, Decision> inFolder = new IdentityHashMap<>();
@@ -327,7 +331,14 @@ public final class RescanDryRun {
             String general = BOOK.matcher(reason).replaceAll("").trim();
             general = ID_LIST.matcher(general).replaceAll("[...]");
             general = QUOTED.matcher(general).replaceAll("'...'");
-            return NUMBER.matcher(general).replaceAll("N");
+            StringBuilder out = new StringBuilder();
+            Matcher own = OWN_NUMBERS.matcher(general);
+            int last = 0;
+            while (own.find()) {
+                out.append(NUMBER.matcher(general.substring(last, own.start())).replaceAll("N")).append(own.group());
+                last = own.end();
+            }
+            return out.append(NUMBER.matcher(general.substring(last)).replaceAll("N")).toString();
         }
     }
 
