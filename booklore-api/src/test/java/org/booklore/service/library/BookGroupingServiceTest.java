@@ -1172,6 +1172,23 @@ class BookGroupingServiceTest {
     }
 
     @Test
+    void rescan_autoDetect_filelessBooksAtTwoPlacesOfASeriesAreNotAlike() {
+        // 1.5 and 2.5 are no whole series numbers, and still two places in the series: the file says neither
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shellRows.add(new FilelessBookRow(5L, null, false, "cover", null, "Survival", null, 1.5f, "Ann Smith"));
+        shellRows.add(new FilelessBookRow(9L, null, false, "cover", null, "Survival", null, 2.5f, "Ann Smith"));
+        LibraryFile survival = newFile(lib, path, "S/Smith, Ann", "Survival.epub");
+        Map<String, Decision> decisions = new LinkedHashMap<>();
+
+        var result = rescan(lib, filelessDecisions(decisions), survival);
+
+        assertThat(result.filesToAttach()).isEmpty();
+        assertThat(newBooks(result)).containsExactly(List.of("Survival.epub"));
+        assertThat(decisions.get("Survival.epub").reason()).startsWith("2 fileless books qualify");
+    }
+
+    @Test
     void rescan_autoDetect_rootFilesAttachByExactTitleToo() {
         // New: a root file was never attached; "Dune.pdf" next to "Dune.epub" shares its sidecar files, and the
         // initial scan groups root files by exact title as well

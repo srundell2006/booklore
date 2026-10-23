@@ -21,6 +21,9 @@ import java.util.regex.Pattern;
  * @param authors       its authors, parsed
  * @param seriesNumber  its place in its series when that is a whole number: the metadata's series number, else the
  *                      number of a "(Series, #N)" suffix; null otherwise
+ * @param seriesPlace   its place in its series as given, fractions included: the metadata's series number, else the
+ *                      number of a "(Series, #N)" suffix; null when it has neither. Where {@link #seriesNumber} is null
+ *                      for 1.5, 2.5 and no number alike, this tells them apart
  */
 public record ShellCandidate(long bookId,
                              Long libraryPathId,
@@ -29,7 +32,8 @@ public record ShellCandidate(long bookId,
                              String title,
                              Set<String> identities,
                              List<PersonName> authors,
-                             Integer seriesNumber) {
+                             Integer seriesNumber,
+                             Float seriesPlace) {
 
     /**
      * "Storm Front (The Dresden Files, #1)": the series and number some metadata providers append to a title. The
@@ -52,11 +56,11 @@ public record ShellCandidate(long bookId,
 
         String fullTitle = title == null ? "" : title.trim();
         String cleanTitle = fullTitle;
-        Integer suffixNumber = null;
+        Float suffixPlace = null;
         Matcher provider = PROVIDER_SERIES.matcher(fullTitle);
         if (provider.matches()) {
             cleanTitle = provider.group(1);
-            suffixNumber = wholeNumber(Float.parseFloat(provider.group(3)));
+            suffixPlace = Float.parseFloat(provider.group(3));
         }
 
         Set<String> identities = new LinkedHashSet<>();
@@ -69,7 +73,7 @@ public record ShellCandidate(long bookId,
 
         Integer number = wholeNumber(seriesNumber);
         return new ShellCandidate(bookId, libraryPathId, physical, hasCover, fullTitle, identities, authors,
-                number != null ? number : suffixNumber);
+                number != null ? number : wholeNumber(suffixPlace), seriesNumber != null ? seriesNumber : suffixPlace);
     }
 
     /** 3 for 3.0; null for 2.5 (a novella between two volumes), a negative number or none. */

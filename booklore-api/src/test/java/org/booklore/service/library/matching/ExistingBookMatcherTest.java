@@ -317,6 +317,21 @@ class ExistingBookMatcherTest {
         }
 
         @Test
+        void aSeriesNumberThatIsNoWholeNumberIsAnotherPlaceInTheSeries() {
+            // Neither 1.5 nor 2.5 is a whole series number, and still they are two books; so are a prequel's 0.5 and
+            // a book in no series
+            FileEvidence survival = file("S/Smith, Ann", "Survival.epub");
+            assertThat(shellMatch(survival, shellNumber(5, "Survival", 1.5f, "Ann Smith"), shellNumber(9, "Survival", 2.5f, "Ann Smith")))
+                    .isInstanceOf(Ambiguous.class);
+            assertThat(shellMatch(survival, shellNumber(5, "Survival", 0.5f, "Ann Smith"), shell(9, "Survival", "Ann Smith")))
+                    .isInstanceOf(Ambiguous.class);
+            assertThat(shellMatch(survival, shellNumber(5, "Survival", -1f, "Ann Smith"), shell(9, "Survival", "Ann Smith")))
+                    .isInstanceOf(Ambiguous.class);
+            assertThat(matchedId(shellMatch(survival, shellNumber(9, "Survival", 2.5f, "Ann Smith"),
+                    shellNumber(5, "Survival", 2.5f, "Ann Smith")))).isEqualTo(5);
+        }
+
+        @Test
         void otherAuthorsAreAnotherBook() {
             // A co-author more, or another given name the path agrees with as well
             assertThat(shellMatch(file("S/Smith, Ann", "Survival.epub"),

@@ -40,9 +40,10 @@ import java.util.stream.Collectors;
  *       name. A fileless book without authors only matches when it is a physical book;</li>
  *   <li>when a leading series number was taken off the name ("01 - Title"), have that series number;</li>
  *   <li>be the only fileless book that qualifies, or one of several alike ones: the same titles, the same series
- *       number and the same authors, as a book entered twice or a paper copy's record next to its ebook's are. The
- *       file goes to one that is not physical, since an ebook file belongs with the record whose file was lost, else
- *       to the one with the lowest id. Books without authors are never alike: nothing says they are one book.</li>
+ *       number (as given, so 1.5 is not 2.5) and the same authors, as a book entered twice or a paper copy's record
+ *       next to its ebook's are. The file goes to one that is not physical, since an ebook file belongs with the
+ *       record whose file was lost, else to the one with the lowest id. Books without authors are never alike:
+ *       nothing says they are one book.</li>
  * </ul>
  * A name ending in " (1)", as a browser names a second download, is also read without it, by the same rules:
  * "Started Early, Took My Dog (1).epub" is the fileless book "Started Early, Took My Dog" as well as its first volume.
@@ -287,7 +288,8 @@ public final class ExistingBookMatcher {
      * number and the same authors. They are one book entered twice, or the record of a paper copy next to the record
      * of the ebook, and the file is either one's. A book that is not physical goes first, since an ebook file belongs
      * with the record whose file was lost, then the lowest id. Null when one of them differs from the others, or they
-     * have no authors to tell them by.
+     * have no authors to tell them by. Series numbers are compared as given: 1.5 and 2.5, or 0.5 and none, are two
+     * places in a series, although neither is a whole number.
      */
     private static Accepted oneOfAlike(Collection<Accepted> qualifying) {
         ShellCandidate first = qualifying.iterator().next().shell();
@@ -298,7 +300,7 @@ public final class ExistingBookMatcher {
         for (Accepted next : qualifying) {
             ShellCandidate shell = next.shell();
             if (!shell.identities().equals(first.identities()) || !Objects.equals(shell.seriesNumber(), first.seriesNumber())
-                    || !Set.copyOf(shell.authors()).equals(authors)) {
+                    || !Objects.equals(shell.seriesPlace(), first.seriesPlace()) || !Set.copyOf(shell.authors()).equals(authors)) {
                 return null;
             }
         }
