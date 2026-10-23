@@ -184,9 +184,10 @@ class ExistingBookMatcherTest {
         }
 
         @Test
-        void twoQualifyingBooksAreAmbiguous() {
+        void twoQualifyingBooksThatDifferAreAmbiguous() {
+            // Two alike books are one book's two records; see AlikeFilelessBooks
             assertThat(shellMatch(file("S/Smith, Ann", "Survival.epub"),
-                    shell(20, "Survival", "Ann Smith"), shell(21, "Survival", "Ann Smith"))).isInstanceOf(Ambiguous.class);
+                    shell(20, "Survival", "Ann Smith"), shell(21, "Survival", "Ann Smith", "Bob Jones"))).isInstanceOf(Ambiguous.class);
         }
 
         @Test
@@ -273,6 +274,209 @@ class ExistingBookMatcherTest {
     }
 
     @Nested
+    class AlikeFilelessBooks {
+
+        private ShellCandidate physical(long id, String title, String... authors) {
+            return ShellCandidate.of(id, PATH, true, false, title, null, null, List.of(authors));
+        }
+
+        @Test
+        void theFileGoesToTheLowestIdOfTwoAlikeBooks() {
+            Decision decision = shellMatch(file("S/Smith, Ann", "Survival.epub"),
+                    shell(40, "Survival", "Ann Smith"), shell(12, "Survival", "Ann Smith"));
+
+            assertThat(decision).isEqualTo(new Match(12, Kind.FILELESS,
+                    "title and author agree with book#12 \"Survival\", one of 2 alike fileless books (book#12, book#40)"));
+        }
+
+        @Test
+        void authorsAreAlikeAsNamesWhateverTheirOrderOrSpelling() {
+            assertThat(matchedId(shellMatch(file("S/Smith, Ann", "Survival.epub"),
+                    shell(40, "Survival", "Ann Smith", "Bob Jones"), shell(12, "Survival", "Jones, Bob", "Smith, Ann"))))
+                    .isEqualTo(12);
+        }
+
+        @Test
+        void aBookThatIsNotPhysicalGoesFirst() {
+            // The paper copy's record keeps its place; the ebook belongs with the record whose file was lost
+            assertThat(matchedId(shellMatch(file("S/Smith, Ann", "Survival.epub"),
+                    physical(12, "Survival", "Ann Smith"), shell(40, "Survival", "Ann Smith")))).isEqualTo(40);
+            assertThat(matchedId(shellMatch(file("S/Smith, Ann", "Survival.epub"),
+                    physical(40, "Survival", "Ann Smith"), physical(12, "Survival", "Ann Smith")))).isEqualTo(12);
+        }
+
+        @Test
+        void anotherSeriesNumberIsAnotherBook() {
+            FileEvidence survival = file("S/Smith, Ann", "Survival.epub");
+            assertThat(shellMatch(survival, shellNumber(12, "Survival", 1, "Ann Smith"), shellNumber(40, "Survival", 2, "Ann Smith")))
+                    .isInstanceOf(Ambiguous.class);
+            assertThat(shellMatch(survival, shellNumber(12, "Survival", 1, "Ann Smith"), shell(40, "Survival", "Ann Smith")))
+                    .isInstanceOf(Ambiguous.class);
+            assertThat(matchedId(shellMatch(survival, shellNumber(12, "Survival", 2, "Ann Smith"),
+                    shellNumber(40, "Survival", 2, "Ann Smith")))).isEqualTo(12);
+        }
+
+        @Test
+        void otherAuthorsAreAnotherBook() {
+            // A co-author more, or another given name the path agrees with as well
+            assertThat(shellMatch(file("S/Smith, Ann", "Survival.epub"),
+                    shell(12, "Survival", "Ann Smith"), shell(40, "Survival", "Ann Smith", "Bob Jones"))).isInstanceOf(Ambiguous.class);
+            assertThat(shellMatch(file("S/Smith, A.", "The Last Survivors.epub"),
+                    shell(12, "The Last Survivors", "Ann Smith"), shell(40, "The Last Survivors", "Anne Smith"))).isInstanceOf(Ambiguous.class);
+            assertThat(shellMatch(file("S/Smith, A.", "The Last Survivors.epub"),
+                    shell(12, "The Last Survivors", "Ann Smith"), shell(40, "The Last Survivors", "A. Smith"))).isInstanceOf(Ambiguous.class);
+        }
+
+        @Test
+        void aSubtitleIsAnotherBook() {
+            ShellCandidate plain = ShellCandidate.of(12, PATH, false, true, "Survival", null, null, List.of("Ann Smith"));
+            ShellCandidate subtitled = ShellCandidate.of(40, PATH, false, true, "Survival", "A Novel", null, List.of("Ann Smith"));
+
+            Decision decision = shellMatch(file("S/Smith, Ann", "Survival.epub"), plain, subtitled);
+
+            assertThat(decision).isInstanceOf(Ambiguous.class);
+            assertThat(decision.reason()).isEqualTo("2 fileless books qualify: book#12 \"Survival\", book#40 \"Survival\"");
+        }
+
+        @Test
+        void booksWithoutAuthorsAreNeverAlike() {
+            ShellCandidate first = ShellCandidate.of(15, null, true, false, "Dune", null, null, List.of());
+            ShellCandidate second = ShellCandidate.of(16, null, true, false, "Dune", null, null, List.of());
+            assertThat(shellMatch(file("H/Herbert, Frank", "Dune.epub"), first, second)).isInstanceOf(Ambiguous.class);
+        }
+
+        @Test
+        void twoAlikeOfThreeAreNotEnough() {
+            Decision decision = shellMatch(file("S/Smith, Ann", "Survival.epub"), shell(12, "Survival", "Ann Smith"),
+                    shell(40, "Survival", "Ann Smith"), shell(41, "Survival", "Ann Smith", "Bob Jones"));
+
+            assertThat(decision).isInstanceOf(Ambiguous.class);
+            assertThat(((Ambiguous) decision).bookIds()).containsExactlyInAnyOrder(12L, 40L, 41L);
+        }
+
+        @Test
+        void onlyTheBooksThatQualifyNeedBeAlike() {
+            // Another library path turns book#41 down; the two left are alike
+            ShellCandidate elsewhere = ShellCandidate.of(41, 2L, false, true, "Survival", "A Novel", null, List.of("Ann Smith"));
+            assertThat(matchedId(shellMatch(file("S/Smith, Ann", "Survival.epub"),
+                    shell(40, "Survival", "Ann Smith"), elsewhere, shell(12, "Survival", "Ann Smith")))).isEqualTo(12);
+        }
+
+        @Test
+        void onceTheChosenBookLeavesTheIndexAnAlikeFileGoesToTheNext() {
+            // As the watcher has it: the book a file was attached to is no longer fileless
+            FilelessShellIndex index = FilelessShellIndex.of(List.of(shell(12, "Survival", "Ann Smith"), shell(40, "Survival", "Ann Smith")));
+            assertThat(matchedId(ExistingBookMatcher.matchShell(file("S/Smith, Ann", "Survival.epub"), index))).isEqualTo(12);
+
+            index.remove(12);
+
+            assertThat(ExistingBookMatcher.matchShell(file("S/Smith, Ann/Other", "Survival.epub"), index))
+                    .isEqualTo(new Match(40, Kind.FILELESS, "title and author agree with book#40 \"Survival\""));
+        }
+    }
+
+    @Nested
+    class ALoneCopyMarkerOfOne {
+
+        @Test
+        void aSecondDownloadIsTheBookOfItsTitle() {
+            Decision decision = shellMatch(file("A/Kate Atkinson", "Started Early, Took My Dog (1).epub"),
+                    shell(7, "Started Early, Took My Dog", "Kate Atkinson"));
+
+            assertThat(decision).isEqualTo(new Match(7, Kind.FILELESS,
+                    "title and author agree with book#7 \"Started Early, Took My Dog\" (\" (1)\" read as a copy)"));
+        }
+
+        @Test
+        void notTheBookOfAnotherNumberOfItsSeries() {
+            FileEvidence saga = file("V/Brian K. Vaughan", "Saga (1).epub");
+
+            Decision second = shellMatch(saga, shellNumber(8, "Saga", 2, "Brian K. Vaughan"));
+
+            assertThat(second).isInstanceOf(NoMatch.class);
+            assertThat(second.reason()).isEqualTo("book#8 \"Saga\" is number 2 of its series, and \" (1)\" may mean volume 1");
+            // It may be the copy of that book all the same: no evidence against it
+            assertThat(((NoMatch) second).refused()).isEmpty();
+            assertThat(matchedId(shellMatch(saga, shellNumber(8, "Saga", 1, "Brian K. Vaughan")))).isEqualTo(8);
+            assertThat(matchedId(shellMatch(saga, shell(8, "Saga", "Brian K. Vaughan")))).isEqualTo(8);
+        }
+
+        @Test
+        void onlyOneIsACopy() {
+            // " (2)" stays the second volume
+            assertThat(shellMatch(file("V/Brian K. Vaughan", "Saga (2).epub"), shell(8, "Saga", "Brian K. Vaughan")))
+                    .isEqualTo(new NoMatch("no fileless book has this title"));
+            assertThat(shellMatch(file("A/Kate Atkinson", "Started Early, Took My Dog (2).epub"),
+                    shell(7, "Started Early, Took My Dog", "Kate Atkinson"))).isInstanceOf(NoMatch.class);
+        }
+
+        @Test
+        void aComicsOneIsAnIssue() {
+            ShellCandidate batman = shell(9, "Batman", "Bob Kane");
+            assertThat(matchedId(shellMatch(file("K/Kane, Bob", "Batman.cbz"), batman))).isEqualTo(9);
+            assertThat(shellMatch(file("K/Kane, Bob", "Batman (1).cbz"), batman)).isInstanceOf(NoMatch.class);
+        }
+
+        @Test
+        void withALeadingSeriesNumberThatNumberDecides() {
+            FileEvidence third = file("D/Doe, Jane", "03. The Long Night (1).epub");
+            assertThat(shellMatch(third, shellNumber(9, "The Long Night", 3, "Jane Doe")))
+                    .isEqualTo(new Match(9, Kind.FILELESS, "title and author agree with book#9 \"The Long Night\" (\" (1)\" read as a copy)"));
+            Decision first = shellMatch(third, shellNumber(9, "The Long Night", 1, "Jane Doe"));
+            assertThat(first).isInstanceOf(NoMatch.class);
+            assertThat(((NoMatch) first).refused()).containsExactly(9L);
+            assertThat(shellMatch(third, shell(9, "The Long Night", "Jane Doe"))).isInstanceOf(NoMatch.class);
+        }
+
+        @Test
+        void withAnotherNumberInTheNameTheOneIsACopy() {
+            assertThat(matchedId(shellMatch(file("S/Smith, Ann", "Survival 3 (1).epub"), shell(11, "Survival 3", "Ann Smith"))))
+                    .isEqualTo(11);
+            assertThat(shellMatch(file("S/Smith, Ann", "Survival 3 (1).epub"), shellNumber(11, "Survival", 3, "Ann Smith")))
+                    .isInstanceOf(NoMatch.class);
+        }
+
+        @Test
+        void theAuthorRulesStillHold() {
+            assertThat(shellMatch(file("S/Smith, Zadie", "Started Early, Took My Dog (1).epub"),
+                    shell(7, "Started Early, Took My Dog", "Kate Atkinson"))).isInstanceOf(NoMatch.class);
+            assertThat(shellMatch(file("", "Started Early, Took My Dog (1).epub"),
+                    shell(7, "Started Early, Took My Dog", "Kate Atkinson"))).isInstanceOf(NoMatch.class);
+            // A one-word title needs the author's given name as the book has it
+            ShellCandidate dawn = shell(10, "Dawn", "Octavia E. Butler");
+            assertThat(shellMatch(file("B/Butler, O.", "Dawn (1).epub"), dawn)).isInstanceOf(NoMatch.class);
+            assertThat(matchedId(shellMatch(file("B/Butler, Octavia", "Dawn (1).epub"), dawn))).isEqualTo(10);
+            // Nor does it reach a book in another library path
+            ShellCandidate elsewhere = ShellCandidate.of(7, 2L, false, true, "Started Early, Took My Dog", null, null,
+                    List.of("Kate Atkinson"));
+            assertThat(shellMatch(file("A/Kate Atkinson", "Started Early, Took My Dog (1).epub"), elsewhere)).isInstanceOf(NoMatch.class);
+        }
+
+        @Test
+        void theFirstVolumeAndTheBookOfTheTitleBothQualifying() {
+            Decision decision = shellMatch(file("A/Kate Atkinson", "Case Histories (1).epub"),
+                    shell(10, "Case Histories 1", "Kate Atkinson"), shell(11, "Case Histories", "Kate Atkinson"));
+
+            assertThat(decision).isInstanceOf(Ambiguous.class);
+            assertThat(((Ambiguous) decision).bookIds()).containsExactly(10L, 11L);
+        }
+
+        @Test
+        void theFirstVolumeIsStillFoundAsBefore() {
+            assertThat(shellMatch(file("A/Kate Atkinson", "Case Histories (1).epub"), shell(10, "Case Histories 1", "Kate Atkinson")))
+                    .isEqualTo(new Match(10, Kind.FILELESS, "title and author agree with book#10 \"Case Histories 1\""));
+        }
+
+        @Test
+        void alikeBooksOfTheTitle() {
+            assertThat(shellMatch(file("A/Kate Atkinson", "Started Early, Took My Dog (1).epub"),
+                    shell(7, "Started Early, Took My Dog", "Kate Atkinson"), shell(3, "Started Early, Took My Dog", "Kate Atkinson")))
+                    .isEqualTo(new Match(3, Kind.FILELESS, "title and author agree with book#3 \"Started Early, Took My Dog\""
+                            + " (\" (1)\" read as a copy), one of 2 alike fileless books (book#3, book#7)"));
+        }
+    }
+
+    @Nested
     class OneFilelessBookOneFolder {
 
         private List<Claim<FileEvidence>> claims(FilelessShellIndex index, FileEvidence... files) {
@@ -351,6 +555,46 @@ class ExistingBookMatcherTest {
                     file("W/Weir, Andy", "The Martian - Copy.epub"));
 
             assertThat(ExistingBookMatcher.resolveShellClaims(claims).accepted().get(62L)).hasSize(2);
+        }
+
+        @Test
+        void aSecondDownloadIsTheSameFileToo() {
+            // "The Martian (1).epub" matches the book of its title on its own, and is one name with "The Martian.epub"
+            FilelessShellIndex index = FilelessShellIndex.of(List.of(shell(62, "The Martian", "Andy Weir")));
+            List<Claim<FileEvidence>> claims = claims(index,
+                    file("W/Weir, Andy", "The Martian.epub"),
+                    file("W/Weir, Andy", "The Martian (1).epub"));
+            assertThat(claims).hasSize(2);
+
+            assertThat(ExistingBookMatcher.resolveShellClaims(claims).accepted().get(62L)).hasSize(2);
+        }
+
+        @Test
+        void alikeBooksClaimedFromTwoFoldersGetNone() {
+            // Every file claims the one alike book chosen, so the claim rules hold for alike books as for one
+            FilelessShellIndex index = FilelessShellIndex.of(List.of(shell(40, "Survival", "Ann Smith"), shell(12, "Survival", "Ann Smith")));
+            List<Claim<FileEvidence>> claims = claims(index,
+                    file("S/Smith, Ann", "Survival.epub"),
+                    file("S/Smith, Ann/Series", "Survival.epub"));
+            assertThat(claims).extracting(Claim::bookId).containsExactly(12L, 12L);
+
+            ClaimResolution<FileEvidence> resolution = ExistingBookMatcher.resolveShellClaims(claims);
+
+            assertThat(resolution.accepted()).isEmpty();
+            assertThat(resolution.rejected()).containsOnlyKeys(12L);
+        }
+
+        @Test
+        void theFormatsOfOneFolderAllGoToTheOneAlikeBookChosen() {
+            FilelessShellIndex index = FilelessShellIndex.of(List.of(shell(40, "Survival", "Ann Smith"), shell(12, "Survival", "Ann Smith")));
+            List<Claim<FileEvidence>> claims = claims(index,
+                    file("S/Smith, Ann", "Survival.epub"),
+                    file("S/Smith, Ann", "Survival.pdf"));
+
+            ClaimResolution<FileEvidence> resolution = ExistingBookMatcher.resolveShellClaims(claims);
+
+            assertThat(resolution.accepted()).containsOnlyKeys(12L);
+            assertThat(resolution.accepted().get(12L)).hasSize(2);
         }
 
         @Test

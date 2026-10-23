@@ -113,7 +113,7 @@ public class BookGroupingService {
      *   <li>BOOK_PER_FILE: only a fileless book, which then gets that one file.</li>
      * </ul>
      * Files that would be one new book (one group of the mode's grouping) go to one book: a file without a match of its
-     * own follows the files of its group that have one ("Title (1).epub" its original, the parts of an audiobook each
+     * own follows the files of its group that have one ("Title (2).epub" its original, the parts of an audiobook each
      * other). A group whose files matched different books, or one of whose files the matched book turned down (it
      * names another author or year), becomes a new book instead. A fileless book claimed from more than one folder, or
      * by two different files of one format, the files that follow a claim included, gets none of them.

@@ -276,7 +276,11 @@ public class BookFileTransactionalHandler {
      * Attaches a new file to a book the library already has, decided as a rescan decides
      * ({@link ExistingBookMatcher}): a book with files in the file's folder first, then a fileless book. The watcher
      * handles one file at a time, so where a rescan leaves a fileless book claimed from two folders alone, here the
-     * first folder to claim it wins; the book then has a file and is no fileless book for the next one.
+     * first folder to claim it wins; the book then has a file and is no fileless book for the next one. So it is with
+     * alike fileless books (the same titles, series number and authors), as intended: the first file goes to the one
+     * the matcher chooses, which then leaves the watcher's index, and a later file that matches them, from another
+     * folder, goes to the next one. Another format of the first file, in its folder, goes to the first file's book
+     * when the mode looks in the folder first, as AUTO_DETECT and BOOK_PER_FOLDER do: that book now has a file there.
      *
      * @return false when the file belongs to no existing book, or its book changed since it was read
      */

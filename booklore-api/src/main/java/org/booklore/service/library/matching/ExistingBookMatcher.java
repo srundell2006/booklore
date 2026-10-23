@@ -5,11 +5,13 @@ import org.booklore.service.library.matching.FileEvidence.SeriesReading;
 
 import java.util.ArrayList;
 import java.util.Collection;
+import java.util.Comparator;
 import java.util.HashMap;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
+import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
 import java.util.stream.Collectors;
@@ -24,7 +26,8 @@ import java.util.stream.Collectors;
  * one book only when their identities are equal; there is no similarity score anywhere, so "A Dangerous Universe 3"
  * never matches "5", and "Kokoro Connect Volume 4 - Michi Random" never matches "Kokoro Connect Volume - Nise Random".
  * A part of a name is dropped as an author only when its folders vouch for it ({@link TitleKey#readings}' first
- * reading) or when it names an author of the very book it is compared with.
+ * reading) or when it names an author of the very book it is compared with. A duplicate's copy marker " (n)" counts as
+ * one more volume number: "Saga (2).epub" is the second Saga.
  * <p>
  * Same-folder matching runs first: the books with files in the new file's folder, by every one of their book files
  * there. Exactly one such book attaches; two or more mean the name does not say which, and none does. Only then are
@@ -36,10 +39,22 @@ import java.util.stream.Collectors;
  *       ("Survival", "King") needs the author's first given name written as the book has it, not an initial for a
  *       name. A fileless book without authors only matches when it is a physical book;</li>
  *   <li>when a leading series number was taken off the name ("01 - Title"), have that series number;</li>
- *   <li>be the only fileless book that qualifies.</li>
+ *   <li>be the only fileless book that qualifies, or one of several alike ones: the same titles, the same series
+ *       number and the same authors, as a book entered twice or a paper copy's record next to its ebook's are. The
+ *       file goes to one that is not physical, since an ebook file belongs with the record whose file was lost, else
+ *       to the one with the lowest id. Books without authors are never alike: nothing tells them apart.</li>
  * </ul>
+ * A name ending in " (1)", as a browser names a second download, is also read without it, by the same rules:
+ * "Started Early, Took My Dog (1).epub" is the fileless book "Started Early, Took My Dog" as well as its first volume.
+ * A book found only that way that is another number than 1 of its series is turned down when nothing else in the name
+ * is a number, since " (1)" may as well mean volume 1; with a leading series number ("03 - Title (1).epub") the " (1)"
+ * is a copy, and that number decides. A comic's " (1)" is an issue, and " (2)" to " (9)" stay volume numbers.
+ * <p>
  * A rescan matches every new file against the same fileless books, so {@link #resolveShellClaims} then leaves alone a
- * fileless book claimed from more than one folder, or by two different files of one format.
+ * fileless book claimed from more than one folder, or by two different files of one format. Files that match alike
+ * books all claim the same one of them, so those rules hold for alike books as for one. The watcher takes one file at
+ * a time and no longer offers a book once a file was attached to it, so a later file that matches the same alike books
+ * gets the next of them.
  */
 public final class ExistingBookMatcher {
 
@@ -157,7 +172,7 @@ public final class ExistingBookMatcher {
         if (index == null || index.size() == 0) {
             return new NoMatch("the library has no fileless books");
         }
-        Map<Long, ShellCandidate> accepted = new LinkedHashMap<>();
+        Map<Long, Accepted> accepted = new LinkedHashMap<>();
         Map<Long, Rejection> rejected = new LinkedHashMap<>();
         List<TitleKey> readings = file.readings();
         for (int i = 0; i < readings.size(); i++) {
@@ -167,12 +182,18 @@ public final class ExistingBookMatcher {
             consider(file, reading.key(), reading.confirmed(), reading.seriesNumber(), index, accepted, rejected);
         }
         if (accepted.size() == 1) {
-            ShellCandidate shell = accepted.values().iterator().next();
-            return new Match(shell.bookId(), Kind.FILELESS, "title and author agree with " + label(shell));
+            Accepted only = accepted.values().iterator().next();
+            return new Match(only.shell().bookId(), Kind.FILELESS, agreement(only));
         }
         if (accepted.size() > 1) {
+            Accepted chosen = oneOfAlike(accepted.values());
+            if (chosen != null) {
+                return new Match(chosen.shell().bookId(), Kind.FILELESS, agreement(chosen) + ", one of " + accepted.size()
+                        + " alike fileless books (" + accepted.keySet().stream().sorted().map(id -> "book#" + id)
+                        .collect(Collectors.joining(", ")) + ")");
+            }
             return new Ambiguous(List.copyOf(accepted.keySet()), accepted.size() + " fileless books qualify: "
-                    + accepted.values().stream().map(ExistingBookMatcher::label).collect(Collectors.joining(", ")));
+                    + accepted.values().stream().map(a -> label(a.shell())).collect(Collectors.joining(", ")));
         }
         if (rejected.isEmpty()) {
             return new NoMatch("no fileless book has this title");
@@ -195,26 +216,99 @@ public final class ExistingBookMatcher {
     private record Rejection(String why, boolean against) {
     }
 
+    /**
+     * A fileless book that qualifies.
+     *
+     * @param asCopy whether only the name without its " (1)" reads as the book's title
+     */
+    private record Accepted(ShellCandidate shell, boolean asCopy) {
+    }
+
     private static void consider(FileEvidence file, TitleKey reading, boolean confirmed, Integer seriesNumber,
-                                 FilelessShellIndex index, Map<Long, ShellCandidate> accepted, Map<Long, Rejection> rejected) {
+                                 FilelessShellIndex index, Map<Long, Accepted> accepted, Map<Long, Rejection> rejected) {
         Evidence evidence = Evidence.of(file, reading, confirmed);
         if (evidence == null) {
             return;
         }
-        for (ShellCandidate shell : index.lookup(reading.identity())) {
-            if (accepted.containsKey(shell.bookId())) {
-                continue;
-            }
-            Rejection rejection = rejection(file, reading, evidence, seriesNumber, shell);
-            if (rejection == null) {
-                accepted.put(shell.bookId(), shell);
-                rejected.remove(shell.bookId());
-            } else {
-                Rejection labelled = new Rejection(label(shell) + " " + rejection.why(), rejection.against());
-                // Evidence against the book from one reading outweighs a want of evidence from another
-                rejected.merge(shell.bookId(), labelled, (first, next) -> first.against() || !next.against() ? first : next);
+        List<ShellCandidate> found = index.lookup(reading.identity());
+        for (ShellCandidate shell : found) {
+            judge(file, reading, evidence, seriesNumber, shell, false, accepted, rejected);
+        }
+        if (readsAsACopy(reading)) {
+            Set<Long> foundByNumber = found.stream().map(ShellCandidate::bookId).collect(Collectors.toSet());
+            for (ShellCandidate shell : index.lookup(reading.identityWithoutCopy())) {
+                if (!foundByNumber.contains(shell.bookId())) {
+                    judge(file, reading, evidence, seriesNumber, shell, true, accepted, rejected);
+                }
             }
         }
+    }
+
+    /**
+     * Whether the name also reads without its copy marker: " (1)", as a browser names a second download of
+     * "Title.epub", and so "Title (1).epub" may be "Title" as well as its first volume. Not " (2)" to " (9)", which
+     * stay volume numbers, nor a comic's " (1)", which is an issue.
+     */
+    private static boolean readsAsACopy(TitleKey reading) {
+        TitleKey.CopyMarker copy = reading.copy();
+        return copy != null && Integer.valueOf(1).equals(copy.number()) && !copy.issue()
+                && !reading.identityWithoutCopy().isEmpty() && !reading.identityWithoutCopy().equals(reading.identity());
+    }
+
+    /**
+     * Accepts the fileless book for this reading or notes why not.
+     *
+     * @param asCopy whether the book was found only under the name without its " (1)"
+     */
+    private static void judge(FileEvidence file, TitleKey reading, Evidence evidence, Integer seriesNumber,
+                              ShellCandidate shell, boolean asCopy, Map<Long, Accepted> accepted, Map<Long, Rejection> rejected) {
+        if (accepted.containsKey(shell.bookId())) {
+            return;
+        }
+        Rejection rejection = rejection(file, reading, evidence, seriesNumber, shell);
+        if (rejection == null && asCopy && seriesNumber == null && reading.numbers().isEmpty()
+                && shell.seriesNumber() != null && !shell.seriesNumber().equals(1)) {
+            // "Saga (1).epub" may as well be volume 1 as a copy of "Saga.epub"; only a leading series number or
+            // another number in the name would say which, and the book's own number is not 1
+            rejection = new Rejection("is number " + shell.seriesNumber() + " of its series, and \" (1)\" may mean volume 1", false);
+        }
+        if (rejection == null) {
+            accepted.put(shell.bookId(), new Accepted(shell, asCopy));
+            rejected.remove(shell.bookId());
+        } else {
+            Rejection labelled = new Rejection(label(shell) + " " + rejection.why(), rejection.against());
+            // Evidence against the book from one reading outweighs a want of evidence from another
+            rejected.merge(shell.bookId(), labelled, (first, next) -> first.against() || !next.against() ? first : next);
+        }
+    }
+
+    /**
+     * The book to give the file when every fileless book that qualifies is alike: the same titles, the same series
+     * number and the same authors. They are one book entered twice, or the record of a paper copy next to the record
+     * of the ebook, and the file is either one's. A book that is not physical goes first, since an ebook file belongs
+     * with the record whose file was lost, then the lowest id. Null when one of them differs from the others, or they
+     * have no authors to tell them by.
+     */
+    private static Accepted oneOfAlike(Collection<Accepted> qualifying) {
+        ShellCandidate first = qualifying.iterator().next().shell();
+        Set<PersonName> authors = Set.copyOf(first.authors());
+        if (authors.isEmpty()) {
+            return null;
+        }
+        for (Accepted next : qualifying) {
+            ShellCandidate shell = next.shell();
+            if (!shell.identities().equals(first.identities()) || !Objects.equals(shell.seriesNumber(), first.seriesNumber())
+                    || !Set.copyOf(shell.authors()).equals(authors)) {
+                return null;
+            }
+        }
+        return qualifying.stream()
+                .min(Comparator.comparing((Accepted a) -> a.shell().physical()).thenComparingLong(a -> a.shell().bookId()))
+                .orElseThrow();
+    }
+
+    private static String agreement(Accepted accepted) {
+        return "title and author agree with " + label(accepted.shell()) + (accepted.asCopy() ? " (\" (1)\" read as a copy)" : "");
     }
 
     /** Why the fileless book is not this file's book, or null when it is. */
