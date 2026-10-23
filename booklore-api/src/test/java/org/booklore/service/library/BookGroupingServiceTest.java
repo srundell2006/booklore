@@ -1110,6 +1110,24 @@ class BookGroupingServiceTest {
     }
 
     @Test
+    void rescan_autoDetect_aSecondDownloadIsNotTheBookWhoseSubtitleNamesAnotherVolume() {
+        // "Saga (1).epub" may be volume 1, and the book says it is volume 2; only "Saga (2).epub" goes to it
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shellRows.add(new FilelessBookRow(8L, null, false, "cover", null, "Saga", "Volume Two", null, "Brian K. Vaughan"));
+        LibraryFile first = newFile(lib, path, "V/Vaughan, Brian K.", "Saga (1).epub");
+        LibraryFile second = newFile(lib, path, "V/Vaughan, Brian K.", "Saga (2).epub");
+        Map<String, Decision> decisions = new LinkedHashMap<>();
+
+        var result = rescan(lib, filelessDecisions(decisions), first, second);
+
+        assertThat(attached(result)).containsExactly(Map.entry(8L, List.of(second)));
+        assertThat(newBooks(result)).containsExactly(List.of("Saga (1).epub"));
+        assertThat(decisions.get("Saga (1).epub").reason())
+                .isEqualTo("book#8 \"Saga\" has number 2 in its title or subtitle, and \" (1)\" may mean volume 1");
+    }
+
+    @Test
     void rescan_autoDetect_aSecondVolumeMarkerFollowsItsOriginalOnly() {
         // " (2)" reads as the second volume on its own; next to its original it is a copy, and goes with it
         var path = pathEntity(1L, "/books");

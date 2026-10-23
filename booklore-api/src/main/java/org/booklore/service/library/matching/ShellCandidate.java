@@ -1,5 +1,6 @@
 package org.booklore.service.library.matching;
 
+import java.util.ArrayList;
 import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
@@ -24,6 +25,8 @@ import java.util.regex.Pattern;
  * @param seriesPlace   its place in its series as given, fractions included: the metadata's series number, else the
  *                      number of a "(Series, #N)" suffix; null when it has neither. Where {@link #seriesNumber} is null
  *                      for 1.5, 2.5 and no number alike, this tells them apart
+ * @param titleNumbers  the numbers its titles name, as {@link TitleKey#numbers} reads them ("Saga: Volume Two" names
+ *                      2), in order and each once
  */
 public record ShellCandidate(long bookId,
                              Long libraryPathId,
@@ -33,7 +36,8 @@ public record ShellCandidate(long bookId,
                              Set<String> identities,
                              List<PersonName> authors,
                              Integer seriesNumber,
-                             Float seriesPlace) {
+                             Float seriesPlace,
+                             List<String> titleNumbers) {
 
     /**
      * "Storm Front (The Dresden Files, #1)": the series and number some metadata providers append to a title. The
@@ -45,6 +49,7 @@ public record ShellCandidate(long bookId,
     public ShellCandidate {
         identities = Set.copyOf(identities);
         authors = List.copyOf(authors);
+        titleNumbers = List.copyOf(titleNumbers);
     }
 
     public static ShellCandidate of(long bookId, Long libraryPathId, boolean physical, boolean hasCover, String title,
@@ -63,17 +68,25 @@ public record ShellCandidate(long bookId,
             suffixPlace = Float.parseFloat(provider.group(3));
         }
 
-        Set<String> identities = new LinkedHashSet<>();
-        identities.add(TitleKey.ofTitle(cleanTitle, context).identity());
-        identities.add(TitleKey.ofTitle(fullTitle, context).identity());
+        List<TitleKey> keys = new ArrayList<>();
+        keys.add(TitleKey.ofTitle(cleanTitle, context));
+        keys.add(TitleKey.ofTitle(fullTitle, context));
         if (subtitle != null && !subtitle.isBlank()) {
-            identities.add(TitleKey.ofTitle(cleanTitle + ": " + subtitle.trim(), context).identity());
+            keys.add(TitleKey.ofTitle(cleanTitle + ": " + subtitle.trim(), context));
         }
-        identities.remove("");
+        Set<String> identities = new LinkedHashSet<>();
+        Set<String> titleNumbers = new LinkedHashSet<>();
+        for (TitleKey key : keys) {
+            if (!key.identity().isEmpty()) {
+                identities.add(key.identity());
+                titleNumbers.addAll(key.numbers());
+            }
+        }
 
         Integer number = wholeNumber(seriesNumber);
         return new ShellCandidate(bookId, libraryPathId, physical, hasCover, fullTitle, identities, authors,
-                number != null ? number : wholeNumber(suffixPlace), seriesNumber != null ? seriesNumber : suffixPlace);
+                number != null ? number : wholeNumber(suffixPlace), seriesNumber != null ? seriesNumber : suffixPlace,
+                List.copyOf(titleNumbers));
     }
 
     /** 3 for 3.0; null for 2.5 (a novella between two volumes), a negative number or none. */

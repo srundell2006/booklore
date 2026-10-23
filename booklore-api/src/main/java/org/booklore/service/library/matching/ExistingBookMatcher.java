@@ -47,9 +47,11 @@ import java.util.stream.Collectors;
  * </ul>
  * A name ending in " (1)", as a browser names a second download, is also read without it, by the same rules:
  * "Started Early, Took My Dog (1).epub" is the fileless book "Started Early, Took My Dog" as well as its first volume.
- * A book found only that way that is another number than 1 of its series is turned down when nothing else in the name
- * is a number, since " (1)" may as well mean volume 1; with a leading series number ("03 - Title (1).epub") the " (1)"
- * is a copy, and that number decides. A comic's " (1)" is an issue, and " (2)" to " (9)" stay volume numbers.
+ * A book found only that way that says it is another volume than 1 is turned down when nothing else in the name is a
+ * number, since " (1)" may as well mean volume 1: its series number is another (2, or 2.5), or its title or subtitle
+ * names volumes and none of them is 1 ("Saga: Volume Two"). With a leading series number ("03 - Title (1).epub") or
+ * another number in the name the " (1)" is a copy, and the series number rule decides. A comic's " (1)" is an issue,
+ * and " (2)" to " (9)" stay volume numbers.
  * <p>
  * A rescan matches every new file against the same fileless books, so {@link #resolveShellClaims} then leaves alone a
  * fileless book claimed from more than one folder, or by two different files of one format. Files that match alike
@@ -267,11 +269,10 @@ public final class ExistingBookMatcher {
             return;
         }
         Rejection rejection = rejection(file, reading, evidence, seriesNumber, shell);
-        if (rejection == null && asCopy && seriesNumber == null && reading.numbers().isEmpty()
-                && shell.seriesNumber() != null && !shell.seriesNumber().equals(1)) {
+        if (rejection == null && asCopy && seriesNumber == null && reading.numbers().isEmpty()) {
             // "Saga (1).epub" may as well be volume 1 as a copy of "Saga.epub"; only a leading series number or
-            // another number in the name would say which, and the book's own number is not 1
-            rejection = new Rejection("is number " + shell.seriesNumber() + " of its series, and \" (1)\" may mean volume 1", false);
+            // another number in the name would say which
+            rejection = anotherVolumeThanOne(shell);
         }
         if (rejection == null) {
             accepted.put(shell.bookId(), new Accepted(shell, asCopy));
@@ -281,6 +282,27 @@ public final class ExistingBookMatcher {
             // Evidence against the book from one reading outweighs a want of evidence from another
             rejected.merge(shell.bookId(), labelled, (first, next) -> first.against() || !next.against() ? first : next);
         }
+    }
+
+    /**
+     * Why the book is no volume 1, which a " (1)" may mean: its place in its series is another, fractions included, or
+     * its titles name volumes and none of them is 1 ("Saga: Volume Two", "The Walking Dead: Vol. 2: Miles Behind Us").
+     * Null when nothing says so. Never evidence against the book, of which the file may be a copy all the same.
+     */
+    private static Rejection anotherVolumeThanOne(ShellCandidate shell) {
+        if (shell.seriesPlace() != null && shell.seriesPlace() != 1f) {
+            return new Rejection("is number " + number(shell.seriesPlace()) + " of its series, and \" (1)\" may mean volume 1", false);
+        }
+        if (!shell.titleNumbers().isEmpty() && !shell.titleNumbers().contains("1")) {
+            return new Rejection("has number " + String.join(", ", shell.titleNumbers())
+                    + " in its title or subtitle, and \" (1)\" may mean volume 1", false);
+        }
+        return null;
+    }
+
+    /** 2 for 2.0, 2.5 for 2.5. */
+    private static String number(float value) {
+        return value == Math.rint(value) && Math.abs(value) < 1e9f ? String.valueOf((long) value) : String.valueOf(value);
     }
 
     /**

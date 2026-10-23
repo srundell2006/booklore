@@ -369,6 +369,27 @@ class BookFileTransactionalHandlerTest {
         }
 
         @Test
+        void autoDetect_aSecondDownloadIsNotTheBookWhoseSubtitleNamesAnotherVolume() {
+            // "Saga (1).epub" may be volume 1, and the book says it is volume 2: the real volume 2 still finds it
+            subPath("V/Vaughan, Brian K.");
+            noEarlierMatch();
+            shells(new FilelessBookRow(8L, null, false, null, null, "Saga", "Volume Two", null, "Brian K. Vaughan"));
+            when(existingBookAttacher.attach(anyLong(), any(), anyList())).thenAnswer(inv -> {
+                filelessShells.notFileless(inv.getArgument(0));
+                return inv.getArgument(2);
+            });
+
+            handler.handleNewBookFile(1L, Path.of("/library/V/Vaughan, Brian K./Saga (1).epub"));
+            handler.handleNewBookFile(1L, Path.of("/library/V/Vaughan, Brian K./Saga (2).epub"));
+
+            verify(existingBookAttacher, times(1)).attach(anyLong(), any(), anyList());
+            verify(existingBookAttacher).attach(eq(8L), eq(Kind.FILELESS), argThat(files ->
+                    files.getFirst().getFileName().equals("Saga (2).epub")));
+            verify(libraryProcessingService, times(1)).processLibraryFiles(argThat(files ->
+                    files.getFirst().getFileName().equals("Saga (1).epub")), eq(library));
+        }
+
+        @Test
         void autoDetect_aBookThatChangedSinceItWasReadMakesTheFileANewBook() {
             subPath("W/Weir, Andy");
             noEarlierMatch();

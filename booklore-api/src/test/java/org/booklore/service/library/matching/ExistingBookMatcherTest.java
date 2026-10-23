@@ -417,6 +417,35 @@ class ExistingBookMatcherTest {
         }
 
         @Test
+        void notTheBookWhoseTitleNamesAnotherVolume() {
+            // No series number, but its subtitle says it is volume 2: "Saga (1).epub" may be volume 1
+            ShellCandidate saga = ShellCandidate.of(8, PATH, false, true, "Saga", "Volume Two", null, List.of("Brian K. Vaughan"));
+
+            Decision first = shellMatch(file("V/Vaughan, Brian K.", "Saga (1).epub"), saga);
+
+            assertThat(first).isEqualTo(new NoMatch(
+                    "book#8 \"Saga\" has number 2 in its title or subtitle, and \" (1)\" may mean volume 1"));
+            assertThat(((NoMatch) first).refused()).isEmpty();
+            assertThat(matchedId(shellMatch(file("V/Vaughan, Brian K.", "Saga (2).epub"), saga))).isEqualTo(8);
+            ShellCandidate walkingDead = ShellCandidate.of(9, PATH, false, true, "The Walking Dead", "Vol. 2: Miles Behind Us",
+                    null, List.of("Robert Kirkman"));
+            assertThat(shellMatch(file("K/Kirkman, Robert", "The Walking Dead (1).epub"), walkingDead)).isInstanceOf(NoMatch.class);
+            // A provider's suffix names the number too
+            ShellCandidate second = ShellCandidate.of(8, PATH, false, true, "Saga (Saga, #2)", null, null, List.of("Brian K. Vaughan"));
+            assertThat(shellMatch(file("V/Vaughan, Brian K.", "Saga (1).epub"), second)).isInstanceOf(NoMatch.class);
+            ShellCandidate firstBySuffix = ShellCandidate.of(8, PATH, false, true, "Saga (Saga, #1)", null, null, List.of("Brian K. Vaughan"));
+            assertThat(matchedId(shellMatch(file("V/Vaughan, Brian K.", "Saga (1).epub"), firstBySuffix))).isEqualTo(8);
+        }
+
+        @Test
+        void notTheBookOfAPlaceInItsSeriesThatIsNoWholeNumber() {
+            FileEvidence saga = file("V/Brian K. Vaughan", "Saga (1).epub");
+            assertThat(shellMatch(saga, shellNumber(8, "Saga", 2.5f, "Brian K. Vaughan")))
+                    .isEqualTo(new NoMatch("book#8 \"Saga\" is number 2.5 of its series, and \" (1)\" may mean volume 1"));
+            assertThat(shellMatch(saga, shellNumber(8, "Saga", 0.5f, "Brian K. Vaughan"))).isInstanceOf(NoMatch.class);
+        }
+
+        @Test
         void onlyOneIsACopy() {
             // " (2)" stays the second volume
             assertThat(shellMatch(file("V/Brian K. Vaughan", "Saga (2).epub"), shell(8, "Saga", "Brian K. Vaughan")))
