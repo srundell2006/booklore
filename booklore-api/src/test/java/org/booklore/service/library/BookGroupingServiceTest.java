@@ -10,7 +10,9 @@ import org.booklore.repository.BookRepository;
 import org.booklore.repository.projection.BookAuthorRow;
 import org.booklore.repository.projection.BookFileScanRow;
 import org.booklore.repository.projection.FilelessBookRow;
+import org.booklore.service.library.matching.ExistingBookMatcher.Decision;
 import org.booklore.service.library.matching.ExistingBookMatcher.Kind;
+import org.booklore.service.library.matching.ExistingBookMatcher.Match;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -1061,7 +1063,7 @@ class BookGroupingServiceTest {
         // Production: kept, as it should be
         bookIn(900, path, "A/Anthony, Michael", "Mass Casualties - Michael Anthony (2009).epub");
         LibraryFile copy = newFile(lib, path, "A/Anthony, Michael", "Mass Casualties - Michael Anthony (2009) (1).epub");
-        // A copy reads as another number on its own; it follows its original to the fileless book
+        // A lone " (1)" also reads as the copy it is; the two are one name for the claim rules
         shell(901, "The Martian", "Andy Weir");
         LibraryFile martian = newFile(lib, path, "W/Weir, Andy", "The Martian.epub");
         LibraryFile martianCopy = newFile(lib, path, "W/Weir, Andy", "The Martian (1).epub");
@@ -1072,6 +1074,101 @@ class BookGroupingServiceTest {
                 Map.entry(900L, List.of(copy)),
                 Map.entry(901L, List.of(martian, martianCopy)));
         assertThat(result.newBookGroups()).isEmpty();
+    }
+
+    /** Each file's own decision against the fileless books, as the rescan tells its listener. */
+    private BookGroupingService.DecisionListener filelessDecisions(Map<String, Decision> decisions) {
+        return new BookGroupingService.DecisionListener() {
+            @Override
+            public void fileless(LibraryFile file, Decision decision) {
+                decisions.put(file.getFileName(), decision);
+            }
+        };
+    }
+
+    @Test
+    void rescan_autoDetect_aSecondDownloadMatchesTheFilelessBookOfItsTitleOnItsOwn() {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shell(910, "Started Early, Took My Dog", "Kate Atkinson");
+        shell(911, "The Martian", "Andy Weir");
+        LibraryFile alone = newFile(lib, path, "A/Kate Atkinson", "Started Early, Took My Dog (1).epub");
+        LibraryFile martian = newFile(lib, path, "W/Weir, Andy", "The Martian.epub");
+        LibraryFile martianCopy = newFile(lib, path, "W/Weir, Andy", "The Martian (1).epub");
+        Map<String, Decision> decisions = new LinkedHashMap<>();
+
+        var result = rescan(lib, filelessDecisions(decisions), alone, martian, martianCopy);
+
+        assertThat(attached(result)).containsExactly(
+                Map.entry(910L, List.of(alone)),
+                Map.entry(911L, List.of(martian, martianCopy)));
+        assertThat(kinds(result)).containsOnly(Map.entry(910L, Kind.FILELESS), Map.entry(911L, Kind.FILELESS));
+        assertThat(result.newBookGroups()).isEmpty();
+        assertThat(decisions.get("Started Early, Took My Dog (1).epub").reason()).contains("read as a copy");
+        assertThat(decisions.get("The Martian (1).epub")).isInstanceOf(Match.class);
+        assertThat(decisions.get("The Martian (1).epub").reason()).contains("read as a copy");
+    }
+
+    @Test
+    void rescan_autoDetect_aSecondVolumeMarkerFollowsItsOriginalOnly() {
+        // " (2)" reads as the second volume on its own; next to its original it is a copy, and goes with it
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shell(920, "The Martian", "Andy Weir");
+        shell(921, "Artemis", "Andy Weir");
+        LibraryFile martian = newFile(lib, path, "W/Weir, Andy", "The Martian.epub");
+        LibraryFile martianCopy = newFile(lib, path, "W/Weir, Andy", "The Martian (2).epub");
+        LibraryFile artemis = newFile(lib, path, "W/Weir, Andy", "Artemis (2).epub");
+
+        var result = rescan(lib, martian, martianCopy, artemis);
+
+        assertThat(attached(result)).containsExactly(Map.entry(920L, List.of(martian, martianCopy)));
+        assertThat(newBooks(result)).containsExactly(List.of("Artemis (2).epub"));
+    }
+
+    @Test
+    void rescan_autoDetect_alikeFilelessBooksClaimedFromTwoFoldersGetNone() {
+        // Both files go to the alike book chosen, book#12, which is then claimed from two folders
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shell(40, "Survival", "Ann Smith");
+        shell(12, "Survival", "Ann Smith");
+        LibraryFile first = newFile(lib, path, "S/Smith, Ann", "Survival.epub");
+        LibraryFile second = newFile(lib, path, "S/Smith, Ann/Series", "Survival.epub");
+        Map<Long, String> rejected = new LinkedHashMap<>();
+
+        var result = rescan(lib, new BookGroupingService.DecisionListener() {
+            @Override
+            public void claimsRejected(long bookId, List<LibraryFile> files, String why) {
+                rejected.put(bookId, why);
+            }
+        }, first, second);
+
+        assertThat(result.filesToAttach()).isEmpty();
+        assertThat(result.newBookGroups()).hasSize(2);
+        assertThat(rejected).containsOnlyKeys(12L);
+        assertThat(rejected.get(12L)).startsWith("claimed by files of 2 folders");
+    }
+
+    @Test
+    void rescan_autoDetect_theFormatsOfOneFolderGoToTheOneAlikeFilelessBookChosen() {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shell(12, true, "Survival", "Ann Smith");
+        shell(40, "Survival", "Ann Smith");
+        shell(41, "Survival", "Ann Smith");
+        LibraryFile epub = newFile(lib, path, "S/Smith, Ann", "Survival.epub");
+        LibraryFile pdf = newFile(lib, path, "S/Smith, Ann", "Survival.pdf");
+        Map<String, Decision> decisions = new LinkedHashMap<>();
+
+        var result = rescan(lib, filelessDecisions(decisions), epub, pdf);
+
+        // book#12 is a paper copy's record: the lowest id of the others gets the files
+        assertThat(attached(result)).containsExactly(Map.entry(40L, List.of(epub, pdf)));
+        assertThat(kinds(result)).containsExactly(Map.entry(40L, Kind.FILELESS));
+        assertThat(result.newBookGroups()).isEmpty();
+        assertThat(decisions.get("Survival.epub").reason())
+                .isEqualTo("title and author agree with book#40 \"Survival\", one of 3 alike fileless books (book#12, book#40, book#41)");
     }
 
     @Test

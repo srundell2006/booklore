@@ -36,6 +36,9 @@ class RescanDryRunTest {
                 901\t1\t0\t0\tThe Martian\tA Novel\t1\tAndy Weir; Someone Else
                 950\tNULL\t1\t0\tDune\tNULL\tNULL\tNULL
                 960\t1\t0\t0\tEmma\tNULL\tNULL\t
+                1200\tNULL\t1\t0\tStarted Early, Took My Dog\tNULL\tNULL\tKate Atkinson
+                1201\t1\t0\t1\tStarted Early, Took My Dog\tNULL\tNULL\tKate Atkinson
+                1300\t1\t0\t1\tSaga\tNULL\t2\tBrian K. Vaughan
                 """);
         Files.writeString(dir.resolve("existing.tsv"), """
                 600\t1\tS/Stuart Slade\tA Dangerous Universe 5.epub\tEPUB
@@ -61,6 +64,8 @@ class RescanDryRunTest {
                 1\tA/Austen, Jane\tEmma.epub
                 1\tX/Twin\tTwin.pdf
                 1\tAudio\tFolder Book
+                1\tA/Kate Atkinson\tStarted Early, Took My Dog (1).epub
+                1\tV/Brian K. Vaughan\tSaga (1).epub
                 """);
     }
 
@@ -96,9 +101,11 @@ class RescanDryRunTest {
                 entry("H/Herbert, Frank/Dune.epub", "attach-shell 950"),
                 entry("A/Austen, Jane/Emma.epub", "new-book -"),
                 entry("X/Twin/Twin.pdf", "ambiguous 1100,1101"),
-                entry("Audio/Folder Book", "new-book -"));
+                entry("Audio/Folder Book", "new-book -"),
+                entry("A/Kate Atkinson/Started Early, Took My Dog (1).epub", "attach-shell 1201"),
+                entry("V/Brian K. Vaughan/Saga (1).epub", "new-book -"));
         assertThat(report.decisions()).containsExactly(
-                entry("ambiguous", 4), entry("attach-same-folder", 2), entry("attach-shell", 4), entry("new-book", 6));
+                entry("ambiguous", 4), entry("attach-same-folder", 2), entry("attach-shell", 5), entry("new-book", 7));
     }
 
     @Test
@@ -107,7 +114,15 @@ class RescanDryRunTest {
                 .collect(Collectors.toMap(line -> line.file().fileSubPath() + "/" + line.file().fileName(), line -> line));
 
         assertThat(lines.get("L/Lane, Mary/King.epub").reason()).startsWith("title and author agree with book#700");
-        assertThat(lines.get("W/Weir, Andy/The Martian (1).epub").reason()).isEqualTo("goes with the files it would be one book with");
+        // A lone " (1)" also reads as the copy it is: the file matches the fileless book on its own
+        assertThat(lines.get("W/Weir, Andy/The Martian (1).epub").reason())
+                .isEqualTo("title and author agree with book#901 \"The Martian\" (\" (1)\" read as a copy)");
+        // Of alike fileless books, one that is not a paper copy's record
+        assertThat(lines.get("A/Kate Atkinson/Started Early, Took My Dog (1).epub").reason())
+                .isEqualTo("title and author agree with book#1201 \"Started Early, Took My Dog\" (\" (1)\" read as a copy),"
+                        + " one of 2 alike fileless books (book#1200, book#1201)");
+        assertThat(lines.get("V/Brian K. Vaughan/Saga (1).epub").reason()).isEqualTo("folder: no book has files in the folder"
+                + " | fileless: book#1300 \"Saga\" is number 2 of its series, and \" (1)\" may mean volume 1");
         assertThat(lines.get("S/Smith, Ann/Survival.epub").reason()).startsWith("fileless book#500 is claimed by files of 3 folders");
         assertThat(lines.get("A/Austen, Jane/Emma.epub").reason())
                 .isEqualTo("folder: no book has files in the folder | fileless: book#960 \"Emma\" has no author to check the file against");
@@ -127,7 +142,8 @@ class RescanDryRunTest {
         assertThat(report.rejections())
                 .containsEntry("claim: claimed by files of N folders [...]", 3)
                 .containsEntry("fileless: has no author to check the file against", 1)
-                .containsEntry("folder: N books in the folder have this title", 1);
+                .containsEntry("folder: N books in the folder have this title", 1)
+                .containsEntry("fileless: is number N of its series, and \" (N)\" may mean volume N", 1);
     }
 
     @Test
@@ -138,9 +154,9 @@ class RescanDryRunTest {
 
         List<String> lines = Files.readAllLines(out);
         assertThat(lines.getFirst()).isEqualTo("# decision\ttarget\tgroup_key\treason\tlibrary_path_id\tfile_sub_path\tfile_name");
-        assertThat(lines).filteredOn(line -> !line.startsWith("#")).hasSize(16)
+        assertThat(lines).filteredOn(line -> !line.startsWith("#")).hasSize(18)
                 .allSatisfy(line -> assertThat(line.split("\t", -1)).hasSize(7));
-        assertThat(lines).contains("#   attach-shell\t4", "#   new-book\t6");
+        assertThat(lines).contains("#   attach-shell\t5", "#   new-book\t7");
     }
 
     @Test

@@ -366,6 +366,49 @@ class LibraryRescanDatabaseTest {
     }
 
     @Test
+    void theFilesOfOneFolderGoToOneOfAlikeFilelessBooks() throws IOException {
+        // Two records of "The Martian" by Andy Weir: the files go to the one with the lowest id, the other stays fileless
+        BookEntity first = filelessBook("The Martian", "h0", "Andy Weir");
+        BookEntity second = filelessBook("The Martian", "h1", "Andy Weir");
+        walkFinds("W/Weir, Andy/The Martian.epub", "W/Weir, Andy/The Martian.pdf");
+        List<List<String>> newBooks = newBooksOfTheRescan();
+
+        rescan();
+
+        assertThat(fileNamesOf(first)).containsExactlyInAnyOrder("W/Weir, Andy/The Martian.epub", "W/Weir, Andy/The Martian.pdf");
+        assertThat(fileNamesOf(second)).isEmpty();
+        assertThat(reload(second).getLibraryPath()).isNull();
+        assertThat(newBooks).isEmpty();
+    }
+
+    @Test
+    void alikeFilelessBooksClaimedFromTwoFoldersGetNoFile() throws IOException {
+        BookEntity first = filelessBook("Survival", "h0", "Ann Smith");
+        BookEntity second = filelessBook("Survival", "h1", "Ann Smith");
+        walkFinds("S/Smith, Ann/Survival.epub", "S/Smith, Ann/Series/Survival.epub");
+        List<List<String>> newBooks = newBooksOfTheRescan();
+
+        rescan();
+
+        assertThat(fileNamesOf(first)).isEmpty();
+        assertThat(fileNamesOf(second)).isEmpty();
+        assertThat(newBooks).containsExactlyInAnyOrder(List.of("S/Smith, Ann/Survival.epub"), List.of("S/Smith, Ann/Series/Survival.epub"));
+    }
+
+    @Test
+    void aSecondDownloadAloneGoesToTheFilelessBookOfItsTitle() throws IOException {
+        // The attacher checks it against the book once more, and must read " (1)" as the matcher did
+        BookEntity martian = filelessBook("The Martian", "h0", "Andy Weir");
+        walkFinds("W/Weir, Andy/The Martian (1).epub");
+        List<List<String>> newBooks = newBooksOfTheRescan();
+
+        rescan();
+
+        assertThat(fileNamesOf(martian)).containsExactly("W/Weir, Andy/The Martian (1).epub");
+        assertThat(newBooks).isEmpty();
+    }
+
+    @Test
     void newFilesByTheFoldersAuthorBecomeOneBookEach() throws IOException {
         // Production: in "B/Dale Brown", "Shadow Command" and "Warrior Class" were imported as more formats of
         // "Battle Born", because the folder's name was part of every file's name

@@ -185,6 +185,28 @@ class WatcherFilelessBookDatabaseTest {
     }
 
     @Test
+    void alikeFilelessBooksTakeTheFilesOfTwoFoldersOneEach() throws IOException {
+        // Intended: the book the first file went to is no longer fileless, so the next alike file takes the next book
+        long first = filelessBook("The Martian", "Andy Weir", false);
+        long second = filelessBook("The Martian", "Andy Weir", false);
+
+        bookFileTransactionalHandler.handleNewBookFile(library.getId(), epub("Weir, Andy/The Martian.epub"));
+        bookFileTransactionalHandler.handleNewBookFile(library.getId(), epub("Andy Weir/The Martian.epub"));
+
+        assertThat(pathsOf(Math.min(first, second))).containsExactly("Weir, Andy/The Martian.epub");
+        assertThat(pathsOf(Math.max(first, second))).containsExactly("Andy Weir/The Martian.epub");
+    }
+
+    @Test
+    void aSecondDownloadIsTheFileOfTheFilelessBookOfItsTitle() throws IOException {
+        long shell = filelessBook("The Martian", "Andy Weir", false);
+
+        bookFileTransactionalHandler.handleNewBookFile(library.getId(), epub("Weir, Andy/The Martian (1).epub"));
+
+        assertThat(pathsOf(shell)).containsExactly("Weir, Andy/The Martian (1).epub");
+    }
+
+    @Test
     void twoAttachesToOneFilelessBookAtOnceGiveItTheFilesOfOneFolderOnly() throws Exception {
         long shell = filelessBook("The Martian", "Andy Weir", false);
         // With a cover and a library path, an attach adds the book's file and changes nothing else of the book

@@ -325,6 +325,32 @@ class ExistingBookAttacherTest {
     }
 
     @Test
+    void aSecondDownloadStillMatchesTheFilelessBookOfItsTitle() throws IOException {
+        // "The Martian (1).epub" reads as "The Martian" as well as its first volume; before, it no longer matched here
+        shell(31, "curated");
+        LibraryFile copy = onDisk(WEIR, "The Martian (1).epub", BookFileType.EPUB);
+
+        assertThat(attacher.attach(31, Kind.FILELESS, List.of(copy))).containsExactly(copy);
+
+        assertThat(saved(1)).extracting(BookFileEntity::getFileName).containsExactly("The Martian (1).epub");
+        verify(filelessShells).notFileless(31L);
+    }
+
+    @Test
+    void theAlikeBookChosenStillMatches() throws IOException {
+        // The matcher chose book#32 among alike fileless books (another "The Martian" by Andy Weir); the attacher
+        // checks the file against book#32 alone, so the books it was chosen from do not make it ambiguous here
+        BookEntity chosen = shell(32, "curated");
+        LibraryFile epub = onDisk(WEIR, "The Martian.epub", BookFileType.EPUB);
+
+        assertThat(attacher.attach(32, Kind.FILELESS, List.of(epub))).containsExactly(epub);
+
+        assertThat(saved(1).getFirst().getBook()).isSameAs(chosen);
+        verify(filelessShells).notFileless(32L);
+        verify(filelessShells, never()).readAgainForWatcher(anyLong());
+    }
+
+    @Test
     void aFolderAudiobookIsStoredWithItsFolderHashAndSize() throws IOException {
         shell(30, "curated");
         Path dir = Files.createDirectories(root.resolve(WEIR).resolve("The Martian"));
