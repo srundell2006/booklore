@@ -523,9 +523,11 @@ class WatcherMovedFileDatabaseTest {
         // What LibraryWatchService.handleOverflow sends for the folder's watch key
         libraryFileEventProcessor.processEvent(StandardWatchEventKinds.ENTRY_CREATE, library.getId(), folder, true);
 
-        // Handled, and not left waiting: an in-app move in the library would wait out the drain timeout meanwhile
-        waitUntil(() -> !libraryFileEventProcessor.hasPendingEventsForPaths(Set.of(root)));
+        // Handled after the folder's debounce, and not left waiting: an in-app move in the library would wait out the
+        // drain timeout meanwhile
+        Thread.sleep(8000);
         assertThat(libraryFileEventProcessor.waitsAsCopy(folder)).isFalse();
+        assertThat(libraryFileEventProcessor.hasPendingEventsForPaths(Set.of(root))).isFalse();
         assertThat(pathsOf(bookId)).containsExactly("Audio/Dune");
         assertNotDeleted(bookId);
         assertThat(bookRepository.countIncludingDeletedByLibraryId(library.getId())).isEqualTo(1);
