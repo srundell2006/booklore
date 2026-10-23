@@ -38,6 +38,8 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Connection;
+import java.sql.SQLException;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -232,9 +234,13 @@ class WatcherFilelessBookDatabaseTest {
         // The watcher's event runs in a transaction that has read the database before it attaches. On MariaDB, at its
         // default REPEATABLE READ, that transaction's reads then see the data as it was at its first read. H2's
         // REPEATABLE READ still sees rows other transactions add since, and its SERIALIZABLE does not, as MariaDB's
-        // REPEATABLE READ does not: an attach that joined the event's transaction would miss the rescan's file here
+        // REPEATABLE READ does not: an attach that joined the event's transaction would miss the rescan's file here.
+        // Only on H2: MariaDB's SERIALIZABLE reads with locks, which see the rescan's file, so there the test keeps
+        // the default, at which it fails for an attach that joins the event's transaction
         TransactionTemplate eventTx = new TransactionTemplate(transactionManager);
-        eventTx.setIsolationLevel(TransactionDefinition.ISOLATION_SERIALIZABLE);
+        if (onH2()) {
+            eventTx.setIsolationLevel(TransactionDefinition.ISOLATION_SERIALIZABLE);
+        }
         ExecutorService threads = Executors.newSingleThreadExecutor();
         try {
             List<LibraryFile> inEvent = eventTx.execute(status -> {
@@ -255,6 +261,12 @@ class WatcherFilelessBookDatabaseTest {
     }
 
     // ========== fixture ==========
+
+    private boolean onH2() throws SQLException {
+        try (Connection connection = dataSource.getConnection()) {
+            return "H2".equals(connection.getMetaData().getDatabaseProductName());
+        }
+    }
 
     private LibraryFile libraryFile(String subPath, String name) {
         return LibraryFile.builder()
