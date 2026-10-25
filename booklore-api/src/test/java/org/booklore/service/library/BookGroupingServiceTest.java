@@ -1145,6 +1145,27 @@ class BookGroupingServiceTest {
         assertThat(decisions.get("Unbroken (1).epub").reason()).contains("read as a copy");
     }
 
+    @Test
+    void rescan_autoDetect_aSecondDownloadIsTheBookOfASeriesOfAnotherName() {
+        // Volume 1 of The Handmaid's Tale would be named after it: "The Testaments (1).epub" is the copy of its #2,
+        // where "Saga (1).epub" may be volume 1 of the series "Saga"
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shellRows.add(new FilelessBookRow(14L, null, false, "cover", null, "The Testaments", null, "The Handmaid's Tale", 2f,
+                "Margaret Atwood"));
+        shellRows.add(new FilelessBookRow(15L, null, false, "cover", null, "Saga", null, "Saga", 2f, "Brian K. Vaughan"));
+        LibraryFile testaments = newFile(lib, path, "A/Atwood, Margaret", "The Testaments (1).epub");
+        LibraryFile saga = newFile(lib, path, "V/Vaughan, Brian K.", "Saga (1).epub");
+        Map<String, Decision> decisions = new LinkedHashMap<>();
+
+        var result = rescan(lib, filelessDecisions(decisions), testaments, saga);
+
+        assertThat(attached(result)).containsExactly(Map.entry(14L, List.of(testaments)));
+        assertThat(newBooks(result)).containsExactly(List.of("Saga (1).epub"));
+        assertThat(decisions.get("Saga (1).epub").reason())
+                .isEqualTo("book#15 \"Saga\" is number 2 of a series of the same name, and \" (1)\" may mean volume 1");
+    }
+
     /** "Saga" numbered 1 and "Saga" numbered 2, fileless: a "Saga.epub" and its "Saga (1).epub" say neither. */
     private void twoSagas(LibraryOrganizationMode mode) {
         var path = pathEntity(1L, "/books");

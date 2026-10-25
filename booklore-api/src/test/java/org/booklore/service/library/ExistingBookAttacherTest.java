@@ -12,6 +12,7 @@ import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.service.file.FileFingerprint;
 import org.booklore.service.library.matching.ExistingBookMatcher.Kind;
+import org.booklore.service.library.matching.ShellCandidate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -348,6 +349,40 @@ class ExistingBookAttacherTest {
         assertThat(saved(1).getFirst().getBook()).isSameAs(chosen);
         verify(filelessShells).notFileless(32L);
         verify(filelessShells, never()).readAgainForWatcher(anyLong());
+    }
+
+    @Test
+    void aFilelessBookIsMatchedWithItsSeriesAsTheIndexReadsIt() throws IOException {
+        // Number 2 of a series of another name: "The Testaments (1).epub" is the copy of "The Testaments"
+        BookEntity testaments = book(33, null, "curated", new BookFileType[0]);
+        testaments.getMetadata().setTitle("The Testaments");
+        testaments.getMetadata().setSeriesName("The Handmaid's Tale");
+        testaments.getMetadata().setSeriesNumber(2f);
+        testaments.getMetadata().setAuthors(new ArrayList<>(List.of(AuthorEntity.builder().name("Margaret Atwood").build())));
+        LibraryFile copy = onDisk("A/Atwood, Margaret", "The Testaments (1).epub", BookFileType.EPUB);
+
+        ShellCandidate candidate = ExistingBookAttacher.shellCandidate(testaments);
+        assertThat(candidate.seriesName()).isEqualTo("The Handmaid's Tale");
+        assertThat(candidate.seriesPlace()).isEqualTo(2f);
+        assertThat(attacher.attach(33, Kind.FILELESS, List.of(copy))).containsExactly(copy);
+
+        assertThat(saved(1)).extracting(BookFileEntity::getFileName).containsExactly("The Testaments (1).epub");
+    }
+
+    @Test
+    void aFilelessBookWhoseSeriesWasRenamedAfterItsTitleSinceTheMatchGetsNoFile() throws IOException {
+        // Matched while its series had another name; in a series "Saga", "Saga (1).epub" may be volume 1
+        BookEntity saga = book(34, null, "curated", new BookFileType[0]);
+        saga.getMetadata().setTitle("Saga");
+        saga.getMetadata().setSeriesName("Saga");
+        saga.getMetadata().setSeriesNumber(2f);
+        saga.getMetadata().setAuthors(new ArrayList<>(List.of(AuthorEntity.builder().name("Brian K. Vaughan").build())));
+        LibraryFile copy = onDisk("V/Vaughan, Brian K.", "Saga (1).epub", BookFileType.EPUB);
+
+        assertThat(attacher.attach(34, Kind.FILELESS, List.of(copy))).isEmpty();
+
+        verify(bookAdditionalFileRepository, never()).save(any());
+        verify(filelessShells).readAgainForWatcher(1L);
     }
 
     @Test

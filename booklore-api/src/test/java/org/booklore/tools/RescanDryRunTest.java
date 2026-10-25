@@ -15,6 +15,7 @@ import java.util.Map;
 import java.util.stream.Collectors;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.assertThatThrownBy;
 import static org.assertj.core.api.Assertions.entry;
 
 /**
@@ -195,6 +196,62 @@ class RescanDryRunTest {
         assertThat(report.lines().get(1).reason())
                 .isEqualTo("fileless: 2 fileless books qualify: book#1 \"Saga\", and book#2 \"Saga\" if \" (1)\" is a copy");
         assertThat(report.rejections()).containsExactly(entry("fileless: several fileless books qualify", 2));
+    }
+
+    @Test
+    void readsTheSeriesNameOfAFilelessBookWhenTheExportHasOne() throws IOException {
+        // The " (1)" rule weighs a place in a series only when the series may be what the name calls it
+        Files.writeString(dir.resolve("shells.tsv"), """
+                id\tlibrary_path_id\tis_physical\thas_cover\ttitle\tsubtitle\tseries_number\tauthors\tseries_name
+                1\t1\t0\t1\tThe Testaments\tNULL\t2\tMargaret Atwood\tThe Handmaid's Tale
+                2\t1\t0\t1\tSaga\tNULL\t2\tBrian K. Vaughan\tSaga
+                3\t1\t0\t1\tY The Last Man\tNULL\t3\tBrian K. Vaughan\tNULL
+                """);
+        Files.writeString(dir.resolve("existing.tsv"), "");
+        Files.writeString(dir.resolve("newfiles.tsv"), """
+                1\tA/Atwood, Margaret\tThe Testaments (1).epub
+                1\tV/Brian K. Vaughan\tSaga (1).epub
+                1\tV/Brian K. Vaughan\tY The Last Man (1).epub
+                """);
+
+        Report report = run();
+
+        assertThat(RescanDryRun.Exports.read(dir.resolve("shells.tsv"), dir.resolve("existing.tsv"), dir.resolve("newfiles.tsv"))
+                .shells()).extracting(RescanDryRun.Shell::seriesName).containsExactly("The Handmaid's Tale", "Saga", null);
+        assertThat(decisions(report)).containsExactly(
+                entry("A/Atwood, Margaret/The Testaments (1).epub", "attach-shell 1"),
+                entry("V/Brian K. Vaughan/Saga (1).epub", "new-book -"),
+                entry("V/Brian K. Vaughan/Y The Last Man (1).epub", "new-book -"));
+        assertThat(report.lines().get(1).reason()).isEqualTo("folder: no book has files in the folder | fileless: book#2"
+                + " \"Saga\" is number 2 of a series of the same name, and \" (1)\" may mean volume 1");
+        assertThat(report.rejections()).containsExactly(
+                entry("fileless: is number N of a series of the same name, and \" (1)\" may mean volume 1", 1),
+                entry("fileless: is number N of its series, and \" (1)\" may mean volume 1", 1));
+    }
+
+    @Test
+    void readsAnExportWithoutSeriesNamesAsSeriesWithoutAName() throws IOException {
+        // Eight columns, as exports made before series_name was: only a "(Series, #N)" suffix names a series, and
+        // the " (1)" rule turns down a "The Testaments" numbered 2 that has none
+        Files.writeString(dir.resolve("existing.tsv"), "");
+        Files.writeString(dir.resolve("newfiles.tsv"), """
+                1\tA/Atwood, Margaret\tThe Testaments (1).epub
+                """);
+        Files.writeString(dir.resolve("shells.tsv"), """
+                id\tlibrary_path_id\tis_physical\thas_cover\ttitle\tsubtitle\tseries_number\tauthors
+                1\t1\t0\t1\tThe Testaments\tNULL\t2\tMargaret Atwood
+                """);
+        assertThat(decisions(run())).containsExactly(entry("A/Atwood, Margaret/The Testaments (1).epub", "new-book -"));
+
+        Files.writeString(dir.resolve("shells.tsv"), """
+                2\t1\t0\t1\tThe Testaments (The Handmaid's Tale, #2)\tNULL\tNULL\tMargaret Atwood
+                """);
+        assertThat(decisions(run())).containsExactly(entry("A/Atwood, Margaret/The Testaments (1).epub", "attach-shell 2"));
+
+        Files.writeString(dir.resolve("shells.tsv"), """
+                1\t1\t0\t1\tThe Testaments\tNULL\t2\tMargaret Atwood\tThe Handmaid's Tale\textra
+                """);
+        assertThatThrownBy(this::run).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("not 8 to 9");
     }
 
     @Test
