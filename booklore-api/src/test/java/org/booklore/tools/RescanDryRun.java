@@ -86,7 +86,9 @@ import java.util.stream.Collectors;
  * </ul>
  * A weak match ({@code ExistingBookMatcher.Match.weak}: one of alike fileless books, or a " (1)" read as a copy)
  * yields to the strong matches of the files it would be one book with: such a file is attached with them, and its
- * reason says that its own weak match yields to theirs.
+ * reason says that its own weak match yields to theirs. A reason that turns a book down with the " (1)" read as a copy
+ * says so, {@code (" (1)" read as a copy)}: that keeps the file's group only from a book that weak matches alone give
+ * it, never from one a strong match gives it.
  * <p>
  * The group key is the new book the file would be part of, {@code <library_path_id>:<sub path>:<key>}; files attached
  * to an existing book show the group they would have formed. Lines starting with {@code #} close the report: the
@@ -336,7 +338,7 @@ public final class RescanDryRun {
         /** A number, a fraction or a list of them ("2", "2.5", "2, 3"): one particular. */
         private static final Pattern NUMBER = Pattern.compile("\\d+(?:\\.\\d+)?(?:, \\d+(?:\\.\\d+)?)*");
         /** A reason's own words that hold a number, which is no particular: a " (1)" is always a " (1)". */
-        private static final Pattern OWN_NUMBERS = Pattern.compile("\" \\(1\\)\" may mean volume 1");
+        private static final Pattern OWN_NUMBERS = Pattern.compile("\" \\(1\\)\" (?:may mean volume 1|read as a copy)");
         private static final Pattern ID_LIST = Pattern.compile("\\[[^\\]]*]");
 
         final Map<LibraryFile, Decision> inFolder = new IdentityHashMap<>();

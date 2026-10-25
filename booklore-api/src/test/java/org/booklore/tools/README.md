@@ -70,8 +70,10 @@ The report ends with lines starting with `#`:
 - for files that become new books (`new-book` and `ambiguous`), the count of each reason an
   existing book was turned down. Book ids, numbers and quoted names are replaced, so alike
   reasons are counted together: a number, a fraction or a list of numbers (`2`, `2.5`, `2, 3`)
-  is one `N`, but the `" (1)" may mean volume 1` of the rule for a lone ` (1)` stays as it is.
-  For example: `fileless: is not by '...'`,
+  is one `N`, but the `" (1)" may mean volume 1` of the rule for a lone ` (1)`, and the
+  `(" (1)" read as a copy)` that marks a book found only with the ` (1)` read as a copy, stay as
+  they are. For example: `fileless: is not by '...'`,
+  `fileless: is not by '...' (" (1)" read as a copy)`,
   `claim: claimed by files of N folders [...]`,
   `fileless: has a one-word title, which needs its author's given name in the path as the book has it`,
   `fileless: is number N of its series, and " (1)" may mean volume 1`,
@@ -121,7 +123,16 @@ never take one away or change it. So:
   weak claim on fileless book#70 yields to the strong claims of other files, which get it:
   claimed by files of 2 folders [...]: The MEG.epub, MEG (1).epub; the weak claims of MEG
   (1).epub yield to the others`. A file of a group that a strong match gave its book claims it
-  as strongly, whatever its own match.
+  as strongly, whatever its own match, and from the folder of the file it follows, as a file
+  without a match did before: in BOOK_PER_FOLDER, `Survival/Audio/Survival (1).m4b` claims the
+  fileless `Survival` of `Survival/Survival.epub` from the epub's folder, and both get it.
+- What a file says against a book only with its ` (1)` read as a copy, a book the rules before
+  never looked at for it, does not keep its group from a book a strong match gives it: `G/Neil
+  Gaiman/Good Omens - T. Pratchett (1).pdf` (`book#10 "Good Omens" is not by 'T. Pratchett' ("
+  (1)" read as a copy)`) goes with `Good Omens.epub` to book#10, as before. It keeps the group
+  only from a book that weak matches alone give it, as does what a file whose name reads as
+  several books says against another one: next to a weak `Good Omens (1).epub` instead, both
+  become a new book.
 
 ## The exports
 

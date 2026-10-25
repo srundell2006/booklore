@@ -14,6 +14,7 @@ import org.booklore.service.library.matching.ExistingBookMatcher.Ambiguous;
 import org.booklore.service.library.matching.ExistingBookMatcher.Decision;
 import org.booklore.service.library.matching.ExistingBookMatcher.Kind;
 import org.booklore.service.library.matching.ExistingBookMatcher.Match;
+import org.booklore.service.library.matching.ExistingBookMatcher.NoMatch;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -25,6 +26,7 @@ import java.util.Collection;
 import java.util.LinkedHashMap;
 import java.util.List;
 import java.util.Map;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.mockito.ArgumentMatchers.anyCollection;
@@ -1749,6 +1751,92 @@ class BookGroupingServiceTest {
         assertThat(weak.bookId()).isEqualTo(32);
         assertThat(weak.refused()).containsExactly(31L);
         assertThat(outcomes.lines).containsExactly("refused 31 by [03. The Long Night (1).pdf]");
+    }
+
+    @Test
+    void rescan_autoDetect_whatOnlyACopyReadingSaysAgainstABookDoesNotTakeItFromTheGroup() {
+        // The pdf read as a copy is not "Good Omens" by Neil Gaiman; before that reading it found no book and refused
+        // none, and followed the epub. It still does
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shell(10, "Good Omens", "Neil Gaiman");
+        LibraryFile epub = newFile(lib, path, "G/Neil Gaiman", "Good Omens.epub");
+        LibraryFile pdf = newFile(lib, path, "G/Neil Gaiman", "Good Omens - T. Pratchett (1).pdf");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, epub, pdf);
+
+        assertThat(attached(result)).containsExactly(Map.entry(10L, List.of(epub, pdf)));
+        assertThat(outcomes.fileless.get(pdf.getFileName())).isEqualTo(new NoMatch(
+                "book#10 \"Good Omens\" is not by 'T. Pratchett' (\" (1)\" read as a copy)", Set.of(), Set.of(10L)));
+        assertThat(outcomes.lines).isEmpty();
+    }
+
+    @Test
+    void rescan_autoDetect_whatOnlyACopyReadingSaysAgainstABookKeepsAWeakGroupFromIt() {
+        // Without "Good Omens.epub", only the weak match of "Good Omens (1).epub" gives the group the book, and the
+        // pdf says it is not that book: before the copy reading neither got a book, and they get none now
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shell(10, "Good Omens", "Neil Gaiman");
+        LibraryFile copy = newFile(lib, path, "G/Neil Gaiman", "Good Omens (1).epub");
+        LibraryFile pdf = newFile(lib, path, "G/Neil Gaiman", "Good Omens - T. Pratchett (1).pdf");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, copy, pdf);
+
+        assertThat(result.filesToAttach()).isEmpty();
+        assertThat(newBooks(result)).containsExactly(List.of("Good Omens (1).epub", "Good Omens - T. Pratchett (1).pdf"));
+        assertThat(outcomes.weakMatch("Good Omens (1).epub").bookId()).isEqualTo(10);
+        assertThat(outcomes.lines).containsExactly("refused 10 by [Good Omens - T. Pratchett (1).pdf]");
+    }
+
+    @Test
+    void rescan_autoDetect_aFileAmbiguousOnlyAsACopyStillTurnsDownWhatItsNameSaysItIsNot() {
+        // The pdf's name is not book#10 by Neil Gaiman, which "Good Omens.epub" matched; read as a copy it is book#20,
+        // or the #2 book#21 if its " (1)" is a copy. Ambiguous, it refuses book#10 as its NoMatch did before
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shellRows.add(new FilelessBookRow(10L, null, false, "cover", null, "Good Omens", "Book 1", null, null, "Neil Gaiman"));
+        shell(20, "Good Omens", "T. Pratchett");
+        shellRows.add(new FilelessBookRow(21L, null, false, "cover", null, "Good Omens", null, null, 2f, "Terry Pratchett"));
+        LibraryFile epub = newFile(lib, path, "G/Neil Gaiman", "Good Omens.epub");
+        LibraryFile pdf = newFile(lib, path, "G/Neil Gaiman", "Good Omens - T. Pratchett (1).pdf");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, epub, pdf);
+
+        assertThat(result.filesToAttach()).isEmpty();
+        assertThat(newBooks(result)).containsExactly(List.of("Good Omens.epub", "Good Omens - T. Pratchett (1).pdf"));
+        Decision ambiguous = outcomes.fileless.get(pdf.getFileName());
+        assertThat(ambiguous).isInstanceOf(Ambiguous.class);
+        assertThat(((Ambiguous) ambiguous).bookIds()).containsExactly(20L, 21L);
+        assertThat(ambiguous.refused()).containsExactly(10L);
+        assertThat(outcomes.lines).containsExactly("refused 10 by [Good Omens - T. Pratchett (1).pdf]");
+    }
+
+    @Test
+    void rescan_bookPerFolder_aWeakMatchToItsGroupsBookClaimsItFromTheFolderOfTheFileItFollows() {
+        // groupByFolder puts the audiobook of a subfolder with the ebook of the folder above. Its " (1)" read as a
+        // copy, it weakly matches the book the epub matched; before, it had no match and followed, claiming from the
+        // epub's folder. Claiming from its own, it would make the book claimed from two folders
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
+        shell(20, "Survival", "Kate Atkinson");
+        LibraryFile audio = newFile(lib, path, "A/Kate Atkinson/Survival/Audio", "Survival (1).m4b");
+        LibraryFile epub = newFile(lib, path, "A/Kate Atkinson/Survival", "Survival.epub");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, audio, epub);
+
+        assertThat(attached(result)).containsExactly(Map.entry(20L, List.of(audio, epub)));
+        assertThat(outcomes.weakMatch("Survival (1).m4b").bookId()).isEqualTo(20);
+        assertThat(outcomes.lines).isEmpty();
+        // A strong match of its own in the subfolder claims from there, as before
+        LibraryFile strongAudio = newFile(lib, path, "A/Kate Atkinson/Survival/Audio", "Survival.m4b");
+        Outcomes strong = new Outcomes();
+        assertThat(rescan(lib, strong, strongAudio, epub).filesToAttach()).isEmpty();
+        assertThat(strong.lines).singleElement().asString().startsWith("rejected 20");
     }
 
     @Test

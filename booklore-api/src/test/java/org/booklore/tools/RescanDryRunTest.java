@@ -351,6 +351,59 @@ class RescanDryRunTest {
     }
 
     @Test
+    void keepsTheAttachesOfBeforeWhatACopyReadingSaysAgainstABookAside() throws IOException {
+        // Read as a copy, the pdf is not Neil Gaiman's: the rules of before never looked, and the pdf goes with the
+        // epub as it did. That only keeps a group from a book that weak matches alone give it
+        Files.writeString(dir.resolve("shells.tsv"), """
+                10\t1\t0\t1\tGood Omens\tNULL\tNULL\tNeil Gaiman
+                """);
+        Files.writeString(dir.resolve("existing.tsv"), "");
+        Files.writeString(dir.resolve("newfiles.tsv"), """
+                1\tG/Neil Gaiman\tGood Omens.epub
+                1\tG/Neil Gaiman\tGood Omens - T. Pratchett (1).pdf
+                1\tG/Neil Gaiman/Copies\tGood Omens (1).epub
+                1\tG/Neil Gaiman/Copies\tGood Omens - T. Pratchett (1).pdf
+                """);
+
+        Report report = run();
+
+        assertThat(decisions(report)).containsExactly(
+                entry("G/Neil Gaiman/Good Omens.epub", "attach-shell 10"),
+                entry("G/Neil Gaiman/Good Omens - T. Pratchett (1).pdf", "attach-shell 10"),
+                entry("G/Neil Gaiman/Copies/Good Omens (1).epub", "ambiguous 10"),
+                entry("G/Neil Gaiman/Copies/Good Omens - T. Pratchett (1).pdf", "ambiguous 10"));
+        assertThat(report.lines().get(1).reason()).isEqualTo("goes with the files it would be one book with");
+        assertThat(report.rejections()).containsExactly(
+                entry("fileless: is not by '...' (\" (1)\" read as a copy)", 1),
+                entry("group: the book a file it would be one book with matched turned another of them down", 2));
+        assertThat(report.weakMatches()).containsExactly(
+                entry("its weak match comes to nothing: its group is split or turned down, or its book's claims rejected", 1));
+    }
+
+    @Test
+    void anAudiobookCopyInTheSubfolderOfItsEbookGoesWithIt() throws IOException {
+        // BOOK_PER_FOLDER groups the audiobook with the ebook of the folder above; its weak match is the epub's book,
+        // which it claims from the epub's folder, as it did with no match before
+        Files.writeString(dir.resolve("shells.tsv"), """
+                20\t1\t0\t1\tSurvival\tNULL\tNULL\tKate Atkinson
+                """);
+        Files.writeString(dir.resolve("existing.tsv"), "");
+        Files.writeString(dir.resolve("newfiles.tsv"), """
+                1\tA/Kate Atkinson/Survival\tSurvival.epub
+                1\tA/Kate Atkinson/Survival/Audio\tSurvival (1).m4b
+                """);
+
+        Report report = RescanDryRun.run(RescanDryRun.Exports.read(dir.resolve("shells.tsv"), dir.resolve("existing.tsv"),
+                dir.resolve("newfiles.tsv")), LibraryOrganizationMode.BOOK_PER_FOLDER);
+
+        assertThat(decisions(report)).containsExactly(
+                entry("A/Kate Atkinson/Survival/Survival.epub", "attach-shell 20"),
+                entry("A/Kate Atkinson/Survival/Audio/Survival (1).m4b", "attach-shell 20"));
+        assertThat(report.weakMatches()).containsExactly(
+                entry("its weak match agrees with the strong match of the files it would be one book with", 1));
+    }
+
+    @Test
     void writesTheReportFromTheCommandLine() throws IOException {
         Path out = dir.resolve("report.tsv");
 

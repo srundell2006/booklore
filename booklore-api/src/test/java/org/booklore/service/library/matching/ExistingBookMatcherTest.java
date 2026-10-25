@@ -69,7 +69,7 @@ class ExistingBookMatcherTest {
 
     /** A match only the choice among alike fileless books, or a " (1)" read as a copy, makes, refusing no book. */
     private static Match weakMatch(long bookId, String reason) {
-        return new Match(bookId, Kind.FILELESS, reason, true, Set.of());
+        return new Match(bookId, Kind.FILELESS, reason, true, Set.of(), Set.of());
     }
 
     @Nested
@@ -465,10 +465,11 @@ class ExistingBookMatcherTest {
             // A book turned down for want of evidence, or with evidence against it, is no candidate
             ShellCandidate elsewhere = ShellCandidate.of(3, 2L, false, true, "Saga", null, null, 2f, List.of("Brian K. Vaughan"));
             ShellCandidate otherAuthor = shellNumber(4, "Saga", 2, "Ann Smith");
-            // The weak match keeps the books its name says it is not, for when it yields to its group's
+            // The weak match keeps the books its name says it is not; found only with its " (1)" read as a copy, they
+            // keep it only from a book that weak matches alone give its group
             assertThat(shellMatch(saga, shellNumber(1, "Saga", 1, "Brian K. Vaughan"), elsewhere, otherAuthor))
                     .isEqualTo(new Match(1, Kind.FILELESS, "title and author agree with book#1 \"Saga\" (\" (1)\" read as a copy)",
-                            true, Set.of(3L)));
+                            true, Set.of(), Set.of(3L)));
         }
 
         @Test
@@ -667,9 +668,11 @@ class ExistingBookMatcherTest {
             FileEvidence third = file("D/Doe, Jane", "03. The Long Night (1).epub");
             assertThat(shellMatch(third, shellNumber(9, "The Long Night", 3, "Jane Doe")))
                     .isEqualTo(weakMatch(9, "title and author agree with book#9 \"The Long Night\" (\" (1)\" read as a copy)"));
+            // Number 1 is not number 3, but only read as a copy does the name find it: before that reading the file
+            // refused no book, and so it still refuses none that a strong match of its group gives it
             Decision first = shellMatch(third, shellNumber(9, "The Long Night", 1, "Jane Doe"));
-            assertThat(first).isInstanceOf(NoMatch.class);
-            assertThat(((NoMatch) first).refused()).containsExactly(9L);
+            assertThat(first).isEqualTo(new NoMatch("book#9 \"The Long Night\" is not number 3 of its series (\" (1)\" read as a copy)",
+                    Set.of(), Set.of(9L)));
             assertThat(shellMatch(third, shell(9, "The Long Night", "Jane Doe"))).isInstanceOf(NoMatch.class);
         }
 
@@ -815,6 +818,36 @@ class ExistingBookMatcherTest {
             assertThat(shellMatch(saga, second)).isInstanceOf(NoMatch.class);
             assertThat(shellMatch(saga, first, shell(3, "Saga", "Ann Smith"))).isEqualTo(weakMatch(1,
                     "title and author agree with book#1 \"Saga\" (\" (1)\" read as a copy)"));
+        }
+
+        @Test
+        void whatOnlyTheCopyReadingSaysAgainstABookTheOtherRulesDoNotCount() {
+            // Read as a copy, the name is not "Good Omens" by Neil Gaiman; the rules before that reading never looked
+            // at that book for it, so it is no book the file refuses as they count them
+            FileEvidence pdf = file("G/Neil Gaiman", "Good Omens - T. Pratchett (1).pdf");
+            ShellCandidate gaiman = shell(10, "Good Omens", "Neil Gaiman");
+            assertThat(shellMatch(pdf, gaiman)).isEqualTo(new NoMatch(
+                    "book#10 \"Good Omens\" is not by 'T. Pratchett' (\" (1)\" read as a copy)", Set.of(), Set.of(10L)));
+            // The name as it reads refuses "Good Omens: Book 1" by Neil Gaiman as before, also when the copy reading
+            // finds books: one, which it weakly matches, or several, which make it ambiguous
+            ShellCandidate bookOne = ShellCandidate.of(10, PATH, false, true, "Good Omens", "Book 1", null, null,
+                    List.of("Neil Gaiman"));
+            ShellCandidate pratchett = shell(20, "Good Omens", "T. Pratchett");
+            ShellCandidate second = shellNumber(21, "Good Omens", 2, "Terry Pratchett");
+            assertThat(shellMatch(pdf, bookOne)).isEqualTo(new NoMatch(
+                    "book#10 \"Good Omens\" is not by 'T. Pratchett'", Set.of(10L), Set.of()));
+            assertThat(shellMatch(pdf, bookOne, pratchett)).isEqualTo(new Match(20, Kind.FILELESS,
+                    "title and author agree with book#20 \"Good Omens\" (\" (1)\" read as a copy)", true, Set.of(10L), Set.of()));
+            assertThat(shellMatch(pdf, bookOne, pratchett, second)).isEqualTo(new Ambiguous(List.of(20L, 21L),
+                    "2 fileless books qualify: book#20 \"Good Omens\", and book#21 \"Good Omens\" if \" (1)\" is a copy",
+                    Set.of(10L), Set.of()));
+            // Where the name as it reads finds several books, the file refused none before; what it says it is not
+            // still keeps it from a book that only weak matches give its group
+            Decision ambiguous = shellMatch(file("S/Smith, Ann", "Survival - Ann Smith.epub"), shell(40, "Survival", "Ann Smith"),
+                    shell(41, "Survival", "Ann Smith", "Bob Jones"), shell(42, "Survival", "Jane Doe"));
+            assertThat(ambiguous).isInstanceOf(Ambiguous.class);
+            assertThat(ambiguous.refused()).isEmpty();
+            assertThat(ambiguous.alsoRefused()).containsExactly(42L);
         }
 
         @Test
