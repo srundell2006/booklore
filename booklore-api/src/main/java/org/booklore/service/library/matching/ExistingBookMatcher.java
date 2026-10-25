@@ -49,13 +49,18 @@ import java.util.stream.Collectors;
  * A name ending in " (1)", as a browser names a second download, is also read without it, by the same rules:
  * "Started Early, Took My Dog (1).epub" is the fileless book "Started Early, Took My Dog" as well as its first volume.
  * A book found only that way that says it is another volume than 1 is turned down when nothing else in the name is a
- * number, since " (1)" may as well mean volume 1: its series number is another (2, or 2.5), or its title or subtitle
- * names volumes after a series keyword and none of them is 1 ("Saga: Volume Two"). It may be the file's book all the
- * same, if the " (1)" is a copy's: so when another book qualifies the file is ambiguous ("Saga (1).epub" against a
- * "Saga" numbered 1 and one numbered 2), and only when none does is it no match. A bare number in a subtitle names
- * no volume: "Unbroken (1).epub" is the copy of "Unbroken: A World War II Story of Survival, Resilience, and
- * Redemption". With a leading series number ("03 - Title (1).epub") or another number in the name the " (1)" is a
- * copy, and the series number rule decides. A comic's " (1)" is an issue, and " (2)" to " (9)" stay volume numbers.
+ * number, since " (1)" may as well mean volume 1: its series number is another (2, or 2.5) and its series may be what
+ * the name calls it, or its title or subtitle names volumes after a series keyword and none of them is 1 ("Saga:
+ * Volume Two"). A series may be what the name calls it when it has no name, or its name reads as the name without
+ * its " (1)", maybe with a last word such as "Series" or "Trilogy" ({@link TitleWords#SERIES_NOUNS}): "Saga (1).epub"
+ * may be volume 1 of a series "Saga", but "The Testaments (1).epub" is no volume of The Handmaid's Tale, whose first
+ * volume would be named after it, and is the copy of "The Testaments", its number 2. A book turned down so may be the
+ * file's book all the same, if the " (1)" is a copy's: so when another book qualifies the file is ambiguous ("Saga
+ * (1).epub" against a "Saga" numbered 1 and one numbered 2), and only when none does is it no match. A bare number in
+ * a subtitle names no volume: "Unbroken (1).epub" is the copy of "Unbroken: A World War II Story of Survival,
+ * Resilience, and Redemption". With a leading series number ("03 - Title (1).epub") or another number in the name
+ * the " (1)" is a copy, and the series number rule decides. A comic's " (1)" is an issue, and " (2)" to " (9)" stay
+ * volume numbers.
  * <p>
  * A rescan matches every new file against the same fileless books, so {@link #resolveShellClaims} then leaves alone a
  * fileless book claimed from more than one folder, or by two different files of one format. Files that match the same
@@ -305,7 +310,7 @@ public final class ExistingBookMatcher {
         if (rejection == null && asCopy && seriesNumber == null && reading.numbers().isEmpty()) {
             // "Saga (1).epub" may as well be volume 1 as a copy of "Saga.epub"; only a leading series number or
             // another number in the name would say which
-            rejection = anotherVolumeThanOne(shell);
+            rejection = anotherVolumeThanOne(shell, reading);
             if (rejection != null) {
                 findings.doubted().put(shell.bookId(), shell);
             }
@@ -322,15 +327,25 @@ public final class ExistingBookMatcher {
     }
 
     /**
-     * Why the book is no volume 1, which a " (1)" may mean: its place in its series is another, fractions included, or
-     * its titles name volumes after a series keyword and none of them is 1 ("Saga: Volume Two", "The Walking Dead: Vol.
-     * 2: Miles Behind Us"). A bare number says nothing: "World War II" or "1936" in a subtitle is what a book is about.
-     * Null when nothing says so. Never evidence against the book, of which the file may be a copy all the same: so it
-     * only keeps the file from that book when no other book qualifies, and makes the file ambiguous when one does.
+     * Why the book is no volume 1, which a " (1)" may mean: its place in its series is another, fractions included, and
+     * the name may call that series what the name without its " (1)" says; or its titles name volumes after a series
+     * keyword and none of them is 1 ("Saga: Volume Two", "The Walking Dead: Vol. 2: Miles Behind Us"). The name may
+     * call the series so when it has no name, or a name that reads as the name without its " (1)" ({@link
+     * ShellCandidate#seriesIdentities}): "Saga (1).epub" may be volume 1 of "Saga" or of the "Saga Series", but
+     * "The Testaments (1).epub" is no volume of The Handmaid's Tale. A bare number says nothing: "World War II" or
+     * "1936" in a subtitle is what a book is about. Null when nothing says so. Never evidence against the book, of
+     * which the file may be a copy all the same: so it only keeps the file from that book when no other book
+     * qualifies, and makes the file ambiguous when one does.
      */
-    private static Rejection anotherVolumeThanOne(ShellCandidate shell) {
+    private static Rejection anotherVolumeThanOne(ShellCandidate shell, TitleKey reading) {
         if (shell.seriesPlace() != null && shell.seriesPlace() != 1f) {
-            return new Rejection("is number " + number(shell.seriesPlace()) + " of its series, and \" (1)\" may mean volume 1", false);
+            String place = "is number " + number(shell.seriesPlace());
+            if (shell.seriesIdentities().isEmpty()) {
+                return new Rejection(place + " of its series, and \" (1)\" may mean volume 1", false);
+            }
+            if (shell.seriesIdentities().contains(reading.identityWithoutCopy())) {
+                return new Rejection(place + " of a series of the same name, and \" (1)\" may mean volume 1", false);
+            }
         }
         if (!shell.volumeNumbers().isEmpty() && !shell.volumeNumbers().contains("1")) {
             return new Rejection("names volume " + String.join(", ", shell.volumeNumbers())

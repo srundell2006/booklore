@@ -63,7 +63,9 @@ import java.util.stream.Collectors;
  * columns is skipped. The SQL that writes them from MariaDB is in {@code README.md} next to this class.
  * <ul>
  *   <li>{@code shells.tsv}: the library's books without any book_file row, not deleted: id, library_path_id,
- *       is_physical, has_cover, title, subtitle, series_number, authors (joined with "; ").</li>
+ *       is_physical, has_cover, title, subtitle, series_number, authors (joined with "; "), and optionally
+ *       series_name. Without it, a book's series has no name unless its title has a "(Series, #N)" suffix, and the
+ *       rule for a lone " (1)" turns down more books than the rescan would.</li>
  *   <li>{@code existing.tsv}: the book formats of the library's books that are not deleted: book_id, library_path_id,
  *       file_sub_path, file_name, book_type, and optionally the book's authors joined with "; ". Without authors,
  *       same-folder matching cannot drop an author part of a name that only the book's authors vouch for.</li>
@@ -347,9 +349,13 @@ public final class RescanDryRun {
 
     // ========== the exports ==========
 
-    /** A fileless book of shells.tsv. */
+    /**
+     * A fileless book of shells.tsv.
+     *
+     * @param seriesName the metadata's series name, or null when the export has none
+     */
     public record Shell(long id, Long libraryPathId, boolean physical, boolean hasCover, String title, String subtitle,
-                        Float seriesNumber, List<String> authors) {
+                        Float seriesNumber, List<String> authors, String seriesName) {
     }
 
     /** A book format of existing.tsv. */
@@ -366,7 +372,7 @@ public final class RescanDryRun {
 
         public static Exports read(Path shells, Path existing, Path newFiles) throws IOException {
             return new Exports(
-                    rows(shells, 8, 8).stream().map(Exports::shell).toList(),
+                    rows(shells, 8, 9).stream().map(Exports::shell).toList(),
                     rows(existing, 5, 6).stream().map(Exports::existingFile).toList(),
                     rows(newFiles, 3, 3).stream().map(Exports::newFile).toList());
         }
@@ -378,7 +384,8 @@ public final class RescanDryRun {
                 List<String> authors = shell.authors().isEmpty() ? java.util.Collections.singletonList(null) : shell.authors();
                 for (String author : authors) {
                     rows.add(new FilelessBookRow(shell.id(), shell.libraryPathId(), shell.physical(),
-                            shell.hasCover() ? "cover" : null, null, shell.title(), shell.subtitle(), shell.seriesNumber(), author));
+                            shell.hasCover() ? "cover" : null, null, shell.title(), shell.subtitle(), shell.seriesName(),
+                            shell.seriesNumber(), author));
                 }
             }
             return rows;
@@ -409,7 +416,8 @@ public final class RescanDryRun {
 
         private static Shell shell(List<String> row) {
             return new Shell(Long.parseLong(row.get(0)), longOrNull(row.get(1)), flag(row.get(2)), flag(row.get(3)),
-                    row.get(4), row.get(5), row.get(6) == null ? null : Float.valueOf(row.get(6)), names(row.get(7)));
+                    row.get(4), row.get(5), row.get(6) == null ? null : Float.valueOf(row.get(6)), names(row.get(7)),
+                    row.size() > 8 ? row.get(8) : null);
         }
 
         private static ExistingFile existingFile(List<String> row) {

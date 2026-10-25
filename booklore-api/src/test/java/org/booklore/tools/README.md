@@ -55,6 +55,15 @@ There is one tab-separated line per new file, with these columns:
 - An `ambiguous` reason names apart the fileless books that qualify only if a ` (1)` is a copy,
   not volume 1, as in `fileless: 2 fileless books qualify: book#1 "Saga", and book#2 "Saga" if
   " (1)" is a copy`: book#2 is number 2 of its series, and the name does not say which it is.
+- The rule for a lone ` (1)` turns a fileless book down for its place in its series only where
+  the ` (1)` may mean volume 1 of that series. Its reason says which: `is number 2 of its series,
+  and " (1)" may mean volume 1` when the series has no name (no `series_name`, and no
+  `(Series, #N)` suffix on the title), and `is number 2 of a series of the same name, and " (1)"
+  may mean volume 1` when the series' name reads as the file's name without the ` (1)`, maybe
+  followed by one of `Series`, `Trilogy`, `Duology`, `Quartet`, `Quintet`, `Saga`, `Cycle`,
+  `Sequence` and `Chronicles`. A series of another name does not count: `The Testaments (1).epub`
+  goes to a fileless `The Testaments`, number 2 of The Handmaid's Tale, while `Saga (1).epub` does
+  not go to a `Saga` numbered 2 in a series `Saga`.
 
 The report ends with lines starting with `#`:
 - the count of each decision;
@@ -65,7 +74,8 @@ The report ends with lines starting with `#`:
   For example: `fileless: is not by '...'`,
   `claim: claimed by files of N folders [...]`,
   `fileless: has a one-word title, which needs its author's given name in the path as the book has it`,
-  `fileless: is number N of its series, and " (1)" may mean volume 1`.
+  `fileless: is number N of its series, and " (1)" may mean volume 1`,
+  `fileless: is number N of a series of the same name, and " (1)" may mean volume 1`.
 
 Useful cuts:
 
@@ -85,11 +95,15 @@ A first line that names the columns is skipped. Lines starting with `#` are skip
 
 | file | columns |
 |---|---|
-| `shells.tsv` | `id, library_path_id, is_physical, has_cover, title, subtitle, series_number, authors` (authors joined with `; `) |
+| `shells.tsv` | `id, library_path_id, is_physical, has_cover, title, subtitle, series_number, authors[, series_name]` (authors joined with `; `; series_name optional) |
 | `existing.tsv` | `book_id, library_path_id, file_sub_path, file_name, book_type[, authors]` (book formats of books that are not deleted; authors optional) |
 | `newfiles.tsv` | `library_path_id, file_sub_path, file_name` (`file_sub_path` is empty for the library root) |
 
 Notes on the columns:
+- Without `series_name` in `shells.tsv`, as in an export made before it was added, a book's series
+  has no name unless its title ends in a `(Series, #N)` suffix. The rule for a lone ` (1)` then
+  turns down books the rescan would attach, such as `The Testaments (1).epub` for a fileless
+  `The Testaments` numbered 2. Export it.
 - Without authors in `existing.tsv`, same-folder matching cannot drop an author part of a file
   name that only the existing book's authors vouch for. For example, `Title - Author.mobi`
   next to `Title.epub` in a folder that is not the author's. Export them.
@@ -131,7 +145,8 @@ SELECT b.id, b.library_path_id, COALESCE(b.is_physical, 0),
        m.title, m.subtitle, m.series_number,
        (SELECT GROUP_CONCAT(a.name ORDER BY am.sort_order SEPARATOR '; ')
           FROM book_metadata_author_mapping am JOIN author a ON a.id = am.author_id
-         WHERE am.book_id = b.id)
+         WHERE am.book_id = b.id),
+       m.series_name
 FROM book b
 JOIN book_metadata m ON m.book_id = b.id
 WHERE b.library_id = @library

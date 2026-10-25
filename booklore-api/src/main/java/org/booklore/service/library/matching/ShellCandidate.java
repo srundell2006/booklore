@@ -11,8 +11,8 @@ import java.util.regex.Pattern;
 
 /**
  * A fileless book (one without any book_file row) as {@link ExistingBookMatcher} sees it: the identities its title
- * reads as, the years it gives, its authors and its series number. Built from plain projection rows, never from entities, so a rescan can
- * hold every fileless book of a large library at once.
+ * reads as, the years it gives, its authors and its series. Built from plain projection rows, never from entities, so
+ * a rescan can hold every fileless book of a large library at once.
  *
  * @param libraryPathId the library path the book belongs to, or null when it has none yet (a physical book)
  * @param hasCover      whether the book has a cover of its own, ebook or audiobook
@@ -27,6 +27,12 @@ import java.util.regex.Pattern;
  * @param seriesPlace   its place in its series as given, fractions included: the metadata's series number, else the
  *                      number of a "(Series, #N)" suffix; null when it has neither. Where {@link #seriesNumber} is null
  *                      for 1.5, 2.5 and no number alike, this tells them apart
+ * @param seriesName    the name of its series as given: the metadata's series name, else the series of a "(Series,
+ *                      #N)" suffix ("Storm Front (The Dresden Files, #1)"); null when it has neither
+ * @param seriesIdentities the {@link TitleKey#identity}s {@link #seriesName} reads as when read as a title: as it is
+ *                      written, and without a last word such as "Series" or "Trilogy" ({@link TitleWords#SERIES_NOUNS})
+ *                      when it ends in one. Empty when the series has no name, or one that reads as nothing: then
+ *                      nothing says what its series is called
  * @param volumeNumbers the volume numbers its titles name after a series keyword, as {@link TitleKey#keywordNumbers}
  *                      reads them ("Saga: Volume Two" names 2), in order and each once. A bare number is none: "Unbroken:
  *                      A World War II Story" and "The Boys in the Boat: ... the 1936 Berlin Olympics" name no volume
@@ -41,6 +47,8 @@ public record ShellCandidate(long bookId,
                              List<PersonName> authors,
                              Integer seriesNumber,
                              Float seriesPlace,
+                             String seriesName,
+                             Set<String> seriesIdentities,
                              List<String> volumeNumbers) {
 
     /**
@@ -54,11 +62,16 @@ public record ShellCandidate(long bookId,
         identities = Set.copyOf(identities);
         years = Set.copyOf(years);
         authors = List.copyOf(authors);
+        seriesIdentities = Set.copyOf(seriesIdentities);
         volumeNumbers = List.copyOf(volumeNumbers);
     }
 
+    /**
+     * @param seriesName   the metadata's series name; blank is none
+     * @param seriesNumber the metadata's series number
+     */
     public static ShellCandidate of(long bookId, Long libraryPathId, boolean physical, boolean hasCover, String title,
-                                    String subtitle, Float seriesNumber, Collection<String> authorNames) {
+                                    String subtitle, String seriesName, Float seriesNumber, Collection<String> authorNames) {
         List<String> names = authorNames == null ? List.of() : authorNames.stream().filter(Objects::nonNull).toList();
         List<PersonName> authors = names.stream().map(PersonName::parse).filter(Objects::nonNull).toList();
         // A title such as "The Hobbit - J.R.R. Tolkien" reads without the author part only when it is this book's author
@@ -67,9 +80,11 @@ public record ShellCandidate(long bookId,
         String fullTitle = title == null ? "" : title.trim();
         String cleanTitle = fullTitle;
         Float suffixPlace = null;
+        String suffixSeries = null;
         Matcher provider = PROVIDER_SERIES.matcher(fullTitle);
         if (provider.matches()) {
             cleanTitle = provider.group(1);
+            suffixSeries = provider.group(2).trim();
             suffixPlace = Float.parseFloat(provider.group(3));
         }
 
@@ -90,10 +105,23 @@ public record ShellCandidate(long bookId,
             }
         }
 
+        String series = seriesName != null && !seriesName.isBlank() ? seriesName.trim() : suffixSeries;
+        Set<String> seriesIdentities = new LinkedHashSet<>();
+        if (series != null) {
+            TitleKey key = TitleKey.ofTitle(series, context);
+            if (!key.identity().isEmpty()) {
+                seriesIdentities.add(key.identity());
+                String withoutNoun = key.identityWithoutLastWord(TitleWords.SERIES_NOUNS);
+                if (withoutNoun != null) {
+                    seriesIdentities.add(withoutNoun);
+                }
+            }
+        }
+
         Integer number = wholeNumber(seriesNumber);
         return new ShellCandidate(bookId, libraryPathId, physical, hasCover, fullTitle, identities, years, authors,
                 number != null ? number : wholeNumber(suffixPlace), seriesNumber != null ? seriesNumber : suffixPlace,
-                List.copyOf(volumeNumbers));
+                series, seriesIdentities, List.copyOf(volumeNumbers));
     }
 
     /** 3 for 3.0; null for 2.5 (a novella between two volumes), a negative number or none. */

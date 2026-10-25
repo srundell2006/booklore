@@ -793,10 +793,10 @@ class BookGroupingServiceTest {
 
     private void shell(long id, boolean physical, String title, String... authors) {
         if (authors.length == 0) {
-            shellRows.add(new FilelessBookRow(id, null, physical, "cover", null, title, null, null, null));
+            shellRows.add(new FilelessBookRow(id, null, physical, "cover", null, title, null, null, null, null));
         }
         for (String author : authors) {
-            shellRows.add(new FilelessBookRow(id, null, physical, "cover", null, title, null, null, author));
+            shellRows.add(new FilelessBookRow(id, null, physical, "cover", null, title, null, null, null, author));
         }
     }
 
@@ -1115,7 +1115,7 @@ class BookGroupingServiceTest {
         // "Saga (1).epub" may be volume 1, and the book says it is volume 2; only "Saga (2).epub" goes to it
         var path = pathEntity(1L, "/books");
         var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
-        shellRows.add(new FilelessBookRow(8L, null, false, "cover", null, "Saga", "Volume Two", null, "Brian K. Vaughan"));
+        shellRows.add(new FilelessBookRow(8L, null, false, "cover", null, "Saga", "Volume Two", null, null, "Brian K. Vaughan"));
         LibraryFile first = newFile(lib, path, "V/Vaughan, Brian K.", "Saga (1).epub");
         LibraryFile second = newFile(lib, path, "V/Vaughan, Brian K.", "Saga (2).epub");
         Map<String, Decision> decisions = new LinkedHashMap<>();
@@ -1134,7 +1134,7 @@ class BookGroupingServiceTest {
         var path = pathEntity(1L, "/books");
         var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
         shellRows.add(new FilelessBookRow(12L, null, false, "cover", null, "Unbroken",
-                "A World War II Story of Survival, Resilience, and Redemption", null, "Laura Hillenbrand"));
+                "A World War II Story of Survival, Resilience, and Redemption", null, null, "Laura Hillenbrand"));
         LibraryFile copy = newFile(lib, path, "H/Hillenbrand, Laura", "Unbroken (1).epub");
         Map<String, Decision> decisions = new LinkedHashMap<>();
 
@@ -1149,8 +1149,8 @@ class BookGroupingServiceTest {
     private void twoSagas(LibraryOrganizationMode mode) {
         var path = pathEntity(1L, "/books");
         var lib = rescanLibrary(mode, path);
-        shellRows.add(new FilelessBookRow(1L, null, false, "cover", null, "Saga", null, 1f, "Brian K. Vaughan"));
-        shellRows.add(new FilelessBookRow(2L, null, false, "cover", null, "Saga", null, 2f, "Brian K. Vaughan"));
+        shellRows.add(new FilelessBookRow(1L, null, false, "cover", null, "Saga", null, null, 1f, "Brian K. Vaughan"));
+        shellRows.add(new FilelessBookRow(2L, null, false, "cover", null, "Saga", null, null, 2f, "Brian K. Vaughan"));
         LibraryFile saga = newFile(lib, path, "V/Brian K. Vaughan", "Saga.epub");
         LibraryFile copy = newFile(lib, path, "V/Brian K. Vaughan", "Saga (1).epub");
         Map<String, Decision> decisions = new LinkedHashMap<>();
@@ -1247,8 +1247,8 @@ class BookGroupingServiceTest {
         // 1.5 and 2.5 are no whole series numbers, and still two places in the series: the file says neither
         var path = pathEntity(1L, "/books");
         var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
-        shellRows.add(new FilelessBookRow(5L, null, false, "cover", null, "Survival", null, 1.5f, "Ann Smith"));
-        shellRows.add(new FilelessBookRow(9L, null, false, "cover", null, "Survival", null, 2.5f, "Ann Smith"));
+        shellRows.add(new FilelessBookRow(5L, null, false, "cover", null, "Survival", null, null, 1.5f, "Ann Smith"));
+        shellRows.add(new FilelessBookRow(9L, null, false, "cover", null, "Survival", null, null, 2.5f, "Ann Smith"));
         LibraryFile survival = newFile(lib, path, "S/Smith, Ann", "Survival.epub");
         Map<String, Decision> decisions = new LinkedHashMap<>();
 

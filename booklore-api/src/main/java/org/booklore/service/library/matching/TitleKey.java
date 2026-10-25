@@ -240,6 +240,19 @@ public record TitleKey(String title, List<String> numbers, List<String> keywordN
     }
 
     /**
+     * Its identity without its last title word when that word is one of {@code words} and another title word is
+     * left: "The Hunger Games Trilogy" without "trilogy" is "hunger games". Null when it does not end in one, and for
+     * "Trilogy" alone.
+     */
+    String identityWithoutLastWord(Set<String> words) {
+        int space = title.lastIndexOf(' ');
+        if (space < 0 || !words.contains(title.substring(space + 1))) {
+            return null;
+        }
+        return identity(title.substring(0, space), numbers);
+    }
+
+    /**
      * The people the part dropped as an author names, each with a given name or an initial: empty when no part was
      * dropped, or when the part dropped names the file's own folder (a series: "KING - Las Vegas Bad Boys" in "Las
      * Vegas Bad Boys").

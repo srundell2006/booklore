@@ -37,11 +37,11 @@ class ExistingBookMatcherTest {
     }
 
     private static ShellCandidate shell(long id, String title, String... authors) {
-        return ShellCandidate.of(id, PATH, false, true, title, null, null, List.of(authors));
+        return ShellCandidate.of(id, PATH, false, true, title, null, null, null, List.of(authors));
     }
 
     private static ShellCandidate shellNumber(long id, String title, float seriesNumber, String... authors) {
-        return ShellCandidate.of(id, PATH, false, true, title, null, seriesNumber, List.of(authors));
+        return ShellCandidate.of(id, PATH, false, true, title, null, null, seriesNumber, List.of(authors));
     }
 
     private static Decision shellMatch(FileEvidence file, ShellCandidate... shells) {
@@ -123,8 +123,8 @@ class ExistingBookMatcherTest {
 
         @Test
         void aBookWithoutAuthorsOnlyMatchesWhenPhysical() {
-            ShellCandidate lostFiles = ShellCandidate.of(15, null, false, true, "Dune", null, null, List.of());
-            ShellCandidate physical = ShellCandidate.of(16, null, true, false, "Dune", null, null, List.of());
+            ShellCandidate lostFiles = ShellCandidate.of(15, null, false, true, "Dune", null, null, null, List.of());
+            ShellCandidate physical = ShellCandidate.of(16, null, true, false, "Dune", null, null, null, List.of());
             assertThat(shellMatch(file("H/Herbert, Frank", "Dune.epub"), lostFiles)).isInstanceOf(NoMatch.class);
             assertThat(shellMatch(file("H/Herbert, Frank", "Dune.epub"), physical)).isInstanceOf(Match.class);
             // An author part nothing confirms cannot be checked against a book without authors
@@ -179,7 +179,7 @@ class ExistingBookMatcherTest {
 
         @Test
         void anotherLibraryPathDoesNotMatch() {
-            ShellCandidate elsewhere = ShellCandidate.of(24, 2L, false, true, "The Martian", null, null, List.of("Andy Weir"));
+            ShellCandidate elsewhere = ShellCandidate.of(24, 2L, false, true, "The Martian", null, null, null, List.of("Andy Weir"));
             assertThat(shellMatch(file("W/Weir, Andy", "The Martian.epub"), elsewhere)).isInstanceOf(NoMatch.class);
         }
 
@@ -261,14 +261,14 @@ class ExistingBookMatcherTest {
 
         @Test
         void aSubtitleIsPartOfOneOfTheTitlesABookIsFoundUnder() {
-            ShellCandidate karachi = ShellCandidate.of(54, PATH, false, true, "Assignment", "Karachi", null, List.of("Edward S. Aarons"));
+            ShellCandidate karachi = ShellCandidate.of(54, PATH, false, true, "Assignment", "Karachi", null, null, List.of("Edward S. Aarons"));
             assertThat(shellMatch(file("A/Aarons, Edward S", "Assignment - Karachi.epub"), karachi)).isInstanceOf(Match.class);
             assertThat(shellMatch(file("A/Aarons, Edward S", "Assignment - Treason.epub"), karachi)).isInstanceOf(NoMatch.class);
         }
 
         @Test
         void aPhysicalBookWithoutAuthorsMatchesItsTitle() {
-            ShellCandidate physical = ShellCandidate.of(16, null, true, false, "Dune", null, null, List.of());
+            ShellCandidate physical = ShellCandidate.of(16, null, true, false, "Dune", null, null, null, List.of());
             assertThat(shellMatch(file("H/Herbert, Frank", "Dune - Frank Herbert.epub"), physical)).isInstanceOf(Match.class);
         }
     }
@@ -277,7 +277,7 @@ class ExistingBookMatcherTest {
     class AlikeFilelessBooks {
 
         private ShellCandidate physical(long id, String title, String... authors) {
-            return ShellCandidate.of(id, PATH, true, false, title, null, null, List.of(authors));
+            return ShellCandidate.of(id, PATH, true, false, title, null, null, null, List.of(authors));
         }
 
         @Test
@@ -365,8 +365,8 @@ class ExistingBookMatcherTest {
 
         @Test
         void aSubtitleIsAnotherBook() {
-            ShellCandidate plain = ShellCandidate.of(12, PATH, false, true, "Survival", null, null, List.of("Ann Smith"));
-            ShellCandidate subtitled = ShellCandidate.of(40, PATH, false, true, "Survival", "A Novel", null, List.of("Ann Smith"));
+            ShellCandidate plain = ShellCandidate.of(12, PATH, false, true, "Survival", null, null, null, List.of("Ann Smith"));
+            ShellCandidate subtitled = ShellCandidate.of(40, PATH, false, true, "Survival", "A Novel", null, null, List.of("Ann Smith"));
 
             Decision decision = shellMatch(file("S/Smith, Ann", "Survival.epub"), plain, subtitled);
 
@@ -376,8 +376,8 @@ class ExistingBookMatcherTest {
 
         @Test
         void booksWithoutAuthorsAreNeverAlike() {
-            ShellCandidate first = ShellCandidate.of(15, null, true, false, "Dune", null, null, List.of());
-            ShellCandidate second = ShellCandidate.of(16, null, true, false, "Dune", null, null, List.of());
+            ShellCandidate first = ShellCandidate.of(15, null, true, false, "Dune", null, null, null, List.of());
+            ShellCandidate second = ShellCandidate.of(16, null, true, false, "Dune", null, null, null, List.of());
             assertThat(shellMatch(file("H/Herbert, Frank", "Dune.epub"), first, second)).isInstanceOf(Ambiguous.class);
         }
 
@@ -393,7 +393,7 @@ class ExistingBookMatcherTest {
         @Test
         void onlyTheBooksThatQualifyNeedBeAlike() {
             // Another library path turns book#41 down; the two left are alike
-            ShellCandidate elsewhere = ShellCandidate.of(41, 2L, false, true, "Survival", "A Novel", null, List.of("Ann Smith"));
+            ShellCandidate elsewhere = ShellCandidate.of(41, 2L, false, true, "Survival", "A Novel", null, null, List.of("Ann Smith"));
             assertThat(matchedId(shellMatch(file("S/Smith, Ann", "Survival.epub"),
                     shell(40, "Survival", "Ann Smith"), elsewhere, shell(12, "Survival", "Ann Smith")))).isEqualTo(12);
         }
@@ -449,13 +449,13 @@ class ExistingBookMatcherTest {
                     "2 fileless books qualify: book#1 \"Saga\", and book#2 \"Saga\" if \" (1)\" is a copy"));
             // So it is next to a "Saga" in no series, and next to the first volume found by its number
             assertThat(shellMatch(saga, shell(1, "Saga", "Brian K. Vaughan"), second)).isInstanceOf(Ambiguous.class);
-            ShellCandidate volumeOne = ShellCandidate.of(1, PATH, false, true, "Saga", "Volume 1", null, List.of("Brian K. Vaughan"));
+            ShellCandidate volumeOne = ShellCandidate.of(1, PATH, false, true, "Saga", "Volume 1", null, null, List.of("Brian K. Vaughan"));
             assertThat(((Ambiguous) shellMatch(saga, volumeOne, second)).bookIds()).containsExactly(1L, 2L);
             // The original next to it is ambiguous as it always was
             assertThat(shellMatch(file("V/Brian K. Vaughan", "Saga.epub"), shellNumber(1, "Saga", 1, "Brian K. Vaughan"), second))
                     .isInstanceOf(Ambiguous.class);
             // A book turned down for want of evidence, or with evidence against it, is no candidate
-            ShellCandidate elsewhere = ShellCandidate.of(3, 2L, false, true, "Saga", null, 2f, List.of("Brian K. Vaughan"));
+            ShellCandidate elsewhere = ShellCandidate.of(3, 2L, false, true, "Saga", null, null, 2f, List.of("Brian K. Vaughan"));
             ShellCandidate otherAuthor = shellNumber(4, "Saga", 2, "Ann Smith");
             assertThat(shellMatch(saga, shellNumber(1, "Saga", 1, "Brian K. Vaughan"), elsewhere, otherAuthor))
                     .isEqualTo(new Match(1, Kind.FILELESS, "title and author agree with book#1 \"Saga\" (\" (1)\" read as a copy)"));
@@ -464,7 +464,7 @@ class ExistingBookMatcherTest {
         @Test
         void notTheBookWhoseTitleNamesAnotherVolume() {
             // No series number, but its subtitle says it is volume 2: "Saga (1).epub" may be volume 1
-            ShellCandidate saga = ShellCandidate.of(8, PATH, false, true, "Saga", "Volume Two", null, List.of("Brian K. Vaughan"));
+            ShellCandidate saga = ShellCandidate.of(8, PATH, false, true, "Saga", "Volume Two", null, null, List.of("Brian K. Vaughan"));
 
             Decision first = shellMatch(file("V/Vaughan, Brian K.", "Saga (1).epub"), saga);
 
@@ -473,12 +473,12 @@ class ExistingBookMatcherTest {
             assertThat(((NoMatch) first).refused()).isEmpty();
             assertThat(matchedId(shellMatch(file("V/Vaughan, Brian K.", "Saga (2).epub"), saga))).isEqualTo(8);
             ShellCandidate walkingDead = ShellCandidate.of(9, PATH, false, true, "The Walking Dead", "Vol. 2: Miles Behind Us",
-                    null, List.of("Robert Kirkman"));
+                    null, null, List.of("Robert Kirkman"));
             assertThat(shellMatch(file("K/Kirkman, Robert", "The Walking Dead (1).epub"), walkingDead)).isInstanceOf(NoMatch.class);
             // A provider's suffix names the number too
-            ShellCandidate second = ShellCandidate.of(8, PATH, false, true, "Saga (Saga, #2)", null, null, List.of("Brian K. Vaughan"));
+            ShellCandidate second = ShellCandidate.of(8, PATH, false, true, "Saga (Saga, #2)", null, null, null, List.of("Brian K. Vaughan"));
             assertThat(shellMatch(file("V/Vaughan, Brian K.", "Saga (1).epub"), second)).isInstanceOf(NoMatch.class);
-            ShellCandidate firstBySuffix = ShellCandidate.of(8, PATH, false, true, "Saga (Saga, #1)", null, null, List.of("Brian K. Vaughan"));
+            ShellCandidate firstBySuffix = ShellCandidate.of(8, PATH, false, true, "Saga (Saga, #1)", null, null, null, List.of("Brian K. Vaughan"));
             assertThat(matchedId(shellMatch(file("V/Vaughan, Brian K.", "Saga (1).epub"), firstBySuffix))).isEqualTo(8);
         }
 
@@ -486,9 +486,9 @@ class ExistingBookMatcherTest {
         void aBareNumberInASubtitleNamesNoVolume() {
             // "World War II" and "1936" are what the books are about; neither has a series number
             ShellCandidate unbroken = ShellCandidate.of(1, PATH, false, true, "Unbroken",
-                    "A World War II Story of Survival, Resilience, and Redemption", null, List.of("Laura Hillenbrand"));
+                    "A World War II Story of Survival, Resilience, and Redemption", null, null, List.of("Laura Hillenbrand"));
             ShellCandidate boys = ShellCandidate.of(2, PATH, false, true, "The Boys in the Boat",
-                    "Nine Americans and Their Epic Quest for Gold at the 1936 Berlin Olympics", null, List.of("Daniel James Brown"));
+                    "Nine Americans and Their Epic Quest for Gold at the 1936 Berlin Olympics", null, null, List.of("Daniel James Brown"));
 
             assertThat(shellMatch(file("H/Hillenbrand, Laura", "Unbroken (1).epub"), unbroken)).isEqualTo(new Match(1, Kind.FILELESS,
                     "title and author agree with book#1 \"Unbroken\" (\" (1)\" read as a copy)"));
@@ -496,7 +496,7 @@ class ExistingBookMatcherTest {
                     Kind.FILELESS, "title and author agree with book#2 \"The Boys in the Boat\" (\" (1)\" read as a copy)"));
             // Its series number still says which volume it is
             ShellCandidate second = ShellCandidate.of(1, PATH, false, true, "Unbroken",
-                    "A World War II Story of Survival, Resilience, and Redemption", 2f, List.of("Laura Hillenbrand"));
+                    "A World War II Story of Survival, Resilience, and Redemption", null, 2f, List.of("Laura Hillenbrand"));
             assertThat(shellMatch(file("H/Hillenbrand, Laura", "Unbroken (1).epub"), second)).isInstanceOf(NoMatch.class);
         }
 
@@ -560,7 +560,7 @@ class ExistingBookMatcherTest {
             assertThat(shellMatch(file("B/Butler, O.", "Dawn (1).epub"), dawn)).isInstanceOf(NoMatch.class);
             assertThat(matchedId(shellMatch(file("B/Butler, Octavia", "Dawn (1).epub"), dawn))).isEqualTo(10);
             // Nor does it reach a book in another library path
-            ShellCandidate elsewhere = ShellCandidate.of(7, 2L, false, true, "Started Early, Took My Dog", null, null,
+            ShellCandidate elsewhere = ShellCandidate.of(7, 2L, false, true, "Started Early, Took My Dog", null, null, null,
                     List.of("Kate Atkinson"));
             assertThat(shellMatch(file("A/Kate Atkinson", "Started Early, Took My Dog (1).epub"), elsewhere)).isInstanceOf(NoMatch.class);
         }
@@ -586,7 +586,7 @@ class ExistingBookMatcherTest {
             // volume 1, as before
             assertThat(shellMatch(file("A/Kate Atkinson", "Case Histories (1).epub"), shellNumber(10, "Case Histories 1", 2, "Kate Atkinson")))
                     .isEqualTo(new Match(10, Kind.FILELESS, "title and author agree with book#10 \"Case Histories 1\""));
-            ShellCandidate saga = ShellCandidate.of(8, PATH, false, true, "Saga", "Volume 1", 3f, List.of("Brian K. Vaughan"));
+            ShellCandidate saga = ShellCandidate.of(8, PATH, false, true, "Saga", "Volume 1", null, 3f, List.of("Brian K. Vaughan"));
             assertThat(shellMatch(file("V/Brian K. Vaughan", "Saga (1).epub"), saga))
                     .isEqualTo(new Match(8, Kind.FILELESS, "title and author agree with book#8 \"Saga\""));
         }
@@ -661,7 +661,7 @@ class ExistingBookMatcherTest {
 
         @Test
         void aSubtitledFileAndAnUnsubtitledOneAreNotBothTheSubtitledBook() {
-            ShellCandidate quiver = ShellCandidate.of(61, PATH, false, true, "A Quiver Full of Arrows", "Stories", null,
+            ShellCandidate quiver = ShellCandidate.of(61, PATH, false, true, "A Quiver Full of Arrows", "Stories", null, null,
                     List.of("Jeffrey Archer"));
             FilelessShellIndex index = FilelessShellIndex.of(List.of(quiver));
             List<Claim<FileEvidence>> claims = claims(index,
@@ -713,8 +713,8 @@ class ExistingBookMatcherTest {
         void filesOfTwoLibraryPathsMaySeeDifferentAlikeBooksAndGetOneEach() {
             // A file only sees the books in its own library path or in none: the file of path 1 sees both books and
             // gets book#12, the file of path 2 sees book#40 only. Each book is claimed from one folder, so both attach
-            ShellCandidate inPathOne = ShellCandidate.of(12, PATH, false, true, "Survival", null, null, List.of("Ann Smith"));
-            ShellCandidate inNoPath = ShellCandidate.of(40, null, false, true, "Survival", null, null, List.of("Ann Smith"));
+            ShellCandidate inPathOne = ShellCandidate.of(12, PATH, false, true, "Survival", null, null, null, List.of("Ann Smith"));
+            ShellCandidate inNoPath = ShellCandidate.of(40, null, false, true, "Survival", null, null, null, List.of("Ann Smith"));
             FileEvidence ofPathOne = FileEvidence.of(PATH, "S/Smith, Ann", "Survival.epub", false);
             FileEvidence ofPathTwo = FileEvidence.of(2L, "S/Smith, Ann", "Survival.epub", false);
             List<Claim<FileEvidence>> claims = claims(FilelessShellIndex.of(List.of(inPathOne, inNoPath)), ofPathOne, ofPathTwo);

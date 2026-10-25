@@ -20,9 +20,9 @@ import java.util.Map;
  * afresh; the watcher, which handles one file at a time, keeps them for a while instead of reading every fileless
  * book of the library for every new file. A book that gets a file is taken out of the kept index at once; one that
  * becomes fileless meanwhile is only seen when the index is read again, and until then its file becomes a new book,
- * which is the safe way to miss. A book edited meanwhile (its title, authors or physical flag) is still found as it
- * was: {@link ExistingBookAttacher} matches the file against the book as it is now before attaching it, and has the
- * index read again when they no longer match.
+ * which is the safe way to miss. A book edited meanwhile (its title, authors, series or physical flag) is still found
+ * as it was: {@link ExistingBookAttacher} matches the file against the book as it is now before attaching it, and has
+ * the index read again when they no longer match.
  */
 @Component
 @RequiredArgsConstructor
@@ -68,7 +68,7 @@ public class FilelessShells {
             List<String> authors = bookRows.stream().map(FilelessBookRow::authorName).filter(name -> name != null && !name.isBlank()).toList();
             boolean hasCover = first.bookCoverHash() != null || first.audiobookCoverHash() != null;
             candidates.add(ShellCandidate.of(bookId, first.libraryPathId(), Boolean.TRUE.equals(first.physical()), hasCover,
-                    first.title(), first.subtitle(), first.seriesNumber(), authors));
+                    first.title(), first.subtitle(), first.seriesName(), first.seriesNumber(), authors));
         });
         return candidates;
     }

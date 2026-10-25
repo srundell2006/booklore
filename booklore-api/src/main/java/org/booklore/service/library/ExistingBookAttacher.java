@@ -51,8 +51,9 @@ import java.util.Set;
  *   <li>A kind of cover its owner locked is never written.</li>
  * </ul>
  * A fileless book gets the files only when one of them still matches it as it is now. The watcher matches against
- * fileless books it read up to {@link FilelessShells#WATCHER_INDEX_LIFETIME} ago, and the book's title, authors or
- * physical flag may have been edited since: "The Martian.epub" must not go to a book retitled "Project Hail Mary".
+ * fileless books it read up to {@link FilelessShells#WATCHER_INDEX_LIFETIME} ago, and the book's title, authors,
+ * series or physical flag may have been edited since: "The Martian.epub" must not go to a book retitled "Project Hail
+ * Mary", nor "Saga (1).epub" to a "Saga" number 2 whose series was renamed "Saga".
  */
 @Service
 @RequiredArgsConstructor
@@ -195,6 +196,7 @@ public class ExistingBookAttacher {
                 book.getBookCoverHash() != null || book.getAudiobookCoverHash() != null,
                 metadata == null ? null : metadata.getTitle(),
                 metadata == null ? null : metadata.getSubtitle(),
+                metadata == null ? null : metadata.getSeriesName(),
                 metadata == null ? null : metadata.getSeriesNumber(),
                 authors);
     }

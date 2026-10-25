@@ -144,7 +144,7 @@ class BookFileTransactionalHandlerTest {
     }
 
     private FilelessBookRow shellRow(long bookId, Long libraryPathId, String title, String... authors) {
-        return new FilelessBookRow(bookId, libraryPathId, false, null, null, title, null, null,
+        return new FilelessBookRow(bookId, libraryPathId, false, null, null, title, null, null, null,
                 authors.length == 0 ? null : authors[0]);
     }
 
@@ -373,7 +373,7 @@ class BookFileTransactionalHandlerTest {
             // "Saga (1).epub" may be volume 1, and the book says it is volume 2: the real volume 2 still finds it
             subPath("V/Vaughan, Brian K.");
             noEarlierMatch();
-            shells(new FilelessBookRow(8L, null, false, null, null, "Saga", "Volume Two", null, "Brian K. Vaughan"));
+            shells(new FilelessBookRow(8L, null, false, null, null, "Saga", "Volume Two", null, null, "Brian K. Vaughan"));
             when(existingBookAttacher.attach(anyLong(), any(), anyList())).thenAnswer(inv -> {
                 filelessShells.notFileless(inv.getArgument(0));
                 return inv.getArgument(2);
