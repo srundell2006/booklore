@@ -55,12 +55,24 @@ import java.util.stream.Collectors;
  * its " (1)", maybe with a last word such as "Series" or "Trilogy" ({@link TitleWords#SERIES_NOUNS}): "Saga (1).epub"
  * may be volume 1 of a series "Saga", but "The Testaments (1).epub" is no volume of The Handmaid's Tale, whose first
  * volume would be named after it, and is the copy of "The Testaments", its number 2. A book turned down so may be the
- * file's book all the same, if the " (1)" is a copy's: so when another book qualifies the file is ambiguous ("Saga
- * (1).epub" against a "Saga" numbered 1 and one numbered 2), and only when none does is it no match. A bare number in
+ * file's book all the same, if the " (1)" is a copy's: so when another book qualifies as a copy too the file is
+ * ambiguous ("Saga (1).epub" against a "Saga" numbered 1 and one numbered 2), and only when none does is it no match;
+ * a book the name reads as without the copy reading ("Saga: Volume 1") is the file's book. A bare number in
  * a subtitle names no volume: "Unbroken (1).epub" is the copy of "Unbroken: A World War II Story of Survival,
  * Resilience, and Redemption". With a leading series number ("03 - Title (1).epub") or another number in the name
  * the " (1)" is a copy, and the series number rule decides. A comic's " (1)" is an issue, and " (2)" to " (9)" stay
  * volume numbers.
+ * <p>
+ * Those two rules, the choice among alike books and a " (1)" read as a copy, only ever add a book to a file that the
+ * other rules give none; they never take one away or change it. So a match only they make is weak ({@link
+ * Match#weak}), and the books the name reads as without them decide first: a file that reads as one book is that
+ * book's, whatever its " (1)" read as a copy finds besides ("Nico (1).epub" is "Nico (Book 1)", next to a "Nico" by the
+ * same author), and when it reads as several only the choice among alike ones may pick one of them. Only when the name
+ * reads as no book do the books found with its " (1)" read as a copy count, and those the " (1)" guard turned down. A
+ * rescan's other files then outweigh a weak match: the files that would be one new book go to the book of their
+ * strong matches, so "Killing Floor.epub", weakly one of two alike fileless "Killing Floor"s, goes with "The Killing
+ * Floor (1).epub" to the book of "01. Killing Floor - Lee Child (2006).mobi" in their folder; and where strong and
+ * weak claims on a fileless book do not agree, the strong ones get it ({@link #resolveShellClaims}).
  * <p>
  * A rescan matches every new file against the same fileless books, so {@link #resolveShellClaims} then leaves alone a
  * fileless book claimed from more than one folder, or by two different files of one format. Files that match the same
@@ -69,7 +81,7 @@ import java.util.stream.Collectors;
  * each get one: with alike books in path 1 and in no path, a "Survival.epub" of path 1 gets the first and one of path
  * 2 the second, where a single book in no path would get neither. The watcher takes one file at a time and no longer
  * offers a book once a file was attached to it, so a later file that matches the same alike books gets the next of
- * them.
+ * them. With no other file to outweigh it there, a weak match attaches as any other.
  */
 public final class ExistingBookMatcher {
 
@@ -87,7 +99,28 @@ public final class ExistingBookMatcher {
         String reason();
     }
 
-    public record Match(long bookId, Kind kind, String reason) implements Decision {
+    /**
+     * @param weak    whether only a rule that reads more into a name than its title says gives the file this book:
+     *                the choice of one of alike fileless books, or a " (1)" read as a copy. A weak match never takes a
+     *                file from the book the other rules give it, or give the files it would be one book with: a
+     *                rescan's group of files goes to the book of its strong matches ({@code BookGroupingService}), and
+     *                a fileless book claimed by strong and weak matches that do not agree goes to the strong ones
+     *                ({@link #resolveShellClaims}). The watcher, which takes one file at a time, attaches it as any
+     *                other match
+     * @param refused for a weak match, the books the file says it is not, as a {@link NoMatch} has them, for when the
+     *                match yields to its group's: the file is then judged as the other rules alone would have it. Empty
+     *                where those find several books, which make the file ambiguous and refuse none, and for a strong
+     *                match
+     */
+    public record Match(long bookId, Kind kind, String reason, boolean weak, Set<Long> refused) implements Decision {
+        public Match {
+            refused = Set.copyOf(refused);
+        }
+
+        /** A strong match: the one book whose title the name reads as. */
+        public Match(long bookId, Kind kind, String reason) {
+            this(bookId, kind, reason, false, Set.of());
+        }
     }
 
     /**
@@ -197,6 +230,30 @@ public final class ExistingBookMatcher {
         }
         Map<Long, Accepted> accepted = findings.accepted();
         Map<Long, Rejection> rejected = findings.rejected();
+        // The books the name reads as without its " (1)" read as a copy decide first, as they did before that reading
+        Map<Long, Accepted> byName = new LinkedHashMap<>();
+        accepted.forEach((bookId, a) -> {
+            if (!a.asCopy()) {
+                byName.put(bookId, a);
+            }
+        });
+        if (!byName.isEmpty()) {
+            List<ShellCandidate> onlyAsCopy = new ArrayList<>();
+            accepted.values().stream().filter(Accepted::asCopy).map(Accepted::shell).forEach(onlyAsCopy::add);
+            onlyAsCopy.addAll(findings.doubted().values());
+            if (byName.size() == 1) {
+                Accepted only = byName.values().iterator().next();
+                return new Match(only.shell().bookId(), Kind.FILELESS, agreement(only) + yieldingAsCopy(onlyAsCopy));
+            }
+            Accepted chosen = oneOfAlike(byName.values());
+            if (chosen != null) {
+                return new Match(chosen.shell().bookId(), Kind.FILELESS, oneOf(chosen, byName) + yieldingAsCopy(onlyAsCopy),
+                        true, Set.of());
+            }
+            return new Ambiguous(List.copyOf(byName.keySet()), byName.size() + " fileless books qualify: "
+                    + byName.values().stream().map(a -> label(a.shell())).collect(Collectors.joining(", ")));
+        }
+        // Only the name read as a copy finds a book, if it finds one: whatever it decides is weak
         if (!accepted.isEmpty() && !findings.doubted().isEmpty()) {
             // Read as a copy, the books the " (1)" guard turned down qualify as well: the name does not say which
             List<Long> bookIds = new ArrayList<>(accepted.keySet());
@@ -208,14 +265,12 @@ public final class ExistingBookMatcher {
         }
         if (accepted.size() == 1) {
             Accepted only = accepted.values().iterator().next();
-            return new Match(only.shell().bookId(), Kind.FILELESS, agreement(only));
+            return new Match(only.shell().bookId(), Kind.FILELESS, agreement(only), true, refused(rejected));
         }
         if (accepted.size() > 1) {
             Accepted chosen = oneOfAlike(accepted.values());
             if (chosen != null) {
-                return new Match(chosen.shell().bookId(), Kind.FILELESS, agreement(chosen) + ", one of " + accepted.size()
-                        + " alike fileless books (" + accepted.keySet().stream().sorted().map(id -> "book#" + id)
-                        .collect(Collectors.joining(", ")) + ")");
+                return new Match(chosen.shell().bookId(), Kind.FILELESS, oneOf(chosen, accepted), true, refused(rejected));
             }
             return new Ambiguous(List.copyOf(accepted.keySet()), accepted.size() + " fileless books qualify: "
                     + accepted.values().stream().map(a -> label(a.shell())).collect(Collectors.joining(", ")));
@@ -223,13 +278,33 @@ public final class ExistingBookMatcher {
         if (rejected.isEmpty()) {
             return new NoMatch("no fileless book has this title");
         }
+        return new NoMatch(rejected.values().stream().map(Rejection::why).collect(Collectors.joining("; ")), refused(rejected));
+    }
+
+    /** The books turned down with evidence against them. */
+    private static Set<Long> refused(Map<Long, Rejection> rejected) {
         Set<Long> refused = new LinkedHashSet<>();
         rejected.forEach((bookId, rejection) -> {
             if (rejection.against()) {
                 refused.add(bookId);
             }
         });
-        return new NoMatch(rejected.values().stream().map(Rejection::why).collect(Collectors.joining("; ")), refused);
+        return refused;
+    }
+
+    private static String oneOf(Accepted chosen, Map<Long, Accepted> alike) {
+        return agreement(chosen) + ", one of " + alike.size() + " alike fileless books (" + alike.keySet().stream().sorted()
+                .map(id -> "book#" + id).collect(Collectors.joining(", ")) + ")";
+    }
+
+    /** What a match by the name as it reads says of the books that qualify only with its " (1)" read as a copy. */
+    private static String yieldingAsCopy(List<ShellCandidate> onlyAsCopy) {
+        if (onlyAsCopy.isEmpty()) {
+            return "";
+        }
+        return "; " + onlyAsCopy.stream().map(ExistingBookMatcher::label).collect(Collectors.joining(", "))
+                + (onlyAsCopy.size() == 1 ? " qualifies" : " qualify") + " only if \" (1)\" is a copy, and "
+                + (onlyAsCopy.size() == 1 ? "yields" : "yield");
     }
 
     /**
@@ -255,8 +330,8 @@ public final class ExistingBookMatcher {
      * @param accepted the books that qualify
      * @param rejected why each book that does not qualify was turned down
      * @param doubted  the books that qualify but for the " (1)" guard ({@link #anotherVolumeThanOne}), and qualify by
-     *                 no reading: the file may be such a book's copy all the same, so where another book qualifies, the
-     *                 name does not say which of them it is
+     *                 no reading: the file may be such a book's copy all the same, so where another book qualifies only
+     *                 with the " (1)" read as a copy too, the name does not say which of them it is
      */
     private record Findings(Map<Long, Accepted> accepted, Map<Long, Rejection> rejected, Map<Long, ShellCandidate> doubted) {
 
@@ -303,7 +378,9 @@ public final class ExistingBookMatcher {
      */
     private static void judge(FileEvidence file, TitleKey reading, Evidence evidence, Integer seriesNumber,
                               ShellCandidate shell, boolean asCopy, Findings findings) {
-        if (findings.accepted().containsKey(shell.bookId())) {
+        Accepted already = findings.accepted().get(shell.bookId());
+        if (already != null && (asCopy || !already.asCopy())) {
+            // Accepted already, by a reading at least as good
             return;
         }
         Rejection rejection = rejection(file, reading, evidence, seriesNumber, shell);
@@ -316,10 +393,13 @@ public final class ExistingBookMatcher {
             }
         }
         if (rejection == null) {
+            // A book accepted as a copy before and now by the name as it reads takes its place among the latter in
+            // the order they were found, as it would without the copy reading
+            findings.accepted().remove(shell.bookId());
             findings.accepted().put(shell.bookId(), new Accepted(shell, asCopy));
             findings.rejected().remove(shell.bookId());
             findings.doubted().remove(shell.bookId());
-        } else {
+        } else if (already == null) {
             Rejection labelled = new Rejection(label(shell) + " " + rejection.why(), rejection.against());
             // Evidence against the book from one reading outweighs a want of evidence from another
             findings.rejected().merge(shell.bookId(), labelled, (first, next) -> first.against() || !next.against() ? first : next);
@@ -335,7 +415,8 @@ public final class ExistingBookMatcher {
      * "The Testaments (1).epub" is no volume of The Handmaid's Tale. A bare number says nothing: "World War II" or
      * "1936" in a subtitle is what a book is about. Null when nothing says so. Never evidence against the book, of
      * which the file may be a copy all the same: so it only keeps the file from that book when no other book
-     * qualifies, and makes the file ambiguous when one does.
+     * qualifies, and makes the file ambiguous when one does as a copy too. A book the name reads as without the copy
+     * reading goes before both.
      */
     private static Rejection anotherVolumeThanOne(ShellCandidate shell, TitleKey reading) {
         if (shell.seriesPlace() != null && shell.seriesPlace() != 1f) {
@@ -486,15 +567,33 @@ public final class ExistingBookMatcher {
      * @param format    the file's format, or one value for every file where a book has a single file
      * @param nameKey   {@link FileEvidence#fileNameKey}: files of one format and one name key are copies, or parts,
      *                  of one file
+     * @param weak      whether only weak matches ({@link Match#weak}) give the file this book: its own, or those of
+     *                  the files it would be one book with when none of them has a strong match. A file that goes with
+     *                  a strong match of its group claims the book as strongly, whatever its own match
      */
-    public record Claim<F>(F file, String fileName, long bookId, String folderKey, String format, String nameKey) {
+    public record Claim<F>(F file, String fileName, long bookId, String folderKey, String format, String nameKey,
+                           boolean weak) {
+
+        /** A strong claim. */
+        public Claim(F file, String fileName, long bookId, String folderKey, String format, String nameKey) {
+            this(file, fileName, bookId, folderKey, format, nameKey, false);
+        }
     }
 
     /**
      * @param accepted the files each fileless book gets, by book id
      * @param rejected why each fileless book that gets none was left alone, by book id
+     * @param yielded  for each fileless book that gets the files of its strong claims only, the files of its weak
+     *                 claims, which it does not get, and why; by book id
      */
-    public record ClaimResolution<F>(Map<Long, List<F>> accepted, Map<Long, String> rejected) {
+    public record ClaimResolution<F>(Map<Long, List<F>> accepted, Map<Long, String> rejected, Map<Long, Yield<F>> yielded) {
+    }
+
+    /** The files whose weak claims on a fileless book yield to the strong claims of other files on it, and why. */
+    public record Yield<F>(List<F> files, String why) {
+        public Yield {
+            files = List.copyOf(files);
+        }
     }
 
     /**
@@ -504,6 +603,12 @@ public final class ExistingBookMatcher {
      * likely two books ("A Quiver Full of Arrows.epub" and "A Quiver Full of Arrows - Stories.epub" against a book
      * subtitled "Stories"; "King.epub" and "KING - Las Vegas Bad Boys.epub" in a folder "Las Vegas Bad Boys") as one,
      * and a fileless book is not the place to guess: such files become a new book, which can be merged by hand.
+     * <p>
+     * A weak claim ({@link Claim#weak}) never takes a book from strong ones: when a book's claims do not agree but its
+     * strong claims alone do, the book gets the files of those, and the files of the weak claims become new books.
+     * "A/Steve Alten/MEG/The MEG.epub" and the weak "A/Steve Alten/MEG (1).epub" claim a fileless "MEG" from two
+     * folders, and "The MEG.epub" gets it, as it would without the weak rules. Strong claims that do not agree among
+     * themselves leave the book alone, weak ones or not, and so do weak claims without a strong one.
      */
     public static <F> ClaimResolution<F> resolveShellClaims(List<Claim<F>> claims) {
         Map<Long, List<Claim<F>>> byBook = new LinkedHashMap<>();
@@ -512,23 +617,45 @@ public final class ExistingBookMatcher {
         }
         Map<Long, List<F>> accepted = new LinkedHashMap<>();
         Map<Long, String> rejected = new LinkedHashMap<>();
+        Map<Long, Yield<F>> yielded = new LinkedHashMap<>();
         byBook.forEach((bookId, bookClaims) -> {
-            Set<String> folders = new TreeSet<>();
-            Map<String, Set<String>> namesByFormat = new HashMap<>();
-            for (Claim<F> claim : bookClaims) {
-                folders.add(claim.folderKey());
-                namesByFormat.computeIfAbsent(claim.format(), k -> new LinkedHashSet<>()).add(claim.nameKey());
+            String disagreement = disagreement(bookClaims);
+            if (disagreement == null) {
+                accepted.put(bookId, files(bookClaims));
+                return;
             }
-            if (folders.size() > 1) {
-                rejected.put(bookId, "claimed by files of " + folders.size() + " folders " + folders + ": "
-                        + names(bookClaims));
-            } else if (namesByFormat.values().stream().anyMatch(names -> names.size() > 1)) {
-                rejected.put(bookId, "claimed by different files of one format: " + names(bookClaims));
+            List<Claim<F>> strong = bookClaims.stream().filter(claim -> !claim.weak()).toList();
+            if (!strong.isEmpty() && disagreement(strong) == null) {
+                List<Claim<F>> weak = bookClaims.stream().filter(Claim::weak).toList();
+                accepted.put(bookId, files(strong));
+                yielded.put(bookId, new Yield<>(files(weak), disagreement + "; the weak claims of " + names(weak)
+                        + " yield to the others"));
             } else {
-                accepted.put(bookId, bookClaims.stream().map(Claim::file).toList());
+                rejected.put(bookId, disagreement);
             }
         });
-        return new ClaimResolution<>(accepted, rejected);
+        return new ClaimResolution<>(accepted, rejected, yielded);
+    }
+
+    /** Why the claims do not agree on one book, or null when they do. */
+    private static String disagreement(List<? extends Claim<?>> claims) {
+        Set<String> folders = new TreeSet<>();
+        Map<String, Set<String>> namesByFormat = new HashMap<>();
+        for (Claim<?> claim : claims) {
+            folders.add(claim.folderKey());
+            namesByFormat.computeIfAbsent(claim.format(), k -> new LinkedHashSet<>()).add(claim.nameKey());
+        }
+        if (folders.size() > 1) {
+            return "claimed by files of " + folders.size() + " folders " + folders + ": " + names(claims);
+        }
+        if (namesByFormat.values().stream().anyMatch(names -> names.size() > 1)) {
+            return "claimed by different files of one format: " + names(claims);
+        }
+        return null;
+    }
+
+    private static <F> List<F> files(List<Claim<F>> claims) {
+        return claims.stream().map(Claim::file).toList();
     }
 
     private static String names(List<? extends Claim<?>> claims) {

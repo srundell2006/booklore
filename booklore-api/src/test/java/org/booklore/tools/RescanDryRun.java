@@ -79,18 +79,30 @@ import java.util.stream.Collectors;
  *   <li>{@code attach-shell}: attached to the fileless book {@code target};</li>
  *   <li>{@code attach-same-folder}: attached to {@code target}, a book with files in the file's folder;</li>
  *   <li>{@code ambiguous}: becomes a new book because several books qualify ({@code target} lists them), a fileless
- *       book's claims were rejected, the files it would be one book with matched different books, or the book they
- *       matched turned one of them down;</li>
+ *       book's claims were rejected, the files it would be one book with matched different books, the book they
+ *       matched turned one of them down, or its weak claim on a fileless book yields to the strong claims of other
+ *       files, which get the book;</li>
  *   <li>{@code new-book}: becomes a new book, matching no existing one.</li>
  * </ul>
+ * A weak match ({@code ExistingBookMatcher.Match.weak}: one of alike fileless books, or a " (1)" read as a copy)
+ * yields to the strong matches of the files it would be one book with: such a file is attached with them, and its
+ * reason says that its own weak match yields to theirs.
+ * <p>
  * The group key is the new book the file would be part of, {@code <library_path_id>:<sub path>:<key>}; files attached
  * to an existing book show the group they would have formed. Lines starting with {@code #} close the report: the
- * count of each decision, and for files that become new books, the count of each reason a book was turned down, with
- * book ids, numbers and quoted names taken out so that alike reasons count together.
+ * count of each decision; for files that become new books, the count of each reason a book was turned down, with
+ * book ids, numbers and quoted names taken out so that alike reasons count together; and for files whose decision a
+ * weak match had a part in, the count of each outcome.
  */
 public final class RescanDryRun {
 
     static final long LIBRARY_ID = 1L;
+
+    /**
+     * How the matcher's reason for a match by the name as it reads names the books found only with its " (1)" read as
+     * a copy, which yield to it: "...; book#2 "Nico" qualifies only if " (1)" is a copy, and yields".
+     */
+    private static final String YIELDING_AS_COPY = "only if \" (1)\" is a copy, and yield";
 
     private RescanDryRun() {
     }
@@ -184,9 +196,13 @@ public final class RescanDryRun {
             attachment.files().forEach(file -> attachments.put(file, attachment));
         }
 
+        Map<String, List<LibraryFile>> groups = new LinkedHashMap<>();
+        newFiles.forEach(file -> groups.computeIfAbsent(groupKeys.get(file), key -> new ArrayList<>()).add(file));
+
         List<Line> lines = new ArrayList<>();
         Map<String, Integer> decisions = new TreeMap<>();
         Map<String, Integer> rejections = new TreeMap<>();
+        Map<String, Integer> weakMatches = new TreeMap<>();
         for (LibraryFile file : newFiles) {
             Line line = line(file, rowOf.get(file), groupKeys.get(file), attachments.get(file), trace);
             lines.add(line);
@@ -194,8 +210,50 @@ public final class RescanDryRun {
             if (line.decision().equals("new-book") || line.decision().equals("ambiguous")) {
                 trace.rejections(file).forEach(reason -> rejections.merge(reason, 1, Integer::sum));
             }
+            String weak = weakOutcome(file, attachments.get(file), groups.get(groupKeys.get(file)), trace);
+            if (weak != null) {
+                weakMatches.merge(weak, 1, Integer::sum);
+            }
         }
-        return new Report(lines, decisions, rejections);
+        return new Report(lines, decisions, rejections, weakMatches);
+    }
+
+    /**
+     * What came of a weak match ({@code Match.weak}: one of alike fileless books, or a " (1)" read as a copy) for the
+     * file: its own, or one its group followed; or of the books only such a reading found, where a match by the name as
+     * it reads went before them. Null when no weak match had a part in the file's decision.
+     */
+    private static String weakOutcome(LibraryFile file, Attachment attachment, List<LibraryFile> group, Trace trace) {
+        Decision fileless = trace.fileless.get(file);
+        if (fileless instanceof Match own && own.weak()) {
+            if (attachment != null) {
+                return attachment.bookId() == own.bookId()
+                        ? "attached by its own weak match"
+                        : "its weak match yields to the strong match of the files it would be one book with";
+            }
+            if (trace.yieldedClaims.containsKey(file)) {
+                return "its weak match yields to the strong claims of other files on its book";
+            }
+            return "its weak match comes to nothing: its group is split or turned down, or its book's claims rejected";
+        }
+        if (attachment != null && !(fileless instanceof Match) && !(trace.inFolder.get(file) instanceof Match)) {
+            boolean strongInGroup = group.stream().anyMatch(other -> isStrongMatch(trace.inFolder.get(other), attachment.bookId())
+                    || isStrongMatch(trace.fileless.get(other), attachment.bookId()));
+            if (!strongInGroup) {
+                return "attached by a weak match of the files it would be one book with";
+            }
+        }
+        if (trace.yieldedClaims.containsKey(file)) {
+            return "follows a weak match that yields to the strong claims of other files";
+        }
+        if (fileless instanceof Match own && own.reason().contains(YIELDING_AS_COPY)) {
+            return "a match by its name as it reads goes before books found with \" (1)\" read as a copy";
+        }
+        return null;
+    }
+
+    private static boolean isStrongMatch(Decision decision, long bookId) {
+        return decision instanceof Match match && !match.weak() && match.bookId() == bookId;
     }
 
     private static Line line(LibraryFile file, NewFile row, String groupKey, Attachment attachment, Trace trace) {
@@ -204,9 +262,14 @@ public final class RescanDryRun {
         if (attachment != null) {
             String decision = attachment.kind() == Kind.FILELESS ? "attach-shell" : "attach-same-folder";
             Decision own = attachment.kind() == Kind.FILELESS ? fileless : inFolder;
-            String reason = own instanceof Match match && match.bookId() == attachment.bookId()
-                    ? match.reason()
-                    : "goes with the files it would be one book with";
+            String reason;
+            if (own instanceof Match match && match.bookId() == attachment.bookId()) {
+                reason = match.reason();
+            } else if (fileless instanceof Match weak && weak.weak()) {
+                reason = "goes with the files it would be one book with; its own weak match yields to theirs: " + weak.reason();
+            } else {
+                reason = "goes with the files it would be one book with";
+            }
             return new Line(decision, String.valueOf(attachment.bookId()), groupKey, reason, row);
         }
         if (trace.split.containsKey(file)) {
@@ -221,6 +284,11 @@ public final class RescanDryRun {
             RejectedClaim claim = trace.rejectedClaims.get(file);
             return new Line("ambiguous", String.valueOf(claim.bookId()), groupKey,
                     "fileless book#" + claim.bookId() + " is " + claim.why(), row);
+        }
+        if (trace.yieldedClaims.containsKey(file)) {
+            RejectedClaim claim = trace.yieldedClaims.get(file);
+            return new Line("ambiguous", String.valueOf(claim.bookId()), groupKey, "its weak claim on fileless book#"
+                    + claim.bookId() + " yields to the strong claims of other files, which get it: " + claim.why(), row);
         }
         if (inFolder instanceof Ambiguous ambiguous) {
             return new Line("ambiguous", ids(ambiguous.bookIds()), groupKey, "folder: " + ambiguous.reason(), row);
@@ -274,6 +342,7 @@ public final class RescanDryRun {
         final Map<LibraryFile, Decision> inFolder = new IdentityHashMap<>();
         final Map<LibraryFile, Decision> fileless = new IdentityHashMap<>();
         final Map<LibraryFile, RejectedClaim> rejectedClaims = new IdentityHashMap<>();
+        final Map<LibraryFile, RejectedClaim> yieldedClaims = new IdentityHashMap<>();
         final Map<LibraryFile, Set<Long>> split = new IdentityHashMap<>();
         final Map<LibraryFile, Long> refusedGroups = new IdentityHashMap<>();
 
@@ -290,6 +359,11 @@ public final class RescanDryRun {
         @Override
         public void claimsRejected(long bookId, List<LibraryFile> files, String why) {
             files.forEach(file -> rejectedClaims.put(file, new RejectedClaim(bookId, why)));
+        }
+
+        @Override
+        public void claimsYielded(long bookId, List<LibraryFile> files, String why) {
+            files.forEach(file -> yieldedClaims.put(file, new RejectedClaim(bookId, why)));
         }
 
         @Override
@@ -314,6 +388,9 @@ public final class RescanDryRun {
             if (rejectedClaims.containsKey(file)) {
                 // The reason without the names of the files that made the claims
                 reasons.add("claim: " + general(rejectedClaims.get(file).why()).replaceFirst(": .*", ""));
+            }
+            if (yieldedClaims.containsKey(file)) {
+                reasons.add("claim: a weak claim yields to the strong claims of other files");
             }
             if (inFolder.get(file) instanceof Ambiguous ambiguous) {
                 reasons.add("folder: " + general(ambiguous.reason()));
@@ -504,10 +581,12 @@ public final class RescanDryRun {
     }
 
     /**
-     * @param decisions  how many files got each decision
-     * @param rejections for files that become new books, how many were turned down for each reason
+     * @param decisions   how many files got each decision
+     * @param rejections  for files that become new books, how many were turned down for each reason
+     * @param weakMatches for files whose decision a weak match had a part in, how many had each outcome
      */
-    public record Report(List<Line> lines, Map<String, Integer> decisions, Map<String, Integer> rejections) {
+    public record Report(List<Line> lines, Map<String, Integer> decisions, Map<String, Integer> rejections,
+                         Map<String, Integer> weakMatches) {
 
         public void print(PrintStream out) {
             out.println("# decision\ttarget\tgroup_key\treason\tlibrary_path_id\tfile_sub_path\tfile_name");
@@ -524,6 +603,10 @@ public final class RescanDryRun {
             decisions.forEach((decision, count) -> out.println("#   " + decision + "\t" + count));
             out.println("# reasons an existing book was turned down, for files that become new books:");
             rejections.entrySet().stream()
+                    .sorted(Map.Entry.<String, Integer>comparingByValue().reversed().thenComparing(Map.Entry.comparingByKey()))
+                    .forEach(entry -> out.println("#   " + entry.getValue() + "\t" + entry.getKey()));
+            out.println("# weak matches (one of alike fileless books, or \" (1)\" read as a copy), by outcome:");
+            weakMatches.entrySet().stream()
                     .sorted(Map.Entry.<String, Integer>comparingByValue().reversed().thenComparing(Map.Entry.comparingByKey()))
                     .forEach(entry -> out.println("#   " + entry.getValue() + "\t" + entry.getKey()));
         }

@@ -284,6 +284,10 @@ public class BookFileTransactionalHandler {
      * BOOK_PER_FILE, and for a BOOK_PER_FOLDER file at the library's root, every file is a book of its own, so another
      * format of the first file goes to the next alike book. A rescan of the same files differs: it gives the formats of
      * a BOOK_PER_FOLDER root to one book, and in BOOK_PER_FILE, where they are two files claiming one book, to none.
+     * A weak match ({@link Match#weak}: one of alike books, or a " (1)" read as a copy) attaches as any other: where a
+     * rescan weighs it against the other new files, which outweigh it, here there is only the one file. So a lone
+     * "A/Steve Alten/MEG (1).epub" goes to a fileless "MEG", which a rescan that also finds "A/Steve Alten/MEG/The
+     * MEG.epub" gives to the latter.
      *
      * @return false when the file belongs to no existing book, or its book changed since it was read
      */
