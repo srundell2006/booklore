@@ -35,7 +35,10 @@ import java.util.regex.Pattern;
  *                      nothing says what its series is called
  * @param volumeNumbers the volume numbers its titles name after a series keyword, as {@link TitleKey#keywordNumbers}
  *                      reads them ("Saga: Volume Two" names 2), in order and each once. A bare number is none: "Unbroken:
- *                      A World War II Story" and "The Boys in the Boat: ... the 1936 Berlin Olympics" name no volume
+ *                      A World War II Story" and "The Boys in the Boat: ... the 1936 Berlin Olympics" name no volume.
+ *                      Nor is the number of a "(Series, #N)" suffix that is the book's {@link #seriesPlace}: it says
+ *                      which volume of that series the book is, and only one of another place than the metadata's
+ *                      series number counts here
  */
 public record ShellCandidate(long bookId,
                              Long libraryPathId,
@@ -90,10 +93,14 @@ public record ShellCandidate(long bookId,
 
         List<TitleKey> keys = new ArrayList<>();
         keys.add(TitleKey.ofTitle(cleanTitle, context));
-        keys.add(TitleKey.ofTitle(fullTitle, context));
+        TitleKey withSuffix = TitleKey.ofTitle(fullTitle, context);
+        keys.add(withSuffix);
         if (subtitle != null && !subtitle.isBlank()) {
             keys.add(TitleKey.ofTitle(cleanTitle + ": " + subtitle.trim(), context));
         }
+        // The "#2" of "(The Handmaid's Tale, #2)" is the book's place in that series, not a volume its title names,
+        // unless the metadata gives it another place
+        boolean suffixIsPlace = suffixPlace != null && (seriesNumber == null || seriesNumber.equals(suffixPlace));
         Set<String> identities = new LinkedHashSet<>();
         Set<Integer> years = new LinkedHashSet<>();
         Set<String> volumeNumbers = new LinkedHashSet<>();
@@ -101,7 +108,9 @@ public record ShellCandidate(long bookId,
             if (!key.identity().isEmpty()) {
                 identities.add(key.identity());
                 years.addAll(key.years());
-                volumeNumbers.addAll(key.keywordNumbers());
+                if (key != withSuffix || !suffixIsPlace) {
+                    volumeNumbers.addAll(key.keywordNumbers());
+                }
             }
         }
 

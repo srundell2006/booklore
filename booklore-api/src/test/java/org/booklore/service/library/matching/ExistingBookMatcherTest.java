@@ -509,6 +509,134 @@ class ExistingBookMatcherTest {
         }
 
         @Test
+        void aBookOfASeriesOfAnotherNameIsTheCopysBook() {
+            // Volume 1 of The Handmaid's Tale would be named after that series, not after its second book
+            FileEvidence copy = file("A/Atwood, Margaret", "The Testaments (1).epub");
+            ShellCandidate testaments = ShellCandidate.of(1, PATH, false, true, "The Testaments", null, "The Handmaid's Tale",
+                    2f, List.of("Margaret Atwood"));
+
+            assertThat(shellMatch(copy, testaments)).isEqualTo(new Match(1, Kind.FILELESS,
+                    "title and author agree with book#1 \"The Testaments\" (\" (1)\" read as a copy)"));
+            ShellCandidate novella = ShellCandidate.of(2, PATH, false, true, "The Testaments", null, "The Handmaid's Tale",
+                    2.5f, List.of("Margaret Atwood"));
+            assertThat(matchedId(shellMatch(copy, novella))).isEqualTo(2);
+            // A series whose name holds the title is still another name
+            ShellCandidate longer = ShellCandidate.of(3, PATH, false, true, "Saga", null, "Saga of the Seven Suns", 2f,
+                    List.of("Brian K. Vaughan"));
+            assertThat(matchedId(shellMatch(file("V/Brian K. Vaughan", "Saga (1).epub"), longer))).isEqualTo(3);
+        }
+
+        @Test
+        void aBookOfASeriesOfTheSameNameIsStillTurnedDown() {
+            FileEvidence saga = file("V/Brian K. Vaughan", "Saga (1).epub");
+            ShellCandidate second = ShellCandidate.of(8, PATH, false, true, "Saga", null, "Saga", 2f, List.of("Brian K. Vaughan"));
+
+            Decision decision = shellMatch(saga, second);
+
+            assertThat(decision).isEqualTo(new NoMatch(
+                    "book#8 \"Saga\" is number 2 of a series of the same name, and \" (1)\" may mean volume 1"));
+            assertThat(((NoMatch) decision).refused()).isEmpty();
+            // Names are compared as they read: case, a leading article, punctuation and spaces around them make no
+            // other name
+            ShellCandidate walkingDead = ShellCandidate.of(9, PATH, false, true, "The Walking Dead", null, "  walking dead, the ",
+                    2f, List.of("Robert Kirkman"));
+            assertThat(walkingDead.seriesName()).isEqualTo("walking dead, the");
+            assertThat(shellMatch(file("K/Kirkman, Robert", "The Walking Dead (1).epub"), walkingDead))
+                    .isEqualTo(new NoMatch("book#9 \"The Walking Dead\" is number 2 of a series of the same name,"
+                            + " and \" (1)\" may mean volume 1"));
+            // It may still be the file's book: next to another one that qualifies, the file is ambiguous
+            assertThat(((Ambiguous) shellMatch(saga, shellNumber(1, "Saga", 1, "Brian K. Vaughan"), second)).bookIds())
+                    .containsExactly(1L, 8L);
+        }
+
+        @Test
+        void aBookOfASeriesWithoutANameIsStillTurnedDown() {
+            // Nothing says the series is not "Saga": a blank name, or one that reads as nothing, is none
+            FileEvidence saga = file("V/Brian K. Vaughan", "Saga (1).epub");
+            ShellCandidate blank = ShellCandidate.of(8, PATH, false, true, "Saga", null, "  ", 2f, List.of("Brian K. Vaughan"));
+            ShellCandidate dash = ShellCandidate.of(8, PATH, false, true, "Saga", null, "-", 2f, List.of("Brian K. Vaughan"));
+
+            assertThat(blank.seriesName()).isNull();
+            assertThat(blank.seriesIdentities()).isEmpty();
+            assertThat(dash.seriesIdentities()).isEmpty();
+            NoMatch turnedDown = new NoMatch("book#8 \"Saga\" is number 2 of its series, and \" (1)\" may mean volume 1");
+            assertThat(shellMatch(saga, blank)).isEqualTo(turnedDown);
+            assertThat(shellMatch(saga, dash)).isEqualTo(turnedDown);
+            assertThat(shellMatch(file("A/Atwood, Margaret", "The Testaments (1).epub"),
+                    shellNumber(1, "The Testaments", 2, "Margaret Atwood"))).isInstanceOf(NoMatch.class);
+        }
+
+        @Test
+        void aProvidersSuffixNamesTheSeriesWhenTheMetadataDoesNot() {
+            ShellCandidate testaments = ShellCandidate.of(1, PATH, false, true, "The Testaments (The Handmaid's Tale, #2)", null,
+                    null, null, List.of("Margaret Atwood"));
+            assertThat(testaments.seriesName()).isEqualTo("The Handmaid's Tale");
+            assertThat(testaments.seriesPlace()).isEqualTo(2f);
+            // The suffix's "#2" is its place in that series, not a volume its title names
+            assertThat(testaments.volumeNumbers()).isEmpty();
+            assertThat(matchedId(shellMatch(file("A/Atwood, Margaret", "The Testaments (1).epub"), testaments))).isEqualTo(1);
+            // Unless the metadata gives it another place: then the suffix names another volume all the same
+            ShellCandidate otherPlace = ShellCandidate.of(1, PATH, false, true, "The Testaments (The Handmaid's Tale, #2)", null,
+                    null, 1f, List.of("Margaret Atwood"));
+            assertThat(otherPlace.volumeNumbers()).containsExactly("2");
+            assertThat(shellMatch(file("A/Atwood, Margaret", "The Testaments (1).epub"), otherPlace)).isEqualTo(new NoMatch(
+                    "book#1 \"The Testaments (The Handmaid's Tale, #2)\" names volume 2 in its title or subtitle, and \" (1)\""
+                            + " may mean volume 1"));
+            // "Saga (Saga, #2)" names its series "Saga"
+            ShellCandidate saga = ShellCandidate.of(8, PATH, false, true, "Saga (Saga, #2)", null, null, null,
+                    List.of("Brian K. Vaughan"));
+            assertThat(saga.seriesName()).isEqualTo("Saga");
+            assertThat(shellMatch(file("V/Brian K. Vaughan", "Saga (1).epub"), saga)).isEqualTo(new NoMatch(
+                    "book#8 \"Saga (Saga, #2)\" is number 2 of a series of the same name, and \" (1)\" may mean volume 1"));
+            // The metadata's series name comes first, the suffix's counts only without one
+            FileEvidence copy = file("A/Atwood, Margaret", "The Testaments (1).epub");
+            ShellCandidate bySuffix = ShellCandidate.of(2, PATH, false, true, "The Testaments (The Testaments, #2)", null,
+                    null, null, List.of("Margaret Atwood"));
+            ShellCandidate byMetadata = ShellCandidate.of(2, PATH, false, true, "The Testaments (The Testaments, #2)", null,
+                    " The Handmaid's Tale ", null, List.of("Margaret Atwood"));
+            assertThat(shellMatch(copy, bySuffix)).isInstanceOf(NoMatch.class);
+            assertThat(byMetadata.seriesName()).isEqualTo("The Handmaid's Tale");
+            assertThat(matchedId(shellMatch(copy, byMetadata))).isEqualTo(2);
+            assertThat(ShellCandidate.of(1, PATH, false, true, "The Testaments", null, null, 2f, List.of()).seriesName()).isNull();
+        }
+
+        @Test
+        void aSeriesNamedWithALastWordSuchAsTrilogyIsWhatThatWordFollows() {
+            FileEvidence saga = file("V/Brian K. Vaughan", "Saga (1).epub");
+            for (String series : List.of("Saga Series", "The Saga Trilogy", "Saga Duology", "Saga Quartet", "Saga Quintet",
+                    "The Saga Saga", "Saga Cycle", "Saga Sequence", "The Saga Chronicles")) {
+                ShellCandidate second = ShellCandidate.of(8, PATH, false, true, "Saga", null, series, 2f, List.of("Brian K. Vaughan"));
+                assertThat(shellMatch(saga, second)).as(series).isEqualTo(new NoMatch(
+                        "book#8 \"Saga\" is number 2 of a series of the same name, and \" (1)\" may mean volume 1"));
+            }
+            // Only a last word, only of the list, and only with a word left
+            ShellCandidate inTheMiddle = ShellCandidate.of(8, PATH, false, true, "Saga", null, "Saga Series Omnibus", 2f,
+                    List.of("Brian K. Vaughan"));
+            assertThat(matchedId(shellMatch(saga, inTheMiddle))).isEqualTo(8);
+            ShellCandidate otherWord = ShellCandidate.of(8, PATH, false, true, "Saga", null, "Saga Omnibus", 2f, List.of("Brian K. Vaughan"));
+            assertThat(matchedId(shellMatch(saga, otherWord))).isEqualTo(8);
+            ShellCandidate trilogy = ShellCandidate.of(8, PATH, false, true, "Trilogy", null, "Trilogy", 2f, List.of("Brian K. Vaughan"));
+            assertThat(trilogy.seriesIdentities()).containsExactly("trilogy");
+            assertThat(shellMatch(file("V/Brian K. Vaughan", "Trilogy (1).epub"), trilogy)).isInstanceOf(NoMatch.class);
+            ShellCandidate hungerGames = ShellCandidate.of(8, PATH, false, true, "The Hunger Games", null,
+                    "The Hunger Games Trilogy", 2f, List.of("Suzanne Collins"));
+            assertThat(hungerGames.seriesIdentities()).containsExactlyInAnyOrder("hunger games trilogy", "hunger games");
+        }
+
+        @Test
+        void theVolumesItsTitleNamesCountWhateverItsSeriesIsCalled() {
+            // The series name only says what a place in a series means; "Volume Two" in a subtitle is volume 2 always
+            ShellCandidate saga = ShellCandidate.of(8, PATH, false, true, "Saga", "Volume Two", "Image Comics Collection", null,
+                    List.of("Brian K. Vaughan"));
+            assertThat(shellMatch(file("V/Vaughan, Brian K.", "Saga (1).epub"), saga)).isEqualTo(new NoMatch(
+                    "book#8 \"Saga\" names volume 2 in its title or subtitle, and \" (1)\" may mean volume 1"));
+            ShellCandidate testaments = ShellCandidate.of(1, PATH, false, true, "The Testaments", "Book Two",
+                    "The Handmaid's Tale", 2f, List.of("Margaret Atwood"));
+            assertThat(shellMatch(file("A/Atwood, Margaret", "The Testaments (1).epub"), testaments)).isEqualTo(new NoMatch(
+                    "book#1 \"The Testaments\" names volume 2 in its title or subtitle, and \" (1)\" may mean volume 1"));
+        }
+
+        @Test
         void onlyOneIsACopy() {
             // " (2)" stays the second volume
             assertThat(shellMatch(file("V/Brian K. Vaughan", "Saga (2).epub"), shell(8, "Saga", "Brian K. Vaughan")))

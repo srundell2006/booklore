@@ -512,5 +512,19 @@ class TitleKeyTest {
             assertThat(TitleKey.ofFileName("Assignment - Treason.epub", false, NameContext.forFolder("A/Aarons, Edward S")).identity())
                     .isNotEqualTo(TitleKey.ofTitle("Assignment", NameContext.NONE).identity());
         }
+
+        @ParameterizedTest(name = "{0} -> {1}")
+        @CsvSource(delimiter = '|', nullValues = "-", textBlock = """
+                The Hunger Games Trilogy  | hunger games
+                Saga Series 2             | saga #2
+                The Saga Saga             | saga
+                Saga Series Omnibus       | -
+                Trilogy                   | -
+                The Trilogy               | -
+                """)
+        void readsASeriesNameWithoutALastWordSuchAsTrilogy(String series, String identity) {
+            assertThat(TitleKey.ofTitle(series, NameContext.NONE).identityWithoutLastWord(TitleWords.SERIES_NOUNS))
+                    .isEqualTo(identity);
+        }
     }
 }
