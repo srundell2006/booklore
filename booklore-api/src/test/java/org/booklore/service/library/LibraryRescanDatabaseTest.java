@@ -409,6 +409,19 @@ class LibraryRescanDatabaseTest {
     }
 
     @Test
+    void aWeakClaimYieldsTheFilelessBookToTheStrongOne() throws IOException {
+        // "MEG (1).epub" is the "MEG" only with its " (1)" read as a copy; "The MEG.epub" got the book before that
+        BookEntity meg = filelessBook("MEG", "h0", "Steve Alten");
+        walkFinds("A/Steve Alten/MEG/The MEG.epub", "A/Steve Alten/MEG (1).epub");
+        List<List<String>> newBooks = newBooksOfTheRescan();
+
+        rescan();
+
+        assertThat(fileNamesOf(meg)).containsExactly("A/Steve Alten/MEG/The MEG.epub");
+        assertThat(newBooks).containsExactly(List.of("A/Steve Alten/MEG (1).epub"));
+    }
+
+    @Test
     void newFilesByTheFoldersAuthorBecomeOneBookEach() throws IOException {
         // Production: in "B/Dale Brown", "Shadow Command" and "Warrior Class" were imported as more formats of
         // "Battle Born", because the folder's name was part of every file's name
