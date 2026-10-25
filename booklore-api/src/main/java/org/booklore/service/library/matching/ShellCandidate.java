@@ -36,9 +36,8 @@ import java.util.regex.Pattern;
  * @param volumeNumbers the volume numbers its titles name after a series keyword, as {@link TitleKey#keywordNumbers}
  *                      reads them ("Saga: Volume Two" names 2), in order and each once. A bare number is none: "Unbroken:
  *                      A World War II Story" and "The Boys in the Boat: ... the 1936 Berlin Olympics" name no volume.
- *                      Nor is the number of a "(Series, #N)" suffix that is the book's {@link #seriesPlace}: it says
- *                      which volume of that series the book is, and only one of another place than the metadata's
- *                      series number counts here
+ *                      Nor is the number of a "(Series, #N)" suffix: it is the book's place in that series, judged
+ *                      as {@link #seriesPlace}, unless the metadata's series number is another
  */
 public record ShellCandidate(long bookId,
                              Long libraryPathId,
