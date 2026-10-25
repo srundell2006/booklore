@@ -11,7 +11,12 @@ import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.service.file.FileFingerprint;
+import org.booklore.service.library.matching.ExistingBookMatcher;
+import org.booklore.service.library.matching.ExistingBookMatcher.Decision;
 import org.booklore.service.library.matching.ExistingBookMatcher.Kind;
+import org.booklore.service.library.matching.ExistingBookMatcher.Match;
+import org.booklore.service.library.matching.FileEvidence;
+import org.booklore.service.library.matching.FilelessShellIndex;
 import org.booklore.service.library.matching.ShellCandidate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -328,8 +333,13 @@ class ExistingBookAttacherTest {
     @Test
     void aSecondDownloadStillMatchesTheFilelessBookOfItsTitle() throws IOException {
         // "The Martian (1).epub" reads as "The Martian" as well as its first volume; before, it no longer matched here
-        shell(31, "curated");
+        BookEntity book = shell(31, "curated");
         LibraryFile copy = onDisk(WEIR, "The Martian (1).epub", BookFileType.EPUB);
+        // Read as a copy only: a weak match, which counts here as any other
+        Decision decision = ExistingBookMatcher.matchShell(FileEvidence.of(copy.getLibraryPathEntity().getId(), WEIR,
+                copy.getFileName(), false), FilelessShellIndex.of(List.of(ExistingBookAttacher.shellCandidate(book))));
+        assertThat(decision).isInstanceOf(Match.class);
+        assertThat(((Match) decision).weak()).isTrue();
 
         assertThat(attacher.attach(31, Kind.FILELESS, List.of(copy))).containsExactly(copy);
 

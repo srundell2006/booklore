@@ -170,7 +170,9 @@ public class ExistingBookAttacher {
     /**
      * Whether one of the files matches the fileless book as it is now, as {@link ExistingBookMatcher#matchShell} decides.
      * The other files of an attachment go with the one that matched (a copy, the parts of an audiobook) and need not
-     * match on their own.
+     * match on their own. A weak match counts as any other ("The Martian (1).epub" read as a copy): this only asks
+     * whether the book was edited into another since, and whether a weak match yields to other files was the caller's
+     * to decide, with those files at hand.
      */
     private static boolean stillMatches(BookEntity book, List<LibraryFile> files) {
         FilelessShellIndex index = FilelessShellIndex.of(List.of(shellCandidate(book)));

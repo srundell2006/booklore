@@ -369,6 +369,36 @@ class BookFileTransactionalHandlerTest {
         }
 
         @Test
+        void autoDetect_aWeakMatchAttachesAsAnyOther() {
+            // Only " (1)" read as a copy makes "MEG (1).epub" the "MEG": a weak match. A rescan that also found
+            // "A/Steve Alten/MEG/The MEG.epub" would give the book to that one; here there is only this file
+            subPath("A/Steve Alten");
+            noEarlierMatch();
+            shells(shellRow(70L, null, "MEG", "Steve Alten"));
+
+            handler.handleNewBookFile(1L, Path.of("/library/A/Steve Alten/MEG (1).epub"));
+
+            verify(existingBookAttacher).attach(eq(70L), eq(Kind.FILELESS), argThat(files ->
+                    files.getFirst().getFileName().equals("MEG (1).epub")));
+            verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
+        }
+
+        @Test
+        void autoDetect_aBookTheNameReadsAsGoesBeforeOneOfTheNameReadAsACopy() {
+            // "Nico (1).epub" is "Nico (Book 1)", as before the copy reading, and not ambiguous with "Nico"
+            subPath("W/Naomi West");
+            noEarlierMatch();
+            shells(shellRow(2L, null, "Nico", "Naomi West"), shellRow(1L, null, "Nico (Book 1)", "Naomi West"));
+
+            handler.handleNewBookFile(1L, Path.of("/library/W/Naomi West/Nico (1).epub"));
+
+            verify(existingBookAttacher, times(1)).attach(anyLong(), any(), anyList());
+            verify(existingBookAttacher).attach(eq(1L), eq(Kind.FILELESS), argThat(files ->
+                    files.getFirst().getFileName().equals("Nico (1).epub")));
+            verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
+        }
+
+        @Test
         void autoDetect_aSecondDownloadIsNotTheBookWhoseSubtitleNamesAnotherVolume() {
             // "Saga (1).epub" may be volume 1, and the book says it is volume 2: the real volume 2 still finds it
             subPath("V/Vaughan, Brian K.");
