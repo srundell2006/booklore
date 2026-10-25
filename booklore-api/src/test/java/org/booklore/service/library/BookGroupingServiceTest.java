@@ -1600,4 +1600,257 @@ class BookGroupingServiceTest {
         assertThat(millis).isLessThan(10_000);
         verifyNoQueryPerFolderOrFile(20_000 / BookGroupingService.AUTHOR_QUERY_BATCH);
     }
+
+    // ---- weak matches (one of alike fileless books, a " (1)" read as a copy) only add a book to files ----
+
+    /** What the rescan tells its listener of groups and claims, one line each. */
+    private static final class Outcomes implements BookGroupingService.DecisionListener {
+        final Map<String, Decision> fileless = new LinkedHashMap<>();
+        final List<String> lines = new ArrayList<>();
+
+        @Override
+        public void fileless(LibraryFile file, Decision decision) {
+            fileless.put(file.getFileName(), decision);
+        }
+
+        @Override
+        public void claimsRejected(long bookId, List<LibraryFile> files, String why) {
+            lines.add("rejected " + bookId + " " + names(files));
+        }
+
+        @Override
+        public void claimsYielded(long bookId, List<LibraryFile> files, String why) {
+            lines.add("yielded " + bookId + " " + names(files) + ": " + why);
+        }
+
+        @Override
+        public void groupSplit(List<LibraryFile> files, java.util.Set<Long> bookIds) {
+            lines.add("split " + bookIds + " " + names(files));
+        }
+
+        @Override
+        public void groupRefused(List<LibraryFile> files, long bookId, List<LibraryFile> refusing) {
+            lines.add("refused " + bookId + " by " + names(refusing));
+        }
+
+        private static List<String> names(List<LibraryFile> files) {
+            return files.stream().map(LibraryFile::getFileName).toList();
+        }
+
+        Match weakMatch(String fileName) {
+            assertThat(fileless.get(fileName)).isInstanceOf(Match.class);
+            Match match = (Match) fileless.get(fileName);
+            assertThat(match.weak()).as(fileName + " matched weakly").isTrue();
+            return match;
+        }
+    }
+
+    @Test
+    void rescan_autoDetect_aWeakMatchYieldsToTheStrongMatchOfItsGroup() {
+        // The dry run: "Killing Floor.epub" weakly took one of two alike fileless "Killing Floor"s, which split its
+        // group from the book of "The Killing Floor (1).epub" in their folder; before, both went to that book
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        bookIn(280632, path, "C/Lee Child/Jack Reacher", "01. Killing Floor - Lee Child (2006).mobi");
+        authorsOf(280632, "Lee Child");
+        shell(10, "Killing Floor", "Lee Child");
+        shell(11, "Killing Floor", "Lee Child");
+        LibraryFile copy = newFile(lib, path, "C/Lee Child/Jack Reacher", "The Killing Floor (1).epub");
+        LibraryFile plain = newFile(lib, path, "C/Lee Child/Jack Reacher", "Killing Floor.epub");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, copy, plain);
+
+        assertThat(attached(result)).containsExactly(Map.entry(280632L, List.of(copy, plain)));
+        assertThat(kinds(result)).containsExactly(Map.entry(280632L, Kind.SAME_FOLDER));
+        assertThat(result.newBookGroups()).isEmpty();
+        assertThat(outcomes.weakMatch("Killing Floor.epub").bookId()).isEqualTo(10);
+        assertThat(outcomes.lines).isEmpty();
+    }
+
+    @Test
+    void rescan_bookPerFolder_aWeakMatchYieldsToTheStrongMatchOfItsFolder() {
+        // "Survival.pdf" is weakly one of two alike "Survival"s; its folder is "Survival 1", by the epub's name
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
+        shell(10, "Survival", "Ann Smith");
+        shell(11, "Survival", "Ann Smith");
+        shell(20, "Survival 1", "Ann Smith");
+        LibraryFile first = newFile(lib, path, "S/Smith, Ann/Survival", "Survival 1.epub");
+        LibraryFile plain = newFile(lib, path, "S/Smith, Ann/Survival", "Survival.pdf");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, first, plain);
+
+        assertThat(attached(result)).containsExactly(Map.entry(20L, List.of(first, plain)));
+        assertThat(outcomes.weakMatch("Survival.pdf").bookId()).isEqualTo(10);
+        assertThat(outcomes.lines).isEmpty();
+    }
+
+    @Test
+    void rescan_bookPerFolder_weakMatchesOfAGroupWithoutAStrongOneMustAgree() {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
+        shell(10, "Survival", "Ann Smith");
+        shell(11, "Survival", "Ann Smith");
+        shell(20, "The Martian", "Ann Smith");
+        LibraryFile survival = newFile(lib, path, "S/Smith, Ann/Mixed", "Survival.epub");
+        LibraryFile martian = newFile(lib, path, "S/Smith, Ann/Mixed", "The Martian (1).epub");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, survival, martian);
+
+        assertThat(result.filesToAttach()).isEmpty();
+        assertThat(newBooks(result)).containsExactly(List.of("Survival.epub", "The Martian (1).epub"));
+        assertThat(outcomes.weakMatch("Survival.epub").bookId()).isEqualTo(10);
+        assertThat(outcomes.weakMatch("The Martian (1).epub").bookId()).isEqualTo(20);
+        assertThat(outcomes.lines).containsExactly("split [10, 20] [Survival.epub, The Martian (1).epub]");
+        // Weak matches that agree give the folder their book
+        var agreeing = rescan(lib, newFile(lib, path, "S/Smith, Ann/Mixed", "Survival.epub"),
+                newFile(lib, path, "S/Smith, Ann/Mixed", "Survival (1).pdf"));
+        assertThat(attached(agreeing)).containsOnlyKeys(10L);
+        assertThat(attached(agreeing).get(10L)).hasSize(2);
+    }
+
+    @Test
+    void rescan_bookPerFolder_aWeakMatchAGroupMateTurnsDownGivesTheGroupNoBook() {
+        // "03. The Long Night.epub" says it is number 3 of a series; the book in no series is not that
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
+        shell(30, "The Long Night", "Jane Doe");
+        LibraryFile copy = newFile(lib, path, "D/Doe, Jane/Night", "The Long Night (1).epub");
+        LibraryFile third = newFile(lib, path, "D/Doe, Jane/Night", "03. The Long Night.epub");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, copy, third);
+
+        assertThat(result.filesToAttach()).isEmpty();
+        assertThat(newBooks(result)).containsExactly(List.of("The Long Night (1).epub", "03. The Long Night.epub"));
+        assertThat(outcomes.weakMatch("The Long Night (1).epub").bookId()).isEqualTo(30);
+        assertThat(outcomes.lines).containsExactly("refused 30 by [03. The Long Night.epub]");
+    }
+
+    @Test
+    void rescan_bookPerFolder_aFileWhoseWeakMatchYieldsStillTurnsDownWhatItsNameSaysItIsNot() {
+        // Its series reading says it is number 3, so not "The Long Night 1" number 1, which the epub matched; read as
+        // a copy it is "The Long Night" number 3. Yielding, it is what its name says without the copy reading
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
+        shellRows.add(new FilelessBookRow(31L, null, false, "cover", null, "The Long Night 1", null, null, 1f, "Jane Doe"));
+        shellRows.add(new FilelessBookRow(32L, null, false, "cover", null, "The Long Night", null, null, 3f, "Jane Doe"));
+        LibraryFile first = newFile(lib, path, "D/Doe, Jane/Night", "The Long Night 1.epub");
+        LibraryFile third = newFile(lib, path, "D/Doe, Jane/Night", "03. The Long Night (1).pdf");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, first, third);
+
+        assertThat(result.filesToAttach()).isEmpty();
+        Match weak = outcomes.weakMatch("03. The Long Night (1).pdf");
+        assertThat(weak.bookId()).isEqualTo(32);
+        assertThat(weak.refused()).containsExactly(31L);
+        assertThat(outcomes.lines).containsExactly("refused 31 by [03. The Long Night (1).pdf]");
+    }
+
+    @Test
+    void rescan_autoDetect_aWeakClaimFromAnotherFolderYieldsToTheStrongOne() {
+        // The dry run: both claimed "MEG", from two folders, and neither got it; before, "The MEG.epub" did
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shell(70, "MEG", "Steve Alten");
+        LibraryFile meg = newFile(lib, path, "A/Steve Alten/MEG", "The MEG.epub");
+        LibraryFile copy = newFile(lib, path, "A/Steve Alten", "MEG (1).epub");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, meg, copy);
+
+        assertThat(attached(result)).containsExactly(Map.entry(70L, List.of(meg)));
+        assertThat(newBooks(result)).containsExactly(List.of("MEG (1).epub"));
+        outcomes.weakMatch("MEG (1).epub");
+        assertThat(outcomes.lines).containsExactly("yielded 70 [MEG (1).epub]: claimed by files of 2 folders"
+                + " [1:A/Steve Alten, 1:A/Steve Alten/MEG]: The MEG.epub, MEG (1).epub; the weak claims of MEG (1).epub"
+                + " yield to the others");
+    }
+
+    @Test
+    void rescan_autoDetect_aWeakClaimOfAnotherFileOfOneFormatYieldsToTheStrongGroup() {
+        // The dry run: the first two are one group, which "The Subtle Knife.epub" gave the book; its copy's own
+        // match is weak, but it goes with its group. The third reads as number 2 only with " (1)" read as a copy
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shellRows.add(new FilelessBookRow(71L, null, false, "cover", null, "The Subtle Knife", null, "His Dark Materials", 2f,
+                "Philip Pullman"));
+        String folder = "P/Philip Pullman/His Dark Materials";
+        LibraryFile knife = newFile(lib, path, folder, "The Subtle Knife.epub");
+        LibraryFile copy = newFile(lib, path, folder, "The Subtle Knife (1).epub");
+        LibraryFile numbered = newFile(lib, path, folder, "02. The Subtle Knife - Philip Pullman (2001) (1).epub");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, knife, copy, numbered);
+
+        assertThat(attached(result)).containsExactly(Map.entry(71L, List.of(knife, copy)));
+        assertThat(newBooks(result)).containsExactly(List.of("02. The Subtle Knife - Philip Pullman (2001) (1).epub"));
+        outcomes.weakMatch("The Subtle Knife (1).epub");
+        outcomes.weakMatch("02. The Subtle Knife - Philip Pullman (2001) (1).epub");
+        assertThat(outcomes.lines).singleElement().asString()
+                .startsWith("yielded 71 [02. The Subtle Knife - Philip Pullman (2001) (1).epub]: claimed by different files of one format");
+    }
+
+    @Test
+    void rescan_autoDetect_strongClaimsThatDoNotAgreeLeaveTheBookAloneAsBefore() {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shell(500, "Survival", "Ann Smith");
+        LibraryFile first = newFile(lib, path, "S/Smith, Ann", "Survival.epub");
+        LibraryFile second = newFile(lib, path, "S/Smith, Ann/Series", "Survival.epub");
+        LibraryFile copy = newFile(lib, path, "S/Smith, Ann/Other", "Survival (1).epub");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, first, second, copy);
+
+        assertThat(result.filesToAttach()).isEmpty();
+        assertThat(result.newBookGroups()).hasSize(3);
+        assertThat(outcomes.lines).singleElement().asString().startsWith("rejected 500");
+    }
+
+    @Test
+    void rescan_bookPerFolder_theFilesOfAGroupWhoseBookOnlyAWeakMatchGaveClaimItWeakly() {
+        // "Notes.pdf" has no match of its own and follows "MEG (1).epub" of its folder, as weakly
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
+        shell(70, "MEG", "Steve Alten");
+        LibraryFile meg = newFile(lib, path, "A/Steve Alten/MEG", "The MEG.epub");
+        LibraryFile copy = newFile(lib, path, "A/Steve Alten/Sharks", "MEG (1).epub");
+        LibraryFile notes = newFile(lib, path, "A/Steve Alten/Sharks", "Notes.pdf");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, meg, copy, notes);
+
+        assertThat(attached(result)).containsExactly(Map.entry(70L, List.of(meg)));
+        assertThat(newBooks(result)).containsExactly(List.of("MEG (1).epub", "Notes.pdf"));
+        assertThat(outcomes.lines).singleElement().asString().startsWith("yielded 70 [MEG (1).epub, Notes.pdf]");
+        // Without the strong claim, the folder's weak claims are the book's
+        var alone = rescan(lib, copy, notes);
+        assertThat(attached(alone)).containsExactly(Map.entry(70L, List.of(copy, notes)));
+    }
+
+    @Test
+    void rescan_bookPerFile_aWeakClaimYieldsToTheStrongOne() {
+        // Every file is a book of its own: two files claiming one book leave it alone, unless only one is strong
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FILE, path);
+        shell(300, "Dune", "Frank Herbert");
+        LibraryFile dune = newFile(lib, path, "Frank Herbert", "Dune.epub");
+        LibraryFile copy = newFile(lib, path, "Frank Herbert", "Dune (1).epub");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, dune, copy);
+
+        assertThat(attached(result)).containsExactly(Map.entry(300L, List.of(dune)));
+        assertThat(newBooks(result)).containsExactly(List.of("Dune (1).epub"));
+        outcomes.weakMatch("Dune (1).epub");
+        assertThat(outcomes.lines).singleElement().asString().startsWith("yielded 300 [Dune (1).epub]");
+        // Two weak claims still leave it alone
+        var weakOnly = rescan(lib, copy, newFile(lib, path, "Frank Herbert", "Dune (1).pdf"));
+        assertThat(weakOnly.filesToAttach()).isEmpty();
+    }
 }
