@@ -255,6 +255,102 @@ class RescanDryRunTest {
     }
 
     @Test
+    void saysWhatCameOfWeakMatches() throws IOException {
+        // The dry run of a real library: the newer rules took these files from the books they had before
+        Files.writeString(dir.resolve("shells.tsv"), """
+                id\tlibrary_path_id\tis_physical\thas_cover\ttitle\tsubtitle\tseries_number\tauthors\tseries_name
+                10\t1\t0\t1\tKilling Floor\tNULL\tNULL\tLee Child\tNULL
+                11\t1\t0\t1\tKilling Floor\tNULL\tNULL\tLee Child\tNULL
+                70\t1\t0\t1\tMEG\tNULL\tNULL\tSteve Alten\tNULL
+                71\t1\t0\t1\tThe Subtle Knife\tNULL\t2\tPhilip Pullman\tHis Dark Materials
+                1\t1\t0\t1\tNico (Book 1)\tNULL\tNULL\tNaomi West\tNULL
+                2\t1\t0\t1\tNico\tNULL\tNULL\tNaomi West\tNULL
+                40\t1\t0\t1\tSurvival\tNULL\tNULL\tAnn Smith\tNULL
+                41\t1\t0\t1\tSurvival\tNULL\tNULL\tAnn Smith\tNULL
+                """);
+        Files.writeString(dir.resolve("existing.tsv"), """
+                280632\t1\tC/Lee Child/Jack Reacher\t01. Killing Floor - Lee Child (2006).mobi\tMOBI\tLee Child
+                """);
+        Files.writeString(dir.resolve("newfiles.tsv"), """
+                1\tC/Lee Child/Jack Reacher\tThe Killing Floor (1).epub
+                1\tC/Lee Child/Jack Reacher\tKilling Floor.epub
+                1\tA/Steve Alten/MEG\tThe MEG.epub
+                1\tA/Steve Alten\tMEG (1).epub
+                1\tP/Philip Pullman/His Dark Materials\tThe Subtle Knife.epub
+                1\tP/Philip Pullman/His Dark Materials\tThe Subtle Knife (1).epub
+                1\tP/Philip Pullman/His Dark Materials\t02. The Subtle Knife - Philip Pullman (2001) (1).epub
+                1\tW/Naomi West\tNico (1).epub
+                1\tS/Smith, Ann\tSurvival.epub
+                """);
+
+        Report report = run();
+
+        assertThat(decisions(report)).containsExactly(
+                entry("C/Lee Child/Jack Reacher/The Killing Floor (1).epub", "attach-same-folder 280632"),
+                entry("C/Lee Child/Jack Reacher/Killing Floor.epub", "attach-same-folder 280632"),
+                entry("A/Steve Alten/MEG/The MEG.epub", "attach-shell 70"),
+                entry("A/Steve Alten/MEG (1).epub", "ambiguous 70"),
+                entry("P/Philip Pullman/His Dark Materials/The Subtle Knife.epub", "attach-shell 71"),
+                entry("P/Philip Pullman/His Dark Materials/The Subtle Knife (1).epub", "attach-shell 71"),
+                entry("P/Philip Pullman/His Dark Materials/02. The Subtle Knife - Philip Pullman (2001) (1).epub", "ambiguous 71"),
+                entry("W/Naomi West/Nico (1).epub", "attach-shell 1"),
+                entry("S/Smith, Ann/Survival.epub", "attach-shell 40"));
+        Map<String, String> reasons = report.lines().stream().collect(Collectors.toMap(
+                line -> line.file().fileName(), Line::reason));
+        assertThat(reasons.get("Killing Floor.epub")).isEqualTo("goes with the files it would be one book with; its own"
+                + " weak match yields to theirs: title and author agree with book#10 \"Killing Floor\", one of 2 alike"
+                + " fileless books (book#10, book#11)");
+        assertThat(reasons.get("MEG (1).epub")).isEqualTo("its weak claim on fileless book#70 yields to the strong claims"
+                + " of other files, which get it: claimed by files of 2 folders [1:A/Steve Alten, 1:A/Steve Alten/MEG]:"
+                + " The MEG.epub, MEG (1).epub; the weak claims of MEG (1).epub yield to the others");
+        assertThat(reasons.get("02. The Subtle Knife - Philip Pullman (2001) (1).epub"))
+                .startsWith("its weak claim on fileless book#71 yields to the strong claims of other files, which get it:"
+                        + " claimed by different files of one format: ");
+        assertThat(reasons.get("Nico (1).epub")).isEqualTo("title and author agree with book#1 \"Nico (Book 1)\"; book#2"
+                + " \"Nico\" qualifies only if \" (1)\" is a copy, and yields");
+        assertThat(report.decisions()).containsExactly(
+                entry("ambiguous", 2), entry("attach-same-folder", 2), entry("attach-shell", 5));
+        assertThat(report.rejections()).containsExactly(
+                entry("claim: a weak claim yields to the strong claims of other files", 2));
+        assertThat(report.weakMatches()).containsExactly(
+                entry("a match by its name as it reads goes before books found with \" (1)\" read as a copy", 1),
+                entry("attached by its own weak match", 1),
+                entry("its weak match agrees with the strong match of the files it would be one book with", 1),
+                entry("its weak match yields to the strong claims of other files on its book", 2),
+                entry("its weak match yields to the strong match of the files it would be one book with", 1));
+    }
+
+    @Test
+    void countsTheFilesAWeakMatchGaveABookAndThoseItCameToNothingFor() throws IOException {
+        // A follower of a weak match is a new attach too; weak matches that do not agree split their group
+        Files.writeString(dir.resolve("shells.tsv"), """
+                10\t1\t0\t1\tSurvival\tNULL\tNULL\tAnn Smith
+                11\t1\t0\t1\tSurvival\tNULL\tNULL\tAnn Smith
+                20\t1\t0\t1\tThe Martian\tNULL\tNULL\tAnn Smith
+                """);
+        Files.writeString(dir.resolve("existing.tsv"), "");
+        Files.writeString(dir.resolve("newfiles.tsv"), """
+                1\tS/Smith, Ann/Survival\tSurvival.epub
+                1\tS/Smith, Ann/Survival\tNotes.pdf
+                1\tS/Smith, Ann/Mixed\tSurvival.epub
+                1\tS/Smith, Ann/Mixed\tThe Martian (1).epub
+                """);
+
+        Report report = RescanDryRun.run(RescanDryRun.Exports.read(dir.resolve("shells.tsv"), dir.resolve("existing.tsv"),
+                dir.resolve("newfiles.tsv")), LibraryOrganizationMode.BOOK_PER_FOLDER);
+
+        assertThat(decisions(report)).containsExactly(
+                entry("S/Smith, Ann/Survival/Survival.epub", "attach-shell 10"),
+                entry("S/Smith, Ann/Survival/Notes.pdf", "attach-shell 10"),
+                entry("S/Smith, Ann/Mixed/Survival.epub", "ambiguous 10,20"),
+                entry("S/Smith, Ann/Mixed/The Martian (1).epub", "ambiguous 10,20"));
+        assertThat(report.weakMatches()).containsExactly(
+                entry("attached by a weak match of the files it would be one book with", 1),
+                entry("attached by its own weak match", 1),
+                entry("its weak match comes to nothing: its group is split or turned down, or its book's claims rejected", 2));
+    }
+
+    @Test
     void writesTheReportFromTheCommandLine() throws IOException {
         Path out = dir.resolve("report.tsv");
 
@@ -264,7 +360,8 @@ class RescanDryRunTest {
         assertThat(lines.getFirst()).isEqualTo("# decision\ttarget\tgroup_key\treason\tlibrary_path_id\tfile_sub_path\tfile_name");
         assertThat(lines).filteredOn(line -> !line.startsWith("#")).hasSize(18)
                 .allSatisfy(line -> assertThat(line.split("\t", -1)).hasSize(7));
-        assertThat(lines).contains("#   attach-shell\t5", "#   new-book\t7");
+        assertThat(lines).contains("#   attach-shell\t5", "#   new-book\t7",
+                "# weak matches (one of alike fileless books, or \" (1)\" read as a copy), by outcome:");
     }
 
     @Test

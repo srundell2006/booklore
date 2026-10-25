@@ -220,36 +220,36 @@ public final class RescanDryRun {
 
     /**
      * What came of a weak match ({@code Match.weak}: one of alike fileless books, or a " (1)" read as a copy) for the
-     * file: its own, or one its group followed; or of the books only such a reading found, where a match by the name as
-     * it reads went before them. Null when no weak match had a part in the file's decision.
+     * file: its own, or one its group followed; or of the books only a " (1)" read as a copy found, where a match by the
+     * name as it reads went before them. The outcomes that start with "attached" are the attaches only the newer rules
+     * make. Null when no weak match had a part in the file's decision.
      */
     private static String weakOutcome(LibraryFile file, Attachment attachment, List<LibraryFile> group, Trace trace) {
         Decision fileless = trace.fileless.get(file);
-        if (fileless instanceof Match own && own.weak()) {
-            if (attachment != null) {
-                return attachment.bookId() == own.bookId()
-                        ? "attached by its own weak match"
-                        : "its weak match yields to the strong match of the files it would be one book with";
-            }
-            if (trace.yieldedClaims.containsKey(file)) {
-                return "its weak match yields to the strong claims of other files on its book";
-            }
-            return "its weak match comes to nothing: its group is split or turned down, or its book's claims rejected";
-        }
-        if (attachment != null && !(fileless instanceof Match) && !(trace.inFolder.get(file) instanceof Match)) {
-            boolean strongInGroup = group.stream().anyMatch(other -> isStrongMatch(trace.inFolder.get(other), attachment.bookId())
-                    || isStrongMatch(trace.fileless.get(other), attachment.bookId()));
-            if (!strongInGroup) {
-                return "attached by a weak match of the files it would be one book with";
-            }
-        }
-        if (trace.yieldedClaims.containsKey(file)) {
-            return "follows a weak match that yields to the strong claims of other files";
-        }
-        if (fileless instanceof Match own && own.reason().contains(YIELDING_AS_COPY)) {
+        if (fileless instanceof Match own && !own.weak() && own.reason().contains(YIELDING_AS_COPY)) {
             return "a match by its name as it reads goes before books found with \" (1)\" read as a copy";
         }
-        return null;
+        Match weak = fileless instanceof Match own && own.weak() ? own : null;
+        if (attachment != null) {
+            boolean strong = group.stream().anyMatch(other -> isStrongMatch(trace.inFolder.get(other), attachment.bookId())
+                    || isStrongMatch(trace.fileless.get(other), attachment.bookId()));
+            if (!strong) {
+                return weak != null ? "attached by its own weak match" : "attached by a weak match of the files it would be one book with";
+            }
+            if (weak == null) {
+                return null;
+            }
+            return weak.bookId() == attachment.bookId()
+                    ? "its weak match agrees with the strong match of the files it would be one book with"
+                    : "its weak match yields to the strong match of the files it would be one book with";
+        }
+        if (trace.yieldedClaims.containsKey(file)) {
+            return weak != null
+                    ? "its weak match yields to the strong claims of other files on its book"
+                    : "follows a weak match that yields to the strong claims of other files on its book";
+        }
+        return weak == null ? null
+                : "its weak match comes to nothing: its group is split or turned down, or its book's claims rejected";
     }
 
     private static boolean isStrongMatch(Decision decision, long bookId) {

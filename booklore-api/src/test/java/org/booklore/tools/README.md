@@ -39,7 +39,7 @@ There is one tab-separated line per new file, with these columns:
 |---|---|---|
 | `attach-shell` | attached to a fileless book | that book's id |
 | `attach-same-folder` | attached to a book with files in the same folder | that book's id |
-| `ambiguous` | becomes a new book because more than one book qualifies, because a fileless book's claims were rejected (claimed from 2+ folders, or by two different files of one format), because the files it would form one book with matched different books, or because the book they matched turned one of them down | the candidate ids |
+| `ambiguous` | becomes a new book because more than one book qualifies, because a fileless book's claims were rejected (claimed from 2+ folders, or by two different files of one format), because the files it would form one book with matched different books, because the book they matched turned one of them down, or because its weak claim on a fileless book yields to the strong claims of other files (see below) | the candidate ids |
 | `new-book` | becomes a new book; no existing book matches | `-` |
 
 - `group_key` is the new book the file belongs to, in the format `<library_path_id>:<sub path>:<key>`.
@@ -75,7 +75,22 @@ The report ends with lines starting with `#`:
   `claim: claimed by files of N folders [...]`,
   `fileless: has a one-word title, which needs its author's given name in the path as the book has it`,
   `fileless: is number N of its series, and " (1)" may mean volume 1`,
-  `fileless: is number N of a series of the same name, and " (1)" may mean volume 1`.
+  `fileless: is number N of a series of the same name, and " (1)" may mean volume 1`,
+  `claim: a weak claim yields to the strong claims of other files`;
+- for files whose decision a weak match had a part in, the count of each outcome. The outcomes
+  that start with `attached` are the attaches only the newer rules make; the others are weak
+  matches that did not change what the file got:
+
+  | outcome | the file |
+  |---|---|
+  | `attached by its own weak match` | is attached to the book of its weak match, which no strong match of its group contradicts |
+  | `attached by a weak match of the files it would be one book with` | has no match of its own, and follows the weak matches of its group |
+  | `its weak match agrees with the strong match of the files it would be one book with` | goes to that book, as it would without its weak match |
+  | `its weak match yields to the strong match of the files it would be one book with` | goes to the book of its group's strong match instead |
+  | `its weak match yields to the strong claims of other files on its book` | becomes a new book; the strong claims get the book |
+  | `follows a weak match that yields to the strong claims of other files on its book` | as the last, without a match of its own |
+  | `its weak match comes to nothing: ...` | becomes a new book: its group's matches do not agree or a file of it is turned down, or its book's claims were rejected |
+  | `a match by its name as it reads goes before books found with " (1)" read as a copy` | matched a book strongly; the books its ` (1)` read as a copy finds yield to it |
 
 Useful cuts:
 
@@ -83,7 +98,30 @@ Useful cuts:
 grep -v '^#' report.tsv | awk -F'\t' '$1=="attach-shell"' | less        # every attach to a fileless book
 grep -v '^#' report.tsv | awk -F'\t' '$1=="new-book" && $4 ~ /is not by/' # files turned down on the author rule
 grep -v '^#' report.tsv | awk -F'\t' '$4 ~ /alike fileless books|read as a copy/' # attaches to alike books, or of a " (1)"
+grep -v '^#' report.tsv | awk -F'\t' '$4 ~ /weak match yields|weak claim on/'   # weak matches that yield
 ```
+
+### Weak matches
+
+A match that only the choice among alike fileless books, or a ` (1)` read as a copy, makes is
+weak. These two rules only ever add a book to a file that the rules before them gave none; they
+never take one away or change it. So:
+
+- A book the name reads as goes before the books only its ` (1)` read as a copy finds, and the
+  reason names those: `title and author agree with book#1 "Nico (Book 1)";
+  book#2 "Nico" qualifies only if " (1)" is a copy, and yields`.
+- The files that would be one new book go to the book of their strong matches. A file whose own
+  weak match is another book is attached with them, and its reason says so: `goes with the files
+  it would be one book with; its own weak match yields to theirs: title and author agree with
+  book#10 "Killing Floor", one of 2 alike fileless books (book#10, book#11)`. Weak matches only
+  count in a group that has no strong one, and must then agree.
+- When a fileless book's claims do not agree but its strong claims alone do, the book gets the
+  files of the strong claims. The files whose claims only weak matches made, their own or those
+  of the files they would be one book with, become a new book: decision `ambiguous`, reason `its
+  weak claim on fileless book#70 yields to the strong claims of other files, which get it:
+  claimed by files of 2 folders [...]: The MEG.epub, MEG (1).epub; the weak claims of MEG
+  (1).epub yield to the others`. A file of a group that a strong match gave its book claims it
+  as strongly, whatever its own match.
 
 ## The exports
 
