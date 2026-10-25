@@ -851,6 +851,21 @@ class ExistingBookMatcherTest {
         }
 
         @Test
+        void noCopyReadingTakesBackWhatTheNameAsItReadsSaysAgainstABook() {
+            // Read as a copy, the plain reading of "01 - Survival (1).epub" is "Survival #1", which "Survival: Book 1"
+            // is; but its series reading says it is number 1 of a series, and the book has no number
+            FileEvidence numbered = file("G/Neil Gaiman", "01 - Survival (1).epub");
+            ShellCandidate bookOne = ShellCandidate.of(10, PATH, false, true, "Survival", "Book 1", null, null,
+                    List.of("Neil Gaiman"));
+            NoMatch expected = new NoMatch("book#10 \"Survival\" is not number 1 of its series", Set.of(10L));
+            assertThat(shellMatch(numbered, bookOne)).isEqualTo(expected);
+            // Also where the book's number is another, and the copy reading, numbered too, would take no guard
+            ShellCandidate second = ShellCandidate.of(10, PATH, false, true, "Survival", "Book 1", null, 2f,
+                    List.of("Neil Gaiman"));
+            assertThat(shellMatch(numbered, second)).isEqualTo(expected);
+        }
+
+        @Test
         void aWeakMatchKeepsTheBooksTheOtherRulesSayTheFileIsNot() {
             // "03. The Long Night (1).epub" is not number 1 of a series; read as a copy it is number 3. Should it
             // yield to its group's book, it must still turn down the first, as without the copy reading

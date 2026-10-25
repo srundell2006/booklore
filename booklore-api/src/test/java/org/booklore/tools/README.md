@@ -111,7 +111,9 @@ never take one away or change it. So:
 
 - A book the name reads as goes before the books only its ` (1)` read as a copy finds, and the
   reason names those: `title and author agree with book#1 "Nico (Book 1)";
-  book#2 "Nico" qualifies only if " (1)" is a copy, and yields`.
+  book#2 "Nico" qualifies only if " (1)" is a copy, and yields`. A book the name as it reads
+  turns down stays turned down: `01 - Survival (1).epub` is number 1 of a series, so not a
+  fileless `Survival: Book 1` without a number, which it would be with its ` (1)` read as a copy.
 - The files that would be one new book go to the book of their strong matches. A file whose own
   weak match is another book is attached with them, and its reason says so: `goes with the files
   it would be one book with; its own weak match yields to theirs: title and author agree with

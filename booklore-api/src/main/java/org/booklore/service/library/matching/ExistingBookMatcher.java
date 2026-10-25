@@ -69,7 +69,9 @@ import java.util.stream.Collectors;
  * Match#weak}), and the books the name reads as without them decide first: a file that reads as one book is that
  * book's, whatever its " (1)" read as a copy finds besides ("Nico (1).epub" is "Nico (Book 1)", next to a "Nico" by the
  * same author), and when it reads as several only the choice among alike ones may pick one of them. Only when the name
- * reads as no book do the books found with its " (1)" read as a copy count, and those the " (1)" guard turned down. A
+ * reads as no book do the books found with its " (1)" read as a copy count, and those the " (1)" guard turned down,
+ * but never one that the name as it reads says it is not: "01 - Survival (1).epub" is number 1 of a series, so not
+ * the fileless "Survival: Book 1" without a series number, which it would be with its " (1)" read as a copy. A
  * rescan's other files then outweigh a weak match: the files that would be one new book go to the book of their
  * strong matches, so "Killing Floor.epub", weakly one of two alike fileless "Killing Floor"s, goes with "The Killing
  * Floor (1).epub" to the book of "01. Killing Floor - Lee Child (2006).mobi" in their folder; and where strong and
@@ -111,7 +113,8 @@ public final class ExistingBookMatcher {
          * The books whose title the file reads as but which it says it is not, as the rules before the weak ones
          * ({@link Match#weak}) count them: it names another author, year or series number, or is in another library
          * path. A book turned down only for want of evidence (no author in the path) is not among them, nor one that
-         * any reading of the name accepts. A file of the same new book must not be attached to these either.
+         * another reading of the name accepts without its " (1)" read as a copy; no reading as a copy accepts one of
+         * them. A file of the same new book must not be attached to these either.
          */
         Set<Long> refused();
 
@@ -471,6 +474,12 @@ public final class ExistingBookMatcher {
             // Accepted already, by a reading at least as good
             return;
         }
+        Rejection earlier = findings.rejected().get(shell.bookId());
+        if (asCopy && earlier != null && earlier.refuses()) {
+            // The name as it reads says it is not this book ("01 - Survival (1).epub" is number 1, and "Survival:
+            // Book 1" has no number), and no reading of its " (1)" as a copy makes it so
+            return;
+        }
         Rejection rejection = rejection(file, reading, evidence, seriesNumber, shell);
         if (rejection != null && asCopy) {
             rejection = rejection.readAsCopy();
@@ -490,7 +499,13 @@ public final class ExistingBookMatcher {
             findings.accepted().put(shell.bookId(), new Accepted(shell, asCopy));
             findings.rejected().remove(shell.bookId());
             findings.doubted().remove(shell.bookId());
-        } else if (already == null) {
+        } else if (already == null || rejection.refuses()) {
+            // What the name as it reads says against a book outweighs its reading as a copy of it, accepted or
+            // doubted, as the rules before that reading had it
+            if (rejection.refuses()) {
+                findings.accepted().remove(shell.bookId());
+                findings.doubted().remove(shell.bookId());
+            }
             Rejection labelled = new Rejection(label(shell) + " " + rejection.why(), rejection.against(), rejection.asCopy());
             // Evidence against the book from one reading outweighs a want of evidence from another
             findings.rejected().merge(shell.bookId(), labelled, Rejection::weightier);
