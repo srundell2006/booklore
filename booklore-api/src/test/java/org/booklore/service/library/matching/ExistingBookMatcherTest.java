@@ -341,6 +341,22 @@ class ExistingBookMatcherTest {
             assertThat(matchedId(shellMatch(file("C/Rachel Cohn/Dash & Lily", "Dash & Lily's Book of Dares.epub"),
                     shell(8, "Dash & Lily's Book of Dares", null, "Dash & Lily", 1f, "Rachel; Levithan Cohn")))).isEqualTo(8);
         }
+
+        @Test
+        void aFolderNamedAfterARowWithItsBracket() {
+            // The folder reads "Alfred Hitchcock (ed.)" as a person named Ed, as the row read before; the row without its
+            // bracket is Alfred Hitchcock, and it also still stands as written, so the folder keeps agreeing with it
+            assertThat(matchedId(shellMatch(file("E/Alfred Hitchcock (ed.)", "Alfred Hitchcock Presents - Fear and Trembling.epub"),
+                    shell(9, "Alfred Hitchcock Presents: Fear and Trembling", null, null, null, "Alfred Hitchcock (ed.)"))))
+                    .isEqualTo(9);
+        }
+
+        @Test
+        void aFolderNamedAfterARowWhoseBracketHoldsTheName() {
+            // Without its bracket the row is Fel alone, a surname without a given name that never agrees strongly enough
+            assertThat(matchedId(shellMatch(file("G/Fel (James Galloway)/Tarrin Kael Firestaff Series", "Into the Light.epub"),
+                    shell(10, "Into the Light", null, null, null, "Fel (James Galloway)")))).isEqualTo(10);
+        }
     }
 
     @Nested
@@ -1394,6 +1410,13 @@ class ExistingBookMatcherTest {
             // One author row "Arthur C. Clarke;Gentry Lee" is both authors: "Cradle - Gentry Lee.mobi" reads as "Cradle"
             assertThat(matchedId(folderMatch(file("SF/Rama", "Cradle.epub"),
                     book(30, List.of("Arthur C. Clarke;Gentry Lee"), "Cradle - Gentry Lee.mobi")))).isEqualTo(30);
+        }
+
+        @Test
+        void anAuthorPartOfTheNewFileThatIsOneOfTheAuthorsAStoredNamePacks() {
+            // The other way round: the book's one author row vouches for the new file's "Gentry Lee"
+            assertThat(matchedId(folderMatch(file("SF/Rama", "Cradle - Gentry Lee.epub"),
+                    book(31, List.of("Arthur C. Clarke;Gentry Lee"), "Cradle.mobi")))).isEqualTo(31);
         }
 
         @Test

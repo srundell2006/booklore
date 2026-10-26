@@ -159,16 +159,19 @@ A first line that names the columns is skipped. Lines starting with `#` are skip
 
 | file | columns |
 |---|---|
-| `shells.tsv` | `id, library_path_id, is_physical, has_cover, title, subtitle, series_number, authors[, series_name]` (authors joined with the unit separator (0x1F); series_name optional) |
-| `existing.tsv` | `book_id, library_path_id, file_sub_path, file_name, book_type[, authors]` (book formats of books that are not deleted; authors joined with the unit separator (0x1F), optional) |
+| `shells.tsv` | `id, library_path_id, is_physical, has_cover, title, subtitle, series_number, authors[, series_name]` (authors, each ending with the unit separator (0x1F); series_name optional) |
+| `existing.tsv` | `book_id, library_path_id, file_sub_path, file_name, book_type[, authors]` (book formats of books that are not deleted; authors, each ending with the unit separator (0x1F), optional) |
 | `newfiles.tsv` | `library_path_id, file_sub_path, file_name` (`file_sub_path` is empty for the library root) |
 
 Notes on the columns:
-- The authors are the book's author rows, one stored name each, joined with the unit separator
-  (0x1F), which `mariadb -B` writes as it is. A stored name may hold a `;` itself, such as `Arthur C. Clarke;Gentry Lee`, and the app
-  reads each stored name on its own, so the dry run needs to know where one row ends. Older
-  exports joined with `; ` still read: without a unit separator in it, the column is split at `;`
-  as before, and a stored name holding a `;` then reads as several rows.
+- The authors are the book's author rows, one stored name each, and each name, the last
+  included, ends with the unit separator (0x1F), which `mariadb -B` writes as it is. A stored
+  name may hold a `;` itself, such as `Arthur C. Clarke;Gentry Lee` or the entity in
+  `P&eacute;ter N&aacute;das`, and the app reads each stored name on its own, so the dry run
+  needs to know where one row ends, also for a book with one author row. `CHAR(31 USING utf8mb4)`
+  keeps the column text: a bare `CHAR(31)` is binary. Older exports joined with `; ` still read:
+  a column without a unit separator in it is split at `;` as before, and a stored name holding a
+  `;` then reads as several rows.
 - Without `series_name` in `shells.tsv`, as in an export made before it was added, a book's series
   has no name unless its title ends in a `(Series, #N)` suffix. The rule for a lone ` (1)` then
   turns down books the rescan would attach, such as `The Testaments (1).epub` for a fileless
@@ -212,7 +215,7 @@ rescan itself are left out by their `added_on`.
 SELECT b.id, b.library_path_id, COALESCE(b.is_physical, 0),
        (b.book_cover_hash IS NOT NULL OR b.audiobook_cover_hash IS NOT NULL),
        m.title, m.subtitle, m.series_number,
-       (SELECT GROUP_CONCAT(a.name ORDER BY am.sort_order SEPARATOR 0x1F)
+       (SELECT CONCAT(GROUP_CONCAT(a.name ORDER BY am.sort_order SEPARATOR 0x1F), CHAR(31 USING utf8mb4))
           FROM book_metadata_author_mapping am JOIN author a ON a.id = am.author_id
          WHERE am.book_id = b.id),
        m.series_name
@@ -231,7 +234,7 @@ authors.
 
 ```sql
 SELECT bf.book_id, b.library_path_id, bf.file_sub_path, bf.file_name, bf.book_type,
-       (SELECT GROUP_CONCAT(a.name ORDER BY am.sort_order SEPARATOR 0x1F)
+       (SELECT CONCAT(GROUP_CONCAT(a.name ORDER BY am.sort_order SEPARATOR 0x1F), CHAR(31 USING utf8mb4))
           FROM book_metadata_author_mapping am JOIN author a ON a.id = am.author_id
          WHERE am.book_id = b.id)
 FROM book_file bf

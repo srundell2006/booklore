@@ -67,17 +67,20 @@ class PersonNameTest {
             Mima Simi&#263;                                     | simic mima
             Patrick K. O&rsquo;Donnell                          | odonnell patrick k
             Aaron&nbsp;C. Davis                                 | davis aaron c
-            Kenneth (Lester Dent & Evelyn Coulson) Robeson      | robeson kenneth
-            Lindsey Priestley (Edited by)                       | priestley lindsey
-            David G. Hartwell (ed.)                             | hartwell david g
-            Oscar Lewis; Alberto Beltran (illustrations         | lewis oscar; beltran alberto
+            Kenneth (Lester Dent & Evelyn Coulson) Robeson      | robeson kenneth; robeson kenneth lester dent evelyn coulson
+            Lindsey Priestley (Edited by)                       | priestley lindsey; by lindsey priestley edited
+            David G. Hartwell (ed.)                             | hartwell david g; ed david g hartwell
+            Fel (James Galloway)                                | fel; galloway fel james
+            Oscar Lewis; Alberto Beltran (illustrations         | lewis oscar; beltran alberto; illustrations oscar lewis alberto beltran
+            Jane Doe [Translator]                               | doe jane; translator jane doe
+            Oscar Lewis; Alberto Beltran [illustrations         | lewis oscar; beltran alberto; illustrations oscar lewis alberto beltran
             Louann Brizendine; M.D.                             | brizendine louann
             Ronald C White; Jr.                                 | white ronald c
             ANGEL PAYNE &                                       | payne angel
             """)
     void readsTheAuthorsAStoredNameStandsFor(String stored, String expected) {
-        // Each expected author is its surname and then its given names
-        assertThat(PersonName.parseAuthor(stored)).extracting(name -> name.surname() + " " + String.join(" ", name.givenNames()))
+        // Each expected author is its surname and then its given names; a name with a bracket also stands as written
+        assertThat(PersonName.parseAuthor(stored)).extracting(name -> (name.surname() + " " + String.join(" ", name.givenNames())).trim())
                 .containsExactly(expected.split("; "));
     }
 

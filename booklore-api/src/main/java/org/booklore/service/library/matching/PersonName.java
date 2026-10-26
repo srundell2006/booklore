@@ -67,7 +67,9 @@ public record PersonName(String surname, List<String> givenNames) {
      * The authors one stored author name stands for, in order and each once. A book's authors are stored one name
      * each, but some names hold several: "Arthur C. Clarke;Gentry Lee" is Clarke and Lee, where {@link #parse} reads
      * one person named Lee. HTML entities are read ({@code P&eacute;ter} is Péter), and a part in brackets is left out
-     * ("Lindsey Priestley (Edited by)", "Kenneth (Lester Dent & Evelyn Coulson) Robeson").
+     * ("Lindsey Priestley (Edited by)", "Kenneth (Lester Dent & Evelyn Coulson) Robeson"). A name with a bracket also
+     * stands as written, since an author folder is often named after it: "Alfred Hitchcock (ed.)" is Alfred Hitchcock
+     * and, as {@link #parse} reads it, a person named Ed.
      * <p>
      * A name splits at ';' and '&' only when every part is a full name, with a given name or an initial, or no name at
      * all ("Louann Brizendine; M.D."). Otherwise it is one name, as {@link #parse} reads it: "Grosset & Dunlap", or
@@ -77,8 +79,21 @@ public record PersonName(String surname, List<String> givenNames) {
         if (stored == null || stored.isBlank()) {
             return List.of();
         }
-        String s = stored.indexOf('&') >= 0 ? StringEscapeUtils.unescapeHtml4(stored) : stored;
-        s = BRACKETED.matcher(s).replaceAll(" ");
+        String decoded = stored.indexOf('&') >= 0 ? StringEscapeUtils.unescapeHtml4(stored) : stored;
+        String s = BRACKETED.matcher(decoded).replaceAll(" ");
+        Set<PersonName> names = new LinkedHashSet<>(namesIn(s));
+        if (!s.equals(decoded)) {
+            // An author folder is often named as the book has it, bracket included: "Alfred Hitchcock (ed.)"
+            PersonName asWritten = parse(decoded);
+            if (asWritten != null) {
+                names.add(asWritten);
+            }
+        }
+        return List.copyOf(names);
+    }
+
+    /** The names in a stored author name without brackets: its parts when all are full names, else the whole. */
+    private static List<PersonName> namesIn(String s) {
         List<String> parts = Arrays.stream(MULTI.split(s)).filter(part -> !part.isBlank()).toList();
         if (parts.isEmpty()) {
             return List.of();
@@ -87,7 +102,7 @@ public record PersonName(String surname, List<String> givenNames) {
             List<PersonName> names = parts.stream().map(PersonName::parse).filter(Objects::nonNull).toList();
             // A part that is a surname alone, such as "Rachel" of "Rachel; Levithan Cohn", is no author of its own
             if (!names.isEmpty() && names.stream().allMatch(PersonName::hasGivenName)) {
-                return names.stream().distinct().toList();
+                return names;
             }
         }
         PersonName name = parts.size() == 1 ? parse(parts.getFirst()) : parse(s);

@@ -63,11 +63,11 @@ import java.util.stream.Collectors;
  * columns is skipped. The SQL that writes them from MariaDB is in {@code README.md} next to this class.
  * <ul>
  *   <li>{@code shells.tsv}: the library's books without any book_file row, not deleted: id, library_path_id,
- *       is_physical, has_cover, title, subtitle, series_number, authors (joined with the unit separator, 0x1F), and
+ *       is_physical, has_cover, title, subtitle, series_number, authors (each ending with the unit separator, 0x1F), and
  *       optionally series_name. Without it, a book's series has no name unless its title has a "(Series, #N)"
  *       suffix, and the rule for a lone " (1)" turns down more books than the rescan would.</li>
  *   <li>{@code existing.tsv}: the book formats of the library's books that are not deleted: book_id, library_path_id,
- *       file_sub_path, file_name, book_type, and optionally the book's authors joined with the unit separator.
+ *       file_sub_path, file_name, book_type, and optionally the book's authors, each ending with the unit separator.
  *       Without authors, same-folder matching cannot drop an author part of a name that only the book's authors
  *       vouch for.</li>
  *   <li>{@code newfiles.tsv}: the files the rescan would find new: library_path_id, file_sub_path, file_name. A name
@@ -579,9 +579,9 @@ public final class RescanDryRun {
         }
 
         /**
-         * A book's author names, one per author row. Exports join them with the unit separator (0x1F), since a stored
-         * name may hold a ';' itself ("Arthur C. Clarke;Gentry Lee"); older exports joined them with "; ", and are
-         * split at ';' as before.
+         * A book's author names, one per author row. Exports end each name with the unit separator (0x1F), since a
+         * stored name may hold a ';' itself ("Arthur C. Clarke;Gentry Lee", "P&eacute;ter"), also when it is the book's
+         * only one; older exports joined them with "; ", and are split at ';' as before.
          */
         private static List<String> names(String joined) {
             if (joined == null || joined.isBlank()) {
