@@ -47,12 +47,14 @@ There is one tab-separated line per new file, with these columns:
   show the same key.
 - `reason` comes from the matcher. For example, `fileless: book#500 "Survival" has none of its
   authors in the path`, or `folder: 2 books in the folder have this title`.
-- `weak_match` says what came of a weak match (see [Weak matches](#weak-matches)) for the file:
-  one of the outcomes the summary counts (see below), or `-` when no weak match had a part in its
-  decision. The outcomes that start with `attached` are the attaches only the newer rules make.
-  Select those by this column, not by the reason: a reason that names alike books or a ` (1)`
-  read as a copy may also be that of a new book, of a weak match that agrees with its group's
-  strong match (an attach the rules before made too), or quote a weak match that yielded.
+- `weak_match` says what came of a weak match (see [Weak matches](#weak-matches)) for the file,
+  its own or, for a file without one, those of its group that it follows where no strong match
+  gave the group a book: one of the outcomes the summary counts (see below), or `-` when no weak
+  match had a part in its decision. The outcomes that start with `attached` are the attaches only
+  the newer rules make. Select those by this column, not by the reason: a reason that names alike
+  books or a ` (1)` read as a copy may also be that of a new book, of a weak match that agrees with
+  its group's strong match (an attach the rules before made too), or quote a weak match that
+  yielded.
 - An `attach-shell` reason also says when the file went to one of several alike fileless books
   (the same title, with the same year in brackets if any, series number and authors), as in `title and author agree with book#12
   "Survival", one of 2 alike fileless books (book#12, book#40)`, and when a ` (1)` at the end of
@@ -101,6 +103,7 @@ The report ends with lines starting with `#`:
   | `its weak match yields to the strong claims of other files on its book` | becomes a new book; the strong claims get the book |
   | `follows a weak match that yields to the strong claims of other files on its book` | as the last, without a match of its own |
   | `its weak match comes to nothing: ...` | becomes a new book: its group's matches do not agree or a file of it is turned down, or its book's claims were rejected |
+  | `follows a weak match that comes to nothing: ...` | as the last, without a match of its own: its group has no strong match, and the book its weak matches gave it is lost the same way |
   | `a match by its name as it reads goes before books found with " (1)" read as a copy` | matched a book strongly; the books its ` (1)` read as a copy finds yield to it |
 
 Useful cuts:

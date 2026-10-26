@@ -89,8 +89,9 @@ import java.util.stream.Collectors;
  * reason says that its own weak match yields to theirs. A reason that turns a book down with the " (1)" read as a copy
  * says so, {@code (" (1)" read as a copy)}: that keeps the file's group only from a book that weak matches alone give
  * it, never from one a strong match gives it. So the reason does not tell the attaches only the newer rules make from
- * the others; weak_match does: what came of a weak match for the file, as the summary counts it, or {@code -} when no
- * weak match had a part in its decision. The outcomes that start with {@code attached} are those attaches.
+ * the others; weak_match does: what came of a weak match for the file, its own or, for a file without one, those its
+ * group's book came from alone, as the summary counts it, or {@code -} when no weak match had a part in its decision.
+ * The outcomes that start with {@code attached} are those attaches.
  * <p>
  * The group key is the new book the file would be part of, {@code <library_path_id>:<sub path>:<key>}; files attached
  * to an existing book show the group they would have formed. Lines starting with {@code #} close the report: the
@@ -224,9 +225,10 @@ public final class RescanDryRun {
 
     /**
      * What came of a weak match ({@code Match.weak}: one of alike fileless books, or a " (1)" read as a copy) for the
-     * file: its own, or one its group followed; or of the books only a " (1)" read as a copy found, where a match by the
-     * name as it reads went before them. The outcomes that start with "attached" are the attaches only the newer rules
-     * make. Null when no weak match had a part in the file's decision.
+     * file: its own, or, for a file without one, those that alone gave its group a book, which it follows to that book,
+     * or into a claim that yields, a split, a refusal or rejected claims; or of the books only a " (1)" read as a copy
+     * found, where a match by the name as it reads went before them. The outcomes that start with "attached" are the
+     * attaches only the newer rules make. Null when no weak match had a part in the file's decision.
      */
     private static String weakOutcome(LibraryFile file, Attachment attachment, List<LibraryFile> group, Trace trace) {
         Decision fileless = trace.fileless.get(file);
@@ -252,12 +254,29 @@ public final class RescanDryRun {
                     ? "its weak match yields to the strong claims of other files on its book"
                     : "follows a weak match that yields to the strong claims of other files on its book";
         }
-        return weak == null ? null
-                : "its weak match comes to nothing: its group is split or turned down, or its book's claims rejected";
+        if (weak != null) {
+            return "its weak match comes to nothing: its group is split or turned down, or its book's claims rejected";
+        }
+        // Without a match of its own, a file of a group that only weak matches gave a book followed them, there to be
+        // split, turned down or rejected with them; where a strong match gave its group the book, theirs had no part
+        return weakMatchesAlone(group, trace)
+                ? "follows a weak match that comes to nothing: its group is split or turned down, or its book's claims rejected"
+                : null;
     }
 
     private static boolean isStrongMatch(Decision decision, long bookId) {
         return decision instanceof Match match && !match.weak() && match.bookId() == bookId;
+    }
+
+    /**
+     * Whether the group's book, or the books it is split over, came from weak matches alone: some file of it has one,
+     * and none has a strong match.
+     */
+    private static boolean weakMatchesAlone(List<LibraryFile> group, Trace trace) {
+        boolean anyWeak = group.stream().anyMatch(file -> trace.fileless.get(file) instanceof Match match && match.weak());
+        boolean anyStrong = group.stream().anyMatch(file -> trace.inFolder.get(file) instanceof Match inFolder && !inFolder.weak()
+                || trace.fileless.get(file) instanceof Match fileless && !fileless.weak());
+        return anyWeak && !anyStrong;
     }
 
     private static Line line(LibraryFile file, NewFile row, String groupKey, Attachment attachment, Trace trace) {

@@ -340,7 +340,8 @@ class RescanDryRunTest {
 
     @Test
     void countsTheFilesAWeakMatchGaveABookAndThoseItCameToNothingFor() throws IOException {
-        // A follower of a weak match is a new attach too; weak matches that do not agree split their group
+        // A follower of a weak match is a new attach too; weak matches that do not agree split their group, and the
+        // files that would follow them too
         Files.writeString(dir.resolve("shells.tsv"), """
                 10\t1\t0\t1\tSurvival\tNULL\tNULL\tAnn Smith
                 11\t1\t0\t1\tSurvival\tNULL\tNULL\tAnn Smith
@@ -352,6 +353,7 @@ class RescanDryRunTest {
                 1\tS/Smith, Ann/Survival\tNotes.pdf
                 1\tS/Smith, Ann/Mixed\tSurvival.epub
                 1\tS/Smith, Ann/Mixed\tThe Martian (1).epub
+                1\tS/Smith, Ann/Mixed\tNotes.pdf
                 """);
 
         Report report = RescanDryRun.run(RescanDryRun.Exports.read(dir.resolve("shells.tsv"), dir.resolve("existing.tsv"),
@@ -361,11 +363,79 @@ class RescanDryRunTest {
                 entry("S/Smith, Ann/Survival/Survival.epub", "attach-shell 10"),
                 entry("S/Smith, Ann/Survival/Notes.pdf", "attach-shell 10"),
                 entry("S/Smith, Ann/Mixed/Survival.epub", "ambiguous 10,20"),
-                entry("S/Smith, Ann/Mixed/The Martian (1).epub", "ambiguous 10,20"));
+                entry("S/Smith, Ann/Mixed/The Martian (1).epub", "ambiguous 10,20"),
+                entry("S/Smith, Ann/Mixed/Notes.pdf", "ambiguous 10,20"));
         assertThat(report.weakMatches()).containsExactly(
                 entry("attached by a weak match of the files it would be one book with", 1),
                 entry("attached by its own weak match", 1),
+                entry("follows a weak match that comes to nothing: its group is split or turned down, or its book's claims"
+                        + " rejected", 1),
                 entry("its weak match comes to nothing: its group is split or turned down, or its book's claims rejected", 2));
+        // Before the weak rules the Mixed files were a new book: the split is the weak matches' doing, the pdf's too
+        assertThat(report.lines()).filteredOn(line -> line.decision().equals("ambiguous")).allSatisfy(
+                line -> assertThat(line.weakMatch()).endsWith("comes to nothing: its group is split or turned down, or"
+                        + " its book's claims rejected"));
+    }
+
+    @Test
+    void aFileThatFollowsAWeakMatchSaysSoWhenTheBooksClaimsAreRejected() throws IOException {
+        // "Survival (2).epub" has no match of its own and follows "Survival.epub", one of two alike books: the claims
+        // of two folders on that book are rejected, its own with them. Before the weak rules it was a new book with
+        // no fileless book of its title, so a weak match decided its line too
+        Files.writeString(dir.resolve("shells.tsv"), """
+                10\t1\t0\t1\tSurvival\tNULL\tNULL\tAnn Smith\tNULL
+                11\t1\t0\t1\tSurvival\tNULL\tNULL\tAnn Smith\tNULL
+                """);
+        Files.writeString(dir.resolve("existing.tsv"), "");
+        Files.writeString(dir.resolve("newfiles.tsv"), """
+                1\tS/Smith, Ann\tSurvival.epub
+                1\tS/Smith, Ann\tSurvival (2).epub
+                1\tS/Smith, Ann/Other\tSurvival.epub
+                """);
+
+        Report report = run();
+
+        assertThat(decisions(report)).containsExactly(
+                entry("S/Smith, Ann/Survival.epub", "ambiguous 10"),
+                entry("S/Smith, Ann/Survival (2).epub", "ambiguous 10"),
+                entry("S/Smith, Ann/Other/Survival.epub", "ambiguous 10"));
+        assertThat(report.lines()).extracting(Line::weakMatch).containsExactly(
+                "its weak match comes to nothing: its group is split or turned down, or its book's claims rejected",
+                "follows a weak match that comes to nothing: its group is split or turned down, or its book's claims rejected",
+                "its weak match comes to nothing: its group is split or turned down, or its book's claims rejected");
+        // The README's cut of every file a weak match had a part in, $8 != "-", takes all three
+        assertThat(report.weakMatches().values().stream().mapToInt(Integer::intValue).sum()).isEqualTo(3);
+    }
+
+    @Test
+    void aFileWithoutAMatchInAGroupAStrongMatchGaveItsBookHasNoWeakOutcome() throws IOException {
+        // The strong match of "The Martian.epub" gives its group the book: what came of the others had no weak part
+        Files.writeString(dir.resolve("shells.tsv"), """
+                10\t1\t0\t1\tSurvival\tNULL\tNULL\tAnn Smith
+                11\t1\t0\t1\tSurvival\tNULL\tNULL\tAnn Smith
+                20\t1\t0\t1\tThe Martian\tNULL\tNULL\tAnn Smith
+                """);
+        Files.writeString(dir.resolve("existing.tsv"), "");
+        Files.writeString(dir.resolve("newfiles.tsv"), """
+                1\tS/Smith, Ann/Mixed\tThe Martian.epub
+                1\tS/Smith, Ann/Mixed\tSurvival.epub
+                1\tS/Smith, Ann/Mixed\tNotes.pdf
+                1\tS/Smith, Ann/Other\tThe Martian.epub
+                """);
+
+        Report report = RescanDryRun.run(RescanDryRun.Exports.read(dir.resolve("shells.tsv"), dir.resolve("existing.tsv"),
+                dir.resolve("newfiles.tsv")), LibraryOrganizationMode.BOOK_PER_FOLDER);
+
+        assertThat(decisions(report)).containsExactly(
+                entry("S/Smith, Ann/Mixed/The Martian.epub", "ambiguous 20"),
+                entry("S/Smith, Ann/Mixed/Survival.epub", "ambiguous 20"),
+                entry("S/Smith, Ann/Mixed/Notes.pdf", "ambiguous 20"),
+                entry("S/Smith, Ann/Other/The Martian.epub", "ambiguous 20"));
+        assertThat(weakMatches(report)).containsExactly(
+                entry("The Martian.epub", "-"),
+                entry("Survival.epub", "its weak match comes to nothing: its group is split or turned down, or its book's"
+                        + " claims rejected"),
+                entry("Notes.pdf", "-"));
     }
 
     @Test
@@ -391,12 +461,17 @@ class RescanDryRunTest {
                 entry("G/Neil Gaiman/Copies/Good Omens (1).epub", "ambiguous 10"),
                 entry("G/Neil Gaiman/Copies/Good Omens - T. Pratchett (1).pdf", "ambiguous 10"));
         assertThat(report.lines().get(1).reason()).isEqualTo("goes with the files it would be one book with");
+        // The copy pdf has no match, but the book it turns down is the weak match of its group: before, both were new
+        // books without it
         assertThat(report.lines()).extracting(Line::weakMatch).containsExactly(null, null,
-                "its weak match comes to nothing: its group is split or turned down, or its book's claims rejected", null);
+                "its weak match comes to nothing: its group is split or turned down, or its book's claims rejected",
+                "follows a weak match that comes to nothing: its group is split or turned down, or its book's claims rejected");
         assertThat(report.rejections()).containsExactly(
                 entry("fileless: is not by '...' (\" (1)\" read as a copy)", 1),
                 entry("group: the book a file it would be one book with matched turned another of them down", 2));
         assertThat(report.weakMatches()).containsExactly(
+                entry("follows a weak match that comes to nothing: its group is split or turned down, or its book's claims"
+                        + " rejected", 1),
                 entry("its weak match comes to nothing: its group is split or turned down, or its book's claims rejected", 1));
     }
 
