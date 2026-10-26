@@ -628,7 +628,11 @@ public final class ExistingBookMatcher {
             judge(file, reading, evidence, seriesNumber, shell, false, findings);
         }
         if (readsAsACopy(reading)) {
-            Set<Long> foundByNumber = found.stream().map(ShellCandidate::bookId).collect(Collectors.toSet());
+            // Found by number only with its title read with the stored author names apart, a book is still found as a
+            // copy by its titles as stored, as it was before they were read apart
+            Set<Long> foundByNumber = found.stream()
+                    .filter(shell -> shell.identitiesAsStored().contains(reading.identity()))
+                    .map(ShellCandidate::bookId).collect(Collectors.toSet());
             for (ShellCandidate shell : index.lookup(reading.identityWithoutCopy())) {
                 if (!foundByNumber.contains(shell.bookId())) {
                     judge(file, reading, evidence, seriesNumber, shell, true, findings);
@@ -669,7 +673,8 @@ public final class ExistingBookMatcher {
         Rejection rejection = rejection(file, reading, evidence, seriesNumber, shell, shell.authors());
         Rejection asStored = null;
         boolean byAuthorReading = false;
-        if (!shell.identitiesAsStored().contains(asCopy ? reading.identityWithoutCopy() : reading.identity())) {
+        boolean foundAsStored = shell.identitiesAsStored().contains(asCopy ? reading.identityWithoutCopy() : reading.identity());
+        if (!foundAsStored) {
             // Only its title read with the names apart is the name ("Child of a Dead God - John Hendee" by "Barb
             // Hendee; John Hendee" read as "Child of a Dead God"): before, the name did not find the book at all, so
             // whatever the names say, it qualifies only so, and nothing said here is evidence against it
@@ -723,7 +728,12 @@ public final class ExistingBookMatcher {
             // the order they were found, as it would without the copy reading
             findings.accepted().remove(shell.bookId());
             findings.accepted().put(shell.bookId(), accepted);
-            findings.rejected().remove(shell.bookId());
+            Rejection before = findings.rejected().remove(shell.bookId());
+            if (before != null && byAuthorReading && before.against()) {
+                // Accepted only with the names read apart, the book is still turned down by what the names as stored
+                // said against it before
+                findings.refusedAsStored().merge(shell.bookId(), before, Rejection::weightier);
+            }
             findings.doubted().remove(shell.bookId());
         } else if (already == null || already.asCopy() && rejection.refuses()) {
             // What the name as it reads says against a book outweighs its reading as a copy of it, accepted or
@@ -735,6 +745,20 @@ public final class ExistingBookMatcher {
             Rejection labelled = new Rejection(label(shell) + " " + rejection.why(), rejection.against(), rejection.asCopy());
             // Evidence against the book from one reading outweighs a want of evidence from another
             findings.rejected().merge(shell.bookId(), labelled, Rejection::weightier);
+        } else if (already.byAuthorReading() && foundAsStored) {
+            // Accepted only with the names read apart, the book was not accepted so before they were, or only as a
+            // copy ({@link Findings#copiesAsStored}): what the names as stored say against it here still counts as
+            // it counted then, even if the book ends up the file's weakly
+            Accepted asStoredBefore = findings.copiesAsStored().get(shell.bookId());
+            Rejection earlierAsStored = findings.refusedAsStored().get(shell.bookId());
+            boolean passedOver = asCopy && (asStoredBefore != null || earlierAsStored != null && earlierAsStored.refuses());
+            if (!passedOver && (asStoredBefore == null || rejection.refuses())) {
+                Rejection labelled = new Rejection(label(shell) + " " + rejection.why(), rejection.against(), rejection.asCopy());
+                findings.refusedAsStored().merge(shell.bookId(), labelled, Rejection::weightier);
+                if (rejection.refuses()) {
+                    findings.copiesAsStored().remove(shell.bookId());
+                }
+            }
         }
     }
 
@@ -952,13 +976,18 @@ public final class ExistingBookMatcher {
     /**
      * @param accepted the files each fileless book gets, by book id
      * @param rejected why each fileless book that gets none was left alone, by book id
-     * @param yielded  for each fileless book that gets the files of its strong claims only, the files of its weak
-     *                 claims, which it does not get, and why; by book id
+     * @param yielded  for each fileless book that gets only the files of the claims that outrank its others (its
+     *                 strong claims, or the claims of the rules before the stored author names were read apart, as
+     *                 {@link #resolveShellClaims} keeps them), the files of its other claims, which it does not get,
+     *                 and why; by book id
      */
     public record ClaimResolution<F>(Map<Long, List<F>> accepted, Map<Long, String> rejected, Map<Long, Yield<F>> yielded) {
     }
 
-    /** The files whose weak claims on a fileless book yield to the strong claims of other files on it, and why. */
+    /**
+     * The files whose claims on a fileless book yield to the claims of other files on it that outrank them ({@link
+     * Claim#rank}), and why.
+     */
     public record Yield<F>(List<F> files, String why) {
         public Yield {
             files = List.copyOf(files);

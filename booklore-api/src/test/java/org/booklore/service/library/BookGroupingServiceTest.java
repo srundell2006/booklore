@@ -20,6 +20,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -1829,6 +1830,50 @@ class BookGroupingServiceTest {
 
         assertThat(attached(result)).containsExactly(Map.entry(10L, List.of(copy)));
         assertThat(newBooks(result)).containsExactly(List.of("Cradle.epub"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"Rama Revealed.epub", "Rama Revealed (1).epub"})
+    void rescan_aGroupAFileOfWhichTheNamesAsStoredTurnDownStillYieldsWhenTheyReadApartAcceptIt(String other) {
+        // Before, "Book 1 - Rama Revealed.epub" said it is not the book, which has no number, and the Gentry Lee group
+        // gave way to the Clarke folder's file; read apart, the packed row lets the book in, but the names as stored
+        // still turn it down, so the group still gives way and does not take the book from that file
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
+        shellRows.add(new FilelessBookRow(1L, null, false, "cover", null, "Rama Revealed", "Book 1", null, null,
+                "Arthur C. Clarke;Gentry Lee"));
+        shellRows.add(new FilelessBookRow(1L, null, false, "cover", null, "Rama Revealed", "Book 1", null, null,
+                "Arthur C. Clarke"));
+        LibraryFile numbered = newFile(lib, path, "L/Gentry Lee", "Book 1 - Rama Revealed.epub");
+        LibraryFile pdf = newFile(lib, path, "L/Gentry Lee", "Rama Revealed - Arthur C. Clarke.pdf");
+        LibraryFile clarke = newFile(lib, path, "C/Arthur C. Clarke", other);
+
+        var result = rescan(lib, numbered, pdf, clarke);
+
+        assertThat(attached(result)).containsExactly(Map.entry(1L, List.of(clarke)));
+        assertThat(newBooks(result)).containsExactly(List.of("Book 1 - Rama Revealed.epub",
+                "Rama Revealed - Arthur C. Clarke.pdf"));
+    }
+
+    @Test
+    void rescan_aBookFoundByNumberOnlyWithItsRowReadApartIsStillACopyOfTheRowAsStored() {
+        // Before, the mobi was ambiguous between the two books as copies, and the epub, which is in another library
+        // path than book#2, a copy of book#1, which it got. Read apart, the subtitle's "Lee Child" is the author, so
+        // "Killing Floor (1)" is book#2 by number; it is still a copy of book#2 as stored, which keeps the mobi from
+        // claiming book#1 from a second folder: it gets book#2 only by the reading the names apart add
+        var path1 = pathEntity(1L, "/books1");
+        var path2 = pathEntity(2L, "/books2");
+        var lib = library(LibraryOrganizationMode.AUTO_DETECT, path1, path2);
+        lib.setId(1L);
+        shell(1, "Killing Floor", "Lee Child");
+        shellRows.add(new FilelessBookRow(2L, 1L, true, "cover", null, "Killing Floor", "Book 1 - Lee Child", null, null,
+                "Lee Child; M.D."));
+        LibraryFile mobi = newFile(lib, path1, "C/Lee Child", "Killing Floor (1).mobi");
+        LibraryFile epub = newFile(lib, path2, "C/Lee Child", "Killing Floor (1).epub");
+
+        var result = rescan(lib, mobi, epub);
+
+        assertThat(attached(result)).containsExactly(Map.entry(2L, List.of(mobi)), Map.entry(1L, List.of(epub)));
     }
 
     @ParameterizedTest

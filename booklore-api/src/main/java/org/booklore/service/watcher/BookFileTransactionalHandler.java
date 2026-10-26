@@ -286,10 +286,10 @@ public class BookFileTransactionalHandler {
      * a BOOK_PER_FOLDER root to one book, and in BOOK_PER_FILE, where they are two files claiming one book, to none.
      * A weak match ({@link Match#weak}: one of alike books, a " (1)" read as a copy, or a book found only with its
      * stored author names read apart) attaches as any other: where a rescan weighs it against the other new files,
-     * which outweigh it, here there is only the one file. So a lone
-     * "A/Steve Alten/MEG (1).epub" goes to a fileless "MEG", which a rescan that also finds "A/Steve Alten/MEG/The
-     * MEG.epub" gives to the latter. A book of the folder that only its stored author names read apart give the file
-     * goes after the fileless books, which the folder's books as stored left the file to before.
+     * which outweigh it, here there is only the one file. So a lone "A/Steve Alten/MEG (1).epub" goes to a fileless
+     * "MEG", which a rescan that also finds "A/Steve Alten/MEG/The MEG.epub" gives to the latter. A book of the folder
+     * that only its stored author names read apart give the file goes after the fileless books, which the folder's
+     * books as stored left the file to before.
      *
      * @return false when the file belongs to no existing book, or its book changed since it was read
      */

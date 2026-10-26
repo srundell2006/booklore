@@ -83,8 +83,8 @@ public class BookGroupingService {
         }
 
         /**
-         * A fileless book that gets the files of its strong claims only: the files whose weak claims yield to those
-         * ({@link Claim#weak}), which become new books, and why.
+         * A fileless book that gets only the files of its claims that outrank the others ({@link Claim#rank}): the
+         * files whose lower claims yield to those, which become new books, and why.
          */
         default void claimsYielded(long bookId, List<LibraryFile> files, String why) {
         }
@@ -138,7 +138,8 @@ public class BookGroupingService {
      *       a file whose match is weak follows, whichever book it matched, as it would without the weak rules:
      *       "Killing Floor.epub", weakly one of two alike fileless "Killing Floor"s, goes with "The Killing Floor
      *       (1).epub" to the book in their folder that the latter matched, and a BOOK_PER_FOLDER
-     *       "Survival/Audio/Survival (1).m4b" claims the fileless "Survival" of its "Survival/Survival.epub" from the epub's folder, not from a second one.</li>
+     *       "Survival/Audio/Survival (1).m4b" claims the fileless "Survival" of its "Survival/Survival.epub" from the
+     *       epub's folder, not from a second one.</li>
      *   <li>Only what the rules before the weak ones find against a book ({@link Decision#refused}) turns a group
      *       down from the book of its strong matches; what only they find, such as a " (1)" read as a copy that
      *       names another author ({@link Decision#alsoRefused}), turns a group down only from a book that weak
@@ -342,10 +343,10 @@ public class BookGroupingService {
                     .map(claim -> newFiles.get(claim.file())).toList(), why);
             claims.stream().filter(claim -> claim.bookId() == bookId).forEach(claim -> targets[claim.file()] = null);
         });
-        // A group is all weak or all strong claims, so the files of a weak claim are whole groups: new books
+        // A group's files all claim at one rank, so the files of a yielding claim are whole groups: new books
         resolution.yielded().forEach((bookId, yielding) -> {
-            log.info("Fileless book#{} gets the files of its strong claims only: {}; those files become new books",
-                    bookId, yielding.why());
+            log.info("Fileless book#{} gets only the files of the claims that outrank its others: {}; those files become"
+                    + " new books", bookId, yielding.why());
             listener.claimsYielded(bookId, yielding.files().stream().map(newFiles::get).toList(), yielding.why());
             yielding.files().forEach(i -> targets[i] = null);
         });

@@ -642,6 +642,44 @@ class ExistingBookMatcherTest {
                     List.of("Louann Brizendine; M.D."));
             assertThat(stronglyMatchedId(shellMatch(file("Science", "The Female Brain.epub"), physical))).isEqualTo(1);
         }
+
+        @Test
+        void whatTheRowsAsStoredSayAgainstABookStillCountsWhenReadApartTheyAcceptIt() {
+            // Before, the file was number 2 and "Unbroken: Book 2" no number, so it refused the book; read apart, the
+            // row is Hillenbrand and the name without its number agrees, but the book is still one the file refused
+            assertThat(shellMatch(file("Laura Hillenbrand/Rama", "02 - Unbroken - Laura Hillenbrand.epub"),
+                    shell(3, "Unbroken", "Book 2", null, null, "Laura Hillenbrand; M.D."))).isEqualTo(new Match(3,
+                    Kind.FILELESS, "title and author agree with book#3 \"Unbroken\" (its stored author names read apart)",
+                    true, Set.of(3L), Set.of(), true));
+            // Read as a copy, the same refusal is one of the copy reading's
+            assertThat(shellMatch(file("C/Lee Child", "Book 2 - Survival (1).epub"),
+                    shell(3, "Survival", "Volume Two", null, null, "Lee Child; M.D."))).isEqualTo(new Match(3,
+                    Kind.FILELESS, "title and author agree with book#3 \"Survival\" (\" (1)\" read as a copy) (its stored"
+                    + " author names read apart)", true, Set.of(), Set.of(3L), true));
+            // The packed row read apart lets the numbered file in; as stored, "Rama Revealed: Book 1" has no number
+            Decision rama = shellMatch(file("L/Gentry Lee", "Book 1 - Rama Revealed.epub"),
+                    shell(1, "Rama Revealed", "Book 1", null, null, "Arthur C. Clarke;Gentry Lee", "Arthur C. Clarke"));
+            assertThat(((Match) rama).rank()).isZero();
+            assertThat(rama.refused()).containsExactly(1L);
+        }
+
+        @Test
+        void aBookFoundByNumberOnlyWithItsRowReadApartIsStillACopyByItsRowAsStored() {
+            // Read apart, "Douglas Preston" in the subtitle is the author, and "Reliquary (1)" is "Reliquary #1"; as
+            // stored it was not, and the physical book was the file's as a copy, by the folders alone: it still is
+            ShellCandidate reliquary = ShellCandidate.of(2, null, true, false, "Reliquary", "Book 1 - Douglas Preston", null,
+                    null, List.of("Douglas Preston; M.D."));
+            Decision copy = shellMatch(FileEvidence.of(2L, "Cradle", "Reliquary (1).mobi", false), reliquary);
+            assertThat(copy).isEqualTo(weakMatch(2, "title and author agree with book#2 \"Reliquary\" (\" (1)\" read as a"
+                    + " copy)"));
+            assertThat(((Match) copy).rank()).isOne();
+
+            Decision cradle = shellMatch(file("L/Arthur Lee", "Cradle (1).epub"),
+                    shell(1, "Cradle", "Book 1 - Gentry Lee", null, null, "Arthur C. Clarke;Gentry Lee"));
+            assertThat(cradle).isEqualTo(weakMatch(1, "title and author agree with book#1 \"Cradle\" (\" (1)\" read as a"
+                    + " copy)"));
+            assertThat(((Match) cradle).rank()).isOne();
+        }
     }
 
     @Nested
