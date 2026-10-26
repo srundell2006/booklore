@@ -11,7 +11,13 @@ import org.booklore.model.enums.BookFileType;
 import org.booklore.repository.BookAdditionalFileRepository;
 import org.booklore.repository.BookRepository;
 import org.booklore.service.file.FileFingerprint;
+import org.booklore.service.library.matching.ExistingBookMatcher;
+import org.booklore.service.library.matching.ExistingBookMatcher.Decision;
 import org.booklore.service.library.matching.ExistingBookMatcher.Kind;
+import org.booklore.service.library.matching.ExistingBookMatcher.Match;
+import org.booklore.service.library.matching.FileEvidence;
+import org.booklore.service.library.matching.FilelessShellIndex;
+import org.booklore.service.library.matching.ShellCandidate;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -322,6 +328,71 @@ class ExistingBookAttacherTest {
 
         assertThat(attacher.attach(29, Kind.FILELESS, List.of(bare))).isEmpty();
         assertThat(attacher.attach(29, Kind.FILELESS, List.of(named, bare))).containsExactly(named, bare);
+    }
+
+    @Test
+    void aSecondDownloadStillMatchesTheFilelessBookOfItsTitle() throws IOException {
+        // "The Martian (1).epub" reads as "The Martian" as well as its first volume; before, it no longer matched here
+        BookEntity book = shell(31, "curated");
+        LibraryFile copy = onDisk(WEIR, "The Martian (1).epub", BookFileType.EPUB);
+        // Read as a copy only: a weak match, which counts here as any other
+        Decision decision = ExistingBookMatcher.matchShell(FileEvidence.of(copy.getLibraryPathEntity().getId(), WEIR,
+                copy.getFileName(), false), FilelessShellIndex.of(List.of(ExistingBookAttacher.shellCandidate(book))));
+        assertThat(decision).isInstanceOf(Match.class);
+        assertThat(((Match) decision).weak()).isTrue();
+
+        assertThat(attacher.attach(31, Kind.FILELESS, List.of(copy))).containsExactly(copy);
+
+        assertThat(saved(1)).extracting(BookFileEntity::getFileName).containsExactly("The Martian (1).epub");
+        verify(filelessShells).notFileless(31L);
+    }
+
+    @Test
+    void theAlikeBookChosenStillMatches() throws IOException {
+        // The matcher chose book#32 among alike fileless books (another "The Martian" by Andy Weir); the attacher
+        // checks the file against book#32 alone, so the books it was chosen from do not make it ambiguous here
+        BookEntity chosen = shell(32, "curated");
+        LibraryFile epub = onDisk(WEIR, "The Martian.epub", BookFileType.EPUB);
+
+        assertThat(attacher.attach(32, Kind.FILELESS, List.of(epub))).containsExactly(epub);
+
+        assertThat(saved(1).getFirst().getBook()).isSameAs(chosen);
+        verify(filelessShells).notFileless(32L);
+        verify(filelessShells, never()).readAgainForWatcher(anyLong());
+    }
+
+    @Test
+    void aFilelessBookIsMatchedWithItsSeriesAsTheIndexReadsIt() throws IOException {
+        // Number 2 of a series of another name: "The Testaments (1).epub" is the copy of "The Testaments"
+        BookEntity testaments = book(33, null, "curated", new BookFileType[0]);
+        testaments.getMetadata().setTitle("The Testaments");
+        testaments.getMetadata().setSeriesName("The Handmaid's Tale");
+        testaments.getMetadata().setSeriesNumber(2f);
+        testaments.getMetadata().setAuthors(new ArrayList<>(List.of(AuthorEntity.builder().name("Margaret Atwood").build())));
+        LibraryFile copy = onDisk("A/Atwood, Margaret", "The Testaments (1).epub", BookFileType.EPUB);
+
+        ShellCandidate candidate = ExistingBookAttacher.shellCandidate(testaments);
+        assertThat(candidate.seriesName()).isEqualTo("The Handmaid's Tale");
+        assertThat(candidate.seriesPlace()).isEqualTo(2f);
+        assertThat(attacher.attach(33, Kind.FILELESS, List.of(copy))).containsExactly(copy);
+
+        assertThat(saved(1)).extracting(BookFileEntity::getFileName).containsExactly("The Testaments (1).epub");
+    }
+
+    @Test
+    void aFilelessBookWhoseSeriesWasRenamedAfterItsTitleSinceTheMatchGetsNoFile() throws IOException {
+        // Matched while its series had another name; in a series "Saga", "Saga (1).epub" may be volume 1
+        BookEntity saga = book(34, null, "curated", new BookFileType[0]);
+        saga.getMetadata().setTitle("Saga");
+        saga.getMetadata().setSeriesName("Saga");
+        saga.getMetadata().setSeriesNumber(2f);
+        saga.getMetadata().setAuthors(new ArrayList<>(List.of(AuthorEntity.builder().name("Brian K. Vaughan").build())));
+        LibraryFile copy = onDisk("V/Vaughan, Brian K.", "Saga (1).epub", BookFileType.EPUB);
+
+        assertThat(attacher.attach(34, Kind.FILELESS, List.of(copy))).isEmpty();
+
+        verify(bookAdditionalFileRepository, never()).save(any());
+        verify(filelessShells).readAgainForWatcher(1L);
     }
 
     @Test

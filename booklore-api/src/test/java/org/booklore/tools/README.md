@@ -33,13 +33,13 @@ and 20k new files took 13 s from the Gradle command to the written report.
 ## The report
 
 There is one tab-separated line per new file, with these columns:
-`decision  target  group_key  reason  library_path_id  file_sub_path  file_name`
+`decision  target  group_key  reason  library_path_id  file_sub_path  file_name  weak_match`
 
 | decision | meaning | target |
 |---|---|---|
 | `attach-shell` | attached to a fileless book | that book's id |
 | `attach-same-folder` | attached to a book with files in the same folder | that book's id |
-| `ambiguous` | becomes a new book because more than one book qualifies, because a fileless book's claims were rejected (claimed from 2+ folders, or by two different files of one format), because the files it would form one book with matched different books, or because the book they matched turned one of them down | the candidate ids |
+| `ambiguous` | becomes a new book because more than one book qualifies, because a fileless book's claims were rejected (claimed from 2+ folders, or by two different files of one format), because the files it would form one book with matched different books, because the book they matched turned one of them down, or because its weak claim on a fileless book yields to the strong claims of other files (see below) | the candidate ids |
 | `new-book` | becomes a new book; no existing book matches | `-` |
 
 - `group_key` is the new book the file belongs to, in the format `<library_path_id>:<sub path>:<key>`.
@@ -47,21 +47,107 @@ There is one tab-separated line per new file, with these columns:
   show the same key.
 - `reason` comes from the matcher. For example, `fileless: book#500 "Survival" has none of its
   authors in the path`, or `folder: 2 books in the folder have this title`.
+- `weak_match` says what came of a weak match (see [Weak matches](#weak-matches)) for the file,
+  its own or, for a file without one, those of its group that it follows where no strong match
+  gave the group a book: one of the outcomes the summary counts (see below), or `-` when no weak
+  match had a part in its decision. The outcomes that start with `attached` are the attaches only
+  the newer rules make. Select those by this column, not by the reason: a reason that names alike
+  books or a ` (1)` read as a copy may also be that of a new book, of a weak match that agrees with
+  its group's strong match (an attach the rules before made too), or quote a weak match that
+  yielded.
+- An `attach-shell` reason also says when the file went to one of several alike fileless books
+  (the same title, with the same year in brackets if any, series number and authors), as in `title and author agree with book#12
+  "Survival", one of 2 alike fileless books (book#12, book#40)`, and when a ` (1)` at the end of
+  its name was read as a copy, as in `title and author agree with book#7 "Saga" (" (1)" read as a
+  copy)`.
+- An `ambiguous` reason names apart the fileless books that qualify only if a ` (1)` is a copy,
+  not volume 1, as in `fileless: 2 fileless books qualify: book#1 "Saga", and book#2 "Saga" if
+  " (1)" is a copy`: book#2 is number 2 of its series, and the name does not say which it is.
+- The rule for a lone ` (1)` turns a fileless book down for its place in its series only where
+  the ` (1)` may mean volume 1 of that series. Its reason says which: `is number 2 of its series,
+  and " (1)" may mean volume 1` when the series has no name (no `series_name`, and no
+  `(Series, #N)` suffix on the title), and `is number 2 of a series of the same name, and " (1)"
+  may mean volume 1` when the series' name reads as the file's name without the ` (1)`, maybe
+  followed by one of `Series`, `Trilogy`, `Duology`, `Quartet`, `Quintet`, `Saga`, `Cycle`,
+  `Sequence` and `Chronicles`. The series' name is `series_name`, and also the series of a
+  `(Series, #N)` suffix on the title where the suffix gives the book's place (`series_number` is
+  empty or the same number), whatever `series_name` says: `Saga (1).epub` does not go to a
+  `Saga (Saga, #2)` whose `series_name` is `Image Comics`. A series of another name does not
+  count: `The Testaments (1).epub` goes to a fileless `The Testaments`, number 2 of The Handmaid's
+  Tale, while `Saga (1).epub` does not go to a `Saga` numbered 2 in a series `Saga`.
 
 The report ends with lines starting with `#`:
 - the count of each decision;
 - for files that become new books (`new-book` and `ambiguous`), the count of each reason an
   existing book was turned down. Book ids, numbers and quoted names are replaced, so alike
-  reasons are counted together. For example: `fileless: is not by '...'`,
+  reasons are counted together: a number, a fraction or a list of numbers (`2`, `2.5`, `2, 3`)
+  is one `N`, but the `" (1)" may mean volume 1` of the rule for a lone ` (1)`, and the
+  `(" (1)" read as a copy)` that marks a book found only with the ` (1)` read as a copy, stay as
+  they are. For example: `fileless: is not by '...'`,
+  `fileless: is not by '...' (" (1)" read as a copy)`,
   `claim: claimed by files of N folders [...]`,
-  `fileless: has a one-word title, which needs its author's given name in the path as the book has it`.
+  `fileless: has a one-word title, which needs its author's given name in the path as the book has it`,
+  `fileless: is number N of its series, and " (1)" may mean volume 1`,
+  `fileless: is number N of a series of the same name, and " (1)" may mean volume 1`,
+  `claim: a weak claim yields to the strong claims of other files`;
+- for files whose decision a weak match had a part in, the count of each outcome. The outcomes
+  that start with `attached` are the attaches only the newer rules make; the others are weak
+  matches that did not change what the file got:
+
+  | outcome | the file |
+  |---|---|
+  | `attached by its own weak match` | is attached to the book of its weak match, which no strong match of its group contradicts |
+  | `attached by a weak match of the files it would be one book with` | has no match of its own, and follows the weak matches of its group |
+  | `its weak match agrees with the strong match of the files it would be one book with` | goes to that book, as it would without its weak match |
+  | `its weak match yields to the strong match of the files it would be one book with` | goes to the book of its group's strong match instead |
+  | `its weak match yields to the strong claims of other files on its book` | becomes a new book; the strong claims get the book |
+  | `follows a weak match that yields to the strong claims of other files on its book` | as the last, without a match of its own |
+  | `its weak match comes to nothing: ...` | becomes a new book: its group's matches do not agree or a file of it is turned down, or its book's claims were rejected |
+  | `follows a weak match that comes to nothing: ...` | as the last, without a match of its own: its group has no strong match, and the book its weak matches gave it is lost the same way |
+  | `a match by its name as it reads goes before books found with " (1)" read as a copy` | matched a book strongly; the books its ` (1)` read as a copy finds yield to it |
 
 Useful cuts:
 
 ```bash
 grep -v '^#' report.tsv | awk -F'\t' '$1=="attach-shell"' | less        # every attach to a fileless book
 grep -v '^#' report.tsv | awk -F'\t' '$1=="new-book" && $4 ~ /is not by/' # files turned down on the author rule
+grep -v '^#' report.tsv | awk -F'\t' '$8 ~ /^attached/'    # the attaches only the newer rules make
+grep -v '^#' report.tsv | awk -F'\t' '$8 ~ /yield/'         # weak matches that yield, and files that follow one
+grep -v '^#' report.tsv | awk -F'\t' '$8 != "-"'            # every file a weak match had a part in
 ```
+
+### Weak matches
+
+A match that only the choice among alike fileless books, or a ` (1)` read as a copy, makes is
+weak. These two rules only ever add a book to a file that the rules before them gave none; they
+never take one away or change it. So:
+
+- A book the name reads as goes before the books only its ` (1)` read as a copy finds, and the
+  reason names those: `title and author agree with book#1 "Nico (Book 1)";
+  book#2 "Nico" qualifies only if " (1)" is a copy, and yields`. A book the name as it reads
+  turns down stays turned down: `01 - Survival (1).epub` is number 1 of a series, so not a
+  fileless `Survival: Book 1` without a number, which it would be with its ` (1)` read as a copy.
+- The files that would be one new book go to the book of their strong matches. A file whose own
+  weak match is another book is attached with them, and its reason says so: `goes with the files
+  it would be one book with; its own weak match yields to theirs: title and author agree with
+  book#10 "Killing Floor", one of 2 alike fileless books (book#10, book#11)`. Weak matches only
+  count in a group that has no strong one, and must then agree.
+- When a fileless book's claims do not agree but its strong claims alone do, the book gets the
+  files of the strong claims. The files whose claims only weak matches made, their own or those
+  of the files they would be one book with, become a new book: decision `ambiguous`, reason `its
+  weak claim on fileless book#70 yields to the strong claims of other files, which get it:
+  claimed by files of 2 folders [...]: The MEG.epub, MEG (1).epub; the weak claims of MEG
+  (1).epub yield to the others`. A file of a group that a strong match gave its book claims it
+  as strongly, whatever its own match, and from the folder of the file it follows, as a file
+  without a match did before: in BOOK_PER_FOLDER, `Survival/Audio/Survival (1).m4b` claims the
+  fileless `Survival` of `Survival/Survival.epub` from the epub's folder, and both get it.
+- What a file says against a book only with its ` (1)` read as a copy, a book the rules before
+  never looked at for it, does not keep its group from a book a strong match gives it: `G/Neil
+  Gaiman/Good Omens - T. Pratchett (1).pdf` (`book#10 "Good Omens" is not by 'T. Pratchett' ("
+  (1)" read as a copy)`) goes with `Good Omens.epub` to book#10, as before. It keeps the group
+  only from a book that weak matches alone give it, as does what a file whose name reads as
+  several books says against another one: next to a weak `Good Omens (1).epub` instead, both
+  become a new book.
 
 ## The exports
 
@@ -73,11 +159,15 @@ A first line that names the columns is skipped. Lines starting with `#` are skip
 
 | file | columns |
 |---|---|
-| `shells.tsv` | `id, library_path_id, is_physical, has_cover, title, subtitle, series_number, authors` (authors joined with `; `) |
+| `shells.tsv` | `id, library_path_id, is_physical, has_cover, title, subtitle, series_number, authors[, series_name]` (authors joined with `; `; series_name optional) |
 | `existing.tsv` | `book_id, library_path_id, file_sub_path, file_name, book_type[, authors]` (book formats of books that are not deleted; authors optional) |
 | `newfiles.tsv` | `library_path_id, file_sub_path, file_name` (`file_sub_path` is empty for the library root) |
 
 Notes on the columns:
+- Without `series_name` in `shells.tsv`, as in an export made before it was added, a book's series
+  has no name unless its title ends in a `(Series, #N)` suffix. The rule for a lone ` (1)` then
+  turns down books the rescan would attach, such as `The Testaments (1).epub` for a fileless
+  `The Testaments` numbered 2. Export it.
 - Without authors in `existing.tsv`, same-folder matching cannot drop an author part of a file
   name that only the existing book's authors vouch for. For example, `Title - Author.mobi`
   next to `Title.epub` in a folder that is not the author's. Export them.
@@ -119,7 +209,8 @@ SELECT b.id, b.library_path_id, COALESCE(b.is_physical, 0),
        m.title, m.subtitle, m.series_number,
        (SELECT GROUP_CONCAT(a.name ORDER BY am.sort_order SEPARATOR '; ')
           FROM book_metadata_author_mapping am JOIN author a ON a.id = am.author_id
-         WHERE am.book_id = b.id)
+         WHERE am.book_id = b.id),
+       m.series_name
 FROM book b
 JOIN book_metadata m ON m.book_id = b.id
 WHERE b.library_id = @library

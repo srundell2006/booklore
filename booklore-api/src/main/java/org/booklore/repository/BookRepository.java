@@ -264,7 +264,8 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
      */
     @Query("""
             SELECT new org.booklore.repository.projection.FilelessBookRow(
-                b.id, lp.id, b.isPhysical, b.bookCoverHash, b.audiobookCoverHash, m.title, m.subtitle, m.seriesNumber, a.name)
+                b.id, lp.id, b.isPhysical, b.bookCoverHash, b.audiobookCoverHash,
+                m.title, m.subtitle, m.seriesName, m.seriesNumber, a.name)
             FROM BookEntity b
             JOIN b.metadata m
             LEFT JOIN b.libraryPath lp

@@ -162,6 +162,23 @@ class TitleKeyTest {
             assertThat(key("", name).numbers()).isEqualTo(expected);
         }
 
+        @ParameterizedTest(name = "{0} -> [{1}]")
+        @CsvSource(delimiter = '|', quoteCharacter = '"', textBlock = """
+                Saga: Volume Two                                                      | 2
+                The Walking Dead: Vol. 2: Miles Behind Us                             | 2
+                The Expanse Book 2                                                    | 2
+                Saga #3                                                               | 3
+                Henry IV Part 2                                                       | 2
+                Unbroken: A World War II Story of Survival, Resilience, and Redemption | ""
+                The Boys in the Boat: Nine Americans at the 1936 Berlin Olympics      | ""
+                A Dangerous Universe 3                                                | ""
+                """)
+        void tellsTheNumbersASeriesKeywordIntroduces(String title, String numbers) {
+            List<String> expected = numbers.isEmpty() ? List.of() : Arrays.asList(numbers.split(","));
+
+            assertThat(TitleKey.ofTitle(title, NameContext.NONE).keywordNumbers()).isEqualTo(expected);
+        }
+
         @Test
         void keepsBracketedYearsApartFromTheNumbers() {
             TitleKey saga = key("", "Saga 001 (2012) (Digital).cbz");
@@ -494,6 +511,20 @@ class TitleKeyTest {
                     .isEqualTo(TitleKey.ofTitle("Kokoro Connect Volume 4: Michi Random", anda).identity());
             assertThat(TitleKey.ofFileName("Assignment - Treason.epub", false, NameContext.forFolder("A/Aarons, Edward S")).identity())
                     .isNotEqualTo(TitleKey.ofTitle("Assignment", NameContext.NONE).identity());
+        }
+
+        @ParameterizedTest(name = "{0} -> {1}")
+        @CsvSource(delimiter = '|', nullValues = "-", textBlock = """
+                The Hunger Games Trilogy  | hunger games
+                Saga Series 2             | saga #2
+                The Saga Saga             | saga
+                Saga Series Omnibus       | -
+                Trilogy                   | -
+                The Trilogy               | -
+                """)
+        void readsASeriesNameWithoutALastWordSuchAsTrilogy(String series, String identity) {
+            assertThat(TitleKey.ofTitle(series, NameContext.NONE).identityWithoutLastWord(TitleWords.SERIES_NOUNS))
+                    .isEqualTo(identity);
         }
     }
 }

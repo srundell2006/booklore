@@ -71,6 +71,13 @@ final class TitleWords {
     static final Set<String> SERIES_KEYWORDS = Set.of(
             "book", "bk", "vol", "volume", "part", "pt", "episode", "ep", "chapter", "issue", "season", "no", "number", "#");
 
+    /**
+     * Words a series name may end in that are no part of what it names: "The Hunger Games Trilogy" and "The Twilight
+     * Saga" name The Hunger Games and Twilight. Only {@link ShellCandidate#seriesIdentities} reads them, never a title.
+     */
+    static final Set<String> SERIES_NOUNS = Set.of(
+            "series", "trilogy", "duology", "quartet", "quintet", "saga", "cycle", "sequence", "chronicles");
+
     /** The keywords a comic's issue number follows ("#1", "Issue 1", "No. 1"); after the others it is a volume. */
     static final Set<String> ISSUE_KEYWORDS = Set.of("#", "issue", "no", "number", "episode", "ep", "chapter");
 

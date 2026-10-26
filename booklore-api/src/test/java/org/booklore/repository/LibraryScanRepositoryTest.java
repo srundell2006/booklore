@@ -306,10 +306,11 @@ class LibraryScanRepositoryTest {
             physical.setIsPhysical(true);
             BookMetadataEntity martian = metadata(physical, "The Martian", weir);
             martian.setSubtitle("A Novel");
+            martian.setSeriesName("Mars");
             martian.setSeriesNumber(1f);
             BookEntity anthology = book(library, libraryPath, false);
             anthology.setBookCoverHash("cover");
-            metadata(anthology, "Primal Heat", leigh, rowan);
+            metadata(anthology, "Primal Heat", leigh, rowan).setSeriesName("Primal Heat Series");
             BookEntity withoutAuthors = book(library, libraryPath, false);
             withoutAuthors.setAudiobookCoverHash("audio");
             metadata(withoutAuthors, "Emma");
@@ -333,12 +334,15 @@ class LibraryScanRepositoryTest {
                     .containsExactly(physical.getId(), anthology.getId(), withoutAuthors.getId());
             assertThat(rows).extracting(FilelessBookRow::bookId, FilelessBookRow::libraryPathId, FilelessBookRow::physical,
                             FilelessBookRow::bookCoverHash, FilelessBookRow::audiobookCoverHash, FilelessBookRow::title,
-                            FilelessBookRow::subtitle, FilelessBookRow::seriesNumber, FilelessBookRow::authorName)
+                            FilelessBookRow::subtitle, FilelessBookRow::seriesName, FilelessBookRow::seriesNumber,
+                            FilelessBookRow::authorName)
                     .containsExactlyInAnyOrder(
-                            tuple(physical.getId(), null, true, null, null, "The Martian", "A Novel", 1f, "Andy Weir"),
-                            tuple(anthology.getId(), libraryPath.getId(), false, "cover", null, "Primal Heat", null, null, "Lora Leigh"),
-                            tuple(anthology.getId(), libraryPath.getId(), false, "cover", null, "Primal Heat", null, null, "Michelle Rowan"),
-                            tuple(withoutAuthors.getId(), libraryPath.getId(), false, null, "audio", "Emma", null, null, null));
+                            tuple(physical.getId(), null, true, null, null, "The Martian", "A Novel", "Mars", 1f, "Andy Weir"),
+                            tuple(anthology.getId(), libraryPath.getId(), false, "cover", null, "Primal Heat", null,
+                                    "Primal Heat Series", null, "Lora Leigh"),
+                            tuple(anthology.getId(), libraryPath.getId(), false, "cover", null, "Primal Heat", null,
+                                    "Primal Heat Series", null, "Michelle Rowan"),
+                            tuple(withoutAuthors.getId(), libraryPath.getId(), false, null, "audio", "Emma", null, null, null, null));
         }
 
         @Test

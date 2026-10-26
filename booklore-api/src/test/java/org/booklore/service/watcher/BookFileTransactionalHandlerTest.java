@@ -18,6 +18,7 @@ import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Nested;
 import org.junit.jupiter.api.Test;
+import org.mockito.InOrder;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
 import org.mockito.MockitoAnnotations;
@@ -143,7 +144,7 @@ class BookFileTransactionalHandlerTest {
     }
 
     private FilelessBookRow shellRow(long bookId, Long libraryPathId, String title, String... authors) {
-        return new FilelessBookRow(bookId, libraryPathId, false, null, null, title, null, null,
+        return new FilelessBookRow(bookId, libraryPathId, false, null, null, title, null, null, null,
                 authors.length == 0 ? null : authors[0]);
     }
 
@@ -332,6 +333,93 @@ class BookFileTransactionalHandlerTest {
         }
 
         @Test
+        void autoDetect_alikeFilelessBooksTakeTheFilesOfTwoFoldersOneEach() {
+            // Intended: the book the first file went to leaves the index, so the next alike file takes the next book
+            noEarlierMatch();
+            shells(shellRow(11L, null, "Survival", "Ann Smith"), shellRow(10L, null, "Survival", "Ann Smith"));
+            when(existingBookAttacher.attach(anyLong(), any(), anyList())).thenAnswer(inv -> {
+                filelessShells.notFileless(inv.getArgument(0));
+                return inv.getArgument(2);
+            });
+
+            subPath("S/Smith, Ann");
+            handler.handleNewBookFile(1L, Path.of("/library/S/Smith, Ann/Survival.epub"));
+            subPath("S/Smith, Ann/Series");
+            handler.handleNewBookFile(1L, Path.of("/library/S/Smith, Ann/Series/Survival.epub"));
+
+            InOrder inOrder = inOrder(existingBookAttacher);
+            inOrder.verify(existingBookAttacher).attach(eq(10L), eq(Kind.FILELESS), argThat(files ->
+                    files.getFirst().getFileSubPath().equals("S/Smith, Ann")));
+            inOrder.verify(existingBookAttacher).attach(eq(11L), eq(Kind.FILELESS), argThat(files ->
+                    files.getFirst().getFileSubPath().equals("S/Smith, Ann/Series")));
+            verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
+        }
+
+        @Test
+        void autoDetect_aSecondDownloadAttachesToTheFilelessBookOfItsTitle() {
+            subPath("A/Kate Atkinson");
+            noEarlierMatch();
+            shells(shellRow(10L, null, "Started Early, Took My Dog", "Kate Atkinson"));
+
+            handler.handleNewBookFile(1L, Path.of("/library/A/Kate Atkinson/Started Early, Took My Dog (1).epub"));
+
+            verify(existingBookAttacher).attach(eq(10L), eq(Kind.FILELESS), argThat(files ->
+                    files.getFirst().getFileName().equals("Started Early, Took My Dog (1).epub")));
+            verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
+        }
+
+        @Test
+        void autoDetect_aWeakMatchAttachesAsAnyOther() {
+            // Only " (1)" read as a copy makes "MEG (1).epub" the "MEG": a weak match. A rescan that also found
+            // "A/Steve Alten/MEG/The MEG.epub" would give the book to that one; here there is only this file
+            subPath("A/Steve Alten");
+            noEarlierMatch();
+            shells(shellRow(70L, null, "MEG", "Steve Alten"));
+
+            handler.handleNewBookFile(1L, Path.of("/library/A/Steve Alten/MEG (1).epub"));
+
+            verify(existingBookAttacher).attach(eq(70L), eq(Kind.FILELESS), argThat(files ->
+                    files.getFirst().getFileName().equals("MEG (1).epub")));
+            verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
+        }
+
+        @Test
+        void autoDetect_aBookTheNameReadsAsGoesBeforeOneOfTheNameReadAsACopy() {
+            // "Nico (1).epub" is "Nico (Book 1)", as before the copy reading, and not ambiguous with "Nico"
+            subPath("W/Naomi West");
+            noEarlierMatch();
+            shells(shellRow(2L, null, "Nico", "Naomi West"), shellRow(1L, null, "Nico (Book 1)", "Naomi West"));
+
+            handler.handleNewBookFile(1L, Path.of("/library/W/Naomi West/Nico (1).epub"));
+
+            verify(existingBookAttacher, times(1)).attach(anyLong(), any(), anyList());
+            verify(existingBookAttacher).attach(eq(1L), eq(Kind.FILELESS), argThat(files ->
+                    files.getFirst().getFileName().equals("Nico (1).epub")));
+            verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
+        }
+
+        @Test
+        void autoDetect_aSecondDownloadIsNotTheBookWhoseSubtitleNamesAnotherVolume() {
+            // "Saga (1).epub" may be volume 1, and the book says it is volume 2: the real volume 2 still finds it
+            subPath("V/Vaughan, Brian K.");
+            noEarlierMatch();
+            shells(new FilelessBookRow(8L, null, false, null, null, "Saga", "Volume Two", null, null, "Brian K. Vaughan"));
+            when(existingBookAttacher.attach(anyLong(), any(), anyList())).thenAnswer(inv -> {
+                filelessShells.notFileless(inv.getArgument(0));
+                return inv.getArgument(2);
+            });
+
+            handler.handleNewBookFile(1L, Path.of("/library/V/Vaughan, Brian K./Saga (1).epub"));
+            handler.handleNewBookFile(1L, Path.of("/library/V/Vaughan, Brian K./Saga (2).epub"));
+
+            verify(existingBookAttacher, times(1)).attach(anyLong(), any(), anyList());
+            verify(existingBookAttacher).attach(eq(8L), eq(Kind.FILELESS), argThat(files ->
+                    files.getFirst().getFileName().equals("Saga (2).epub")));
+            verify(libraryProcessingService, times(1)).processLibraryFiles(argThat(files ->
+                    files.getFirst().getFileName().equals("Saga (1).epub")), eq(library));
+        }
+
+        @Test
         void autoDetect_aBookThatChangedSinceItWasReadMakesTheFileANewBook() {
             subPath("W/Weir, Andy");
             noEarlierMatch();
@@ -389,6 +477,41 @@ class BookFileTransactionalHandlerTest {
 
             verify(existingBookAttacher).attach(eq(10L), eq(Kind.FILELESS), anyList());
             verifyNoFolderLookup();
+        }
+
+        @Test
+        void bookPerFolder_theFormatsOfARootFileGoToAlikeFilelessBooksOneEach() {
+            // Intended: a file at the library's root is a book of its own, so another format takes the next alike book
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FOLDER);
+            subPath("");
+            twoFormatsAgainstAlikeFilelessBooks("/library/");
+        }
+
+        @Test
+        void bookPerFile_theFormatsOfAFileGoToAlikeFilelessBooksOneEach() {
+            library.setOrganizationMode(LibraryOrganizationMode.BOOK_PER_FILE);
+            subPath("W/Weir, Andy");
+            twoFormatsAgainstAlikeFilelessBooks("/library/W/Weir, Andy/");
+            verifyNoFolderLookup();
+        }
+
+        private void twoFormatsAgainstAlikeFilelessBooks(String folder) {
+            noEarlierMatch();
+            shells(shellRow(12L, 1L, "The Martian", "Andy Weir"), shellRow(40L, 1L, "The Martian", "Andy Weir"));
+            when(existingBookAttacher.attach(anyLong(), any(), anyList())).thenAnswer(inv -> {
+                filelessShells.notFileless(inv.getArgument(0));
+                return inv.getArgument(2);
+            });
+
+            handler.handleNewBookFile(1L, Path.of(folder + "The Martian - Andy Weir.epub"));
+            handler.handleNewBookFile(1L, Path.of(folder + "The Martian - Andy Weir.pdf"));
+
+            InOrder inOrder = inOrder(existingBookAttacher);
+            inOrder.verify(existingBookAttacher).attach(eq(12L), eq(Kind.FILELESS), argThat(files ->
+                    files.getFirst().getFileName().equals("The Martian - Andy Weir.epub")));
+            inOrder.verify(existingBookAttacher).attach(eq(40L), eq(Kind.FILELESS), argThat(files ->
+                    files.getFirst().getFileName().equals("The Martian - Andy Weir.pdf")));
+            verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
         }
 
         @Test

@@ -7,6 +7,7 @@ package org.booklore.repository.projection;
  *
  * @param libraryPathId the book's library path, null for a book that has none yet
  * @param physical      the book's is_physical flag, which may be null
+ * @param seriesName    the metadata's series name, as stored
  */
 public record FilelessBookRow(Long bookId,
                               Long libraryPathId,
@@ -15,6 +16,7 @@ public record FilelessBookRow(Long bookId,
                               String audiobookCoverHash,
                               String title,
                               String subtitle,
+                              String seriesName,
                               Float seriesNumber,
                               String authorName) {
 }

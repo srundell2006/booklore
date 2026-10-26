@@ -51,8 +51,9 @@ import java.util.Set;
  *   <li>A kind of cover its owner locked is never written.</li>
  * </ul>
  * A fileless book gets the files only when one of them still matches it as it is now. The watcher matches against
- * fileless books it read up to {@link FilelessShells#WATCHER_INDEX_LIFETIME} ago, and the book's title, authors or
- * physical flag may have been edited since: "The Martian.epub" must not go to a book retitled "Project Hail Mary".
+ * fileless books it read up to {@link FilelessShells#WATCHER_INDEX_LIFETIME} ago, and the book's title, authors,
+ * series or physical flag may have been edited since: "The Martian.epub" must not go to a book retitled "Project Hail
+ * Mary", nor "Saga (1).epub" to a "Saga" number 2 whose series was renamed "Saga".
  */
 @Service
 @RequiredArgsConstructor
@@ -169,7 +170,9 @@ public class ExistingBookAttacher {
     /**
      * Whether one of the files matches the fileless book as it is now, as {@link ExistingBookMatcher#matchShell} decides.
      * The other files of an attachment go with the one that matched (a copy, the parts of an audiobook) and need not
-     * match on their own.
+     * match on their own. A weak match counts as any other ("The Martian (1).epub" read as a copy): this only asks
+     * whether the book was edited into another since, and whether a weak match yields to other files was the caller's
+     * to decide, with those files at hand.
      */
     private static boolean stillMatches(BookEntity book, List<LibraryFile> files) {
         FilelessShellIndex index = FilelessShellIndex.of(List.of(shellCandidate(book)));
@@ -195,6 +198,7 @@ public class ExistingBookAttacher {
                 book.getBookCoverHash() != null || book.getAudiobookCoverHash() != null,
                 metadata == null ? null : metadata.getTitle(),
                 metadata == null ? null : metadata.getSubtitle(),
+                metadata == null ? null : metadata.getSeriesName(),
                 metadata == null ? null : metadata.getSeriesNumber(),
                 authors);
     }
