@@ -281,6 +281,69 @@ class ExistingBookMatcherTest {
     }
 
     @Nested
+    class AuthorRowsThatPackSeveralAuthors {
+        // Production: a book's author rows are one name each, but some rows hold several authors. Read as one person
+        // named after the last word ("Arthur C. Clarke;Gentry Lee" as a Lee), the path never agreed with them, and 8
+        // files of these fileless books became new books
+
+        private ShellCandidate shell(long id, String title, String subtitle, String seriesName, Float seriesNumber,
+                                     String authorRow) {
+            return ShellCandidate.of(id, PATH, false, true, title, subtitle, seriesName, seriesNumber, List.of(authorRow));
+        }
+
+        @Test
+        void cradle() {
+            assertThat(matchedId(shellMatch(file("C/Arthur C. Clarke", "Cradle by Arthur Charles Clarke.epub"),
+                    shell(1, "Cradle", null, null, 1f, "Arthur C. Clarke;Gentry Lee")))).isEqualTo(1);
+        }
+
+        @Test
+        void powerAndProgress() {
+            assertThat(matchedId(shellMatch(file("A/Daron Acemoğlu", "Power and Progress.epub"),
+                    shell(2, "Power and Progress", "Our Thousand-Year Struggle Over Technology and Prosperity",
+                            "Dungeon Crawler Carl", 1f, "Daron Acemoglu;Simon Johnson;")))).isEqualTo(2);
+        }
+
+        @Test
+        void zenMindBeginnersMind() {
+            assertThat(matchedId(shellMatch(file("S/Shunryu Suzuki", "Zen Mind, Beginner's Mind.epub"),
+                    shell(3, "Zen Mind, Beginner's Mind", null, null, 1f, "Shunryū Suzuki; Trudy Dixon; Richard Baker"))))
+                    .isEqualTo(3);
+        }
+
+        @Test
+        void essentialSnmp() {
+            assertThat(matchedId(shellMatch(file("M/Douglas R. Mauro", "Essential SNMP, Second Edition.epub"),
+                    shell(4, "Essential SNMP, 2nd Edition", null, null, null, "Douglas Mauro; Kevin Schmidt")))).isEqualTo(4);
+        }
+
+        @Test
+        void prettyMinnieInParis() {
+            assertThat(matchedId(shellMatch(file("S/Danielle Steel", "Pretty Minnie in Paris by Danielle Steel.epub"),
+                    shell(5, "Pretty Minnie in Paris", null, "Dungeon Crawler Carl", 1f,
+                            "Danielle Steel; illustrated by Kristi Valiant")))).isEqualTo(5);
+        }
+
+        @Test
+        void theFourthStar() {
+            String title = "The Fourth Star: Four Generals and the Epic Struggle for the Future of the United States Army";
+            assertThat(shellMatch(file("C/David W. Cloud",
+                            "The Fourth Star - Four Generals and the Epic Struggle for the Future of the United States Army (1).epub"),
+                    shell(6, title, null, null, null, "David Cloud; Greg Jaffe")))
+                    .isEqualTo(weakMatch(6, "title and author agree with book#6 \"" + title + "\" (\" (1)\" read as a copy)"));
+        }
+
+        @Test
+        void aRowThatIsNoListStillReadsAsOneName() {
+            // "Rachel; Levithan Cohn" is Rachel Cohn and David Levithan garbled: "Rachel" alone is no full name, so the
+            // row reads as one name, Rachel Levithan Cohn, which the folder "Rachel Cohn" agrees with. It attached
+            // before and still does
+            assertThat(matchedId(shellMatch(file("C/Rachel Cohn/Dash & Lily", "Dash & Lily's Book of Dares.epub"),
+                    shell(8, "Dash & Lily's Book of Dares", null, "Dash & Lily", 1f, "Rachel; Levithan Cohn")))).isEqualTo(8);
+        }
+    }
+
+    @Nested
     class AlikeFilelessBooks {
 
         private ShellCandidate physical(long id, String title, String... authors) {
@@ -294,6 +357,13 @@ class ExistingBookMatcherTest {
 
             assertThat(decision).isEqualTo(weakMatch(12,
                     "title and author agree with book#12 \"Survival\", one of 2 alike fileless books (book#12, book#40)"));
+        }
+
+        @Test
+        void authorsAreAlikeWhetherTheyAreStoredOnePerRowOrPackedInOne() {
+            assertThat(matchedId(shellMatch(file("H/Barb Hendee", "Child of a Dead God.epub"),
+                    shell(40, "Child of a Dead God", "Barb Hendee", "J.C. Hendee"),
+                    shell(12, "Child of a Dead God", "Barb Hendee; J. C. Hendee")))).isEqualTo(12);
         }
 
         @Test
@@ -1029,6 +1099,19 @@ class ExistingBookMatcherTest {
         }
 
         @Test
+        void aSecondDownloadOfABookWhoseAuthorRowPacksTwoAuthorsGoesToItToo() {
+            // Production: both became a new book; the one author row holds both authors
+            ShellCandidate fullBloom = ShellCandidate.of(64, PATH, false, true, "Full Bloom", null, "Full Series", 5f,
+                    List.of("Janet Evanovich; Charlotte Hughes"));
+            List<Claim<FileEvidence>> claims = claims(FilelessShellIndex.of(List.of(fullBloom)),
+                    file("E/Janet Evanovich/Full", "Full Bloom.epub"),
+                    file("E/Janet Evanovich/Full", "Full Bloom (1).epub"));
+            assertThat(claims).extracting(Claim::bookId).containsExactly(64L, 64L);
+
+            assertThat(ExistingBookMatcher.resolveShellClaims(claims).accepted().get(64L)).hasSize(2);
+        }
+
+        @Test
         void alikeBooksClaimedFromTwoFoldersGetNone() {
             // Every file that sees the same alike books claims the one chosen, so the claim rules hold for them as for
             // one book
@@ -1304,6 +1387,13 @@ class ExistingBookMatcherTest {
                     .isInstanceOf(Match.class);
             assertThat(folderMatch(file("", "American Gods - Neil Gaiman.mobi"), book(22, "American Gods.epub")))
                     .as("nothing confirms the author part").isInstanceOf(NoMatch.class);
+        }
+
+        @Test
+        void anAuthorPartThatIsOneOfTheAuthorsAStoredNamePacks() {
+            // One author row "Arthur C. Clarke;Gentry Lee" is both authors: "Cradle - Gentry Lee.mobi" reads as "Cradle"
+            assertThat(matchedId(folderMatch(file("SF/Rama", "Cradle.epub"),
+                    book(30, List.of("Arthur C. Clarke;Gentry Lee"), "Cradle - Gentry Lee.mobi")))).isEqualTo(30);
         }
 
         @Test

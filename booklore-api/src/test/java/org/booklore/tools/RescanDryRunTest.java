@@ -261,6 +261,36 @@ class RescanDryRunTest {
     }
 
     @Test
+    void readsAuthorsJoinedWithTheUnitSeparatorAsTheRowsTheyWere() throws IOException {
+        // One stored name "Arthur C. Clarke;Gentry Lee" reaches the matcher as the one name the app reads, and the
+        // matcher reads both authors in it; an export joined with "; " still splits at ';'
+        Files.writeString(dir.resolve("shells.tsv"), """
+                id\tlibrary_path_id\tis_physical\thas_cover\ttitle\tsubtitle\tseries_number\tauthors
+                1\t1\t0\t1\tCradle\tNULL\t1\tArthur C. Clarke;Gentry Lee\u001FJohn Doe
+                2\t1\t0\t1\tThe Martian\tNULL\tNULL\tAndy Weir; Someone Else
+                """);
+        Files.writeString(dir.resolve("existing.tsv"), """
+                3\t1\tSF/Rama\tRama Revealed - Gentry Lee.mobi\tMOBI\tArthur C. Clarke;Gentry Lee\u001FJohn Doe
+                """);
+        Files.writeString(dir.resolve("newfiles.tsv"), """
+                1\tC/Arthur C. Clarke\tCradle by Arthur Charles Clarke.epub
+                1\tW/Weir, Andy\tThe Martian.epub
+                1\tSF/Rama\tRama Revealed.epub
+                """);
+
+        RescanDryRun.Exports exports = RescanDryRun.Exports.read(dir.resolve("shells.tsv"), dir.resolve("existing.tsv"),
+                dir.resolve("newfiles.tsv"));
+
+        assertThat(exports.shells()).extracting(RescanDryRun.Shell::authors).containsExactly(
+                List.of("Arthur C. Clarke;Gentry Lee", "John Doe"), List.of("Andy Weir", "Someone Else"));
+        assertThat(exports.existing().getFirst().authors()).containsExactly("Arthur C. Clarke;Gentry Lee", "John Doe");
+        assertThat(decisions(run())).containsExactly(
+                entry("C/Arthur C. Clarke/Cradle by Arthur Charles Clarke.epub", "attach-shell 1"),
+                entry("W/Weir, Andy/The Martian.epub", "attach-shell 2"),
+                entry("SF/Rama/Rama Revealed.epub", "attach-same-folder 3"));
+    }
+
+    @Test
     void saysWhatCameOfWeakMatches() throws IOException {
         // The dry run of a real library: the newer rules took these files from the books they had before
         Files.writeString(dir.resolve("shells.tsv"), """

@@ -56,18 +56,16 @@ public final class NameContext {
         return new NameContext(List.copyOf(names), List.of(), leaf);
     }
 
-    /** This context plus the authors of the book a name is compared with (a fileless book's, say). */
+    /**
+     * This context plus the authors of the book a name is compared with (a fileless book's, say), its stored names
+     * read as {@link PersonName#parseAuthor} reads them: "Arthur C. Clarke;Gentry Lee" is two authors.
+     */
     public NameContext withAuthors(Collection<String> authorNames) {
         if (authorNames == null || authorNames.isEmpty()) {
             return this;
         }
         List<PersonName> parsed = new ArrayList<>(authors);
-        for (String name : authorNames) {
-            PersonName person = PersonName.parse(name);
-            if (person != null) {
-                parsed.add(person);
-            }
-        }
+        parsed.addAll(PersonName.parseAuthors(authorNames));
         return new NameContext(folderNames, List.copyOf(parsed), leafName);
     }
 

@@ -14,7 +14,8 @@ import java.util.Set;
  * matching every new file of the folder against them costs a few lookups rather than a pass over the folder.
  * <p>
  * A book's files are read with the folder's names and the book's own authors as evidence: "American Gods - Neil
- * Gaiman.epub" of a book by Neil Gaiman reads as "American Gods" even at the library's root.
+ * Gaiman.epub" of a book by Neil Gaiman reads as "American Gods" even at the library's root. Its authors are its stored
+ * names as {@link PersonName#parseAuthor} reads them, so a name "Arthur C. Clarke;Gentry Lee" vouches for both.
  */
 public final class BooksInFolder {
 
@@ -55,8 +56,7 @@ public final class BooksInFolder {
         BooksInFolder index = new BooksInFolder();
         for (FolderBook book : books) {
             NameContext context = folderContext.withAuthors(book.authorNames());
-            index.authorsByBook.put(book.bookId(),
-                    book.authorNames().stream().map(PersonName::parse).filter(Objects::nonNull).toList());
+            index.authorsByBook.put(book.bookId(), PersonName.parseAuthors(book.authorNames()));
             for (FolderFile file : book.files()) {
                 TitleKey key = TitleKey.ofFileName(file.fileName(), file.audio(), context);
                 Entry entry = new Entry(book.bookId(), key);

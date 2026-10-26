@@ -21,7 +21,8 @@ import java.util.regex.Pattern;
  *                      and the title without a metadata provider's "(Series, #N)" suffix
  * @param years         the publication years its titles give in brackets ("Rick Steves Italy (2020)"), as
  *                      {@link TitleKey#years} reads them; no identity holds them, so they alone tell two editions apart
- * @param authors       its authors, parsed
+ * @param authors       its authors, each stored name read as {@link PersonName#parseAuthor} reads it: one name that
+ *                      packs several ("Arthur C. Clarke;Gentry Lee") is each of them
  * @param seriesNumber  its place in its series when that is a whole number: the metadata's series number, else the
  *                      number of a "(Series, #N)" suffix; null otherwise
  * @param seriesPlace   its place in its series as given, fractions included: the metadata's series number, else the
@@ -79,7 +80,7 @@ public record ShellCandidate(long bookId,
     public static ShellCandidate of(long bookId, Long libraryPathId, boolean physical, boolean hasCover, String title,
                                     String subtitle, String seriesName, Float seriesNumber, Collection<String> authorNames) {
         List<String> names = authorNames == null ? List.of() : authorNames.stream().filter(Objects::nonNull).toList();
-        List<PersonName> authors = names.stream().map(PersonName::parse).filter(Objects::nonNull).toList();
+        List<PersonName> authors = PersonName.parseAuthors(names);
         // A title such as "The Hobbit - J.R.R. Tolkien" reads without the author part only when it is this book's author
         NameContext context = NameContext.NONE.withAuthors(names);
 
