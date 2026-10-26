@@ -1816,6 +1816,31 @@ class BookGroupingServiceTest {
     }
 
     @Test
+    void rescan_autoDetect_aFileAmbiguousOnlyAsACopyAmongBooksNotAlikeStillTurnsDownWhatItsNameSaysItIsNot() {
+        // As above, but read as a copy the pdf is book#20 or book#21, neither of which the " (1)" guard turns down,
+        // and which are not alike ("Good Omens: A Novel" has another title). Ambiguous so, it still refuses book#10
+        // as its NoMatch did before, and keeps "Good Omens.epub" from it
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shellRows.add(new FilelessBookRow(10L, null, false, "cover", null, "Good Omens", "Book 1", null, null, "Neil Gaiman"));
+        shell(20, "Good Omens", "T. Pratchett");
+        shellRows.add(new FilelessBookRow(21L, null, false, "cover", null, "Good Omens", "A Novel", null, null, "T. Pratchett"));
+        LibraryFile epub = newFile(lib, path, "G/Neil Gaiman", "Good Omens.epub");
+        LibraryFile pdf = newFile(lib, path, "G/Neil Gaiman", "Good Omens - T. Pratchett (1).pdf");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, epub, pdf);
+
+        assertThat(outcomes.fileless.get(epub.getFileName())).isInstanceOf(Match.class)
+                .extracting(decision -> ((Match) decision).bookId()).isEqualTo(10L);
+        assertThat(outcomes.fileless.get(pdf.getFileName())).isEqualTo(new Ambiguous(List.of(20L, 21L),
+                "2 fileless books qualify: book#20 \"Good Omens\", book#21 \"Good Omens\"", Set.of(10L), Set.of()));
+        assertThat(result.filesToAttach()).isEmpty();
+        assertThat(newBooks(result)).containsExactly(List.of("Good Omens.epub", "Good Omens - T. Pratchett (1).pdf"));
+        assertThat(outcomes.lines).containsExactly("refused 10 by [Good Omens - T. Pratchett (1).pdf]");
+    }
+
+    @Test
     void rescan_bookPerFolder_aWeakMatchToItsGroupsBookClaimsItFromTheFolderOfTheFileItFollows() {
         // groupByFolder puts the audiobook of a subfolder with the ebook of the folder above. Its " (1)" read as a
         // copy, it weakly matches the book the epub matched; before, it had no match and followed, claiming from the

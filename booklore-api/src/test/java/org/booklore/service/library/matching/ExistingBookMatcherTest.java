@@ -874,6 +874,11 @@ class ExistingBookMatcherTest {
             assertThat(shellMatch(pdf, bookOne, pratchett, second)).isEqualTo(new Ambiguous(List.of(20L, 21L),
                     "2 fileless books qualify: book#20 \"Good Omens\", and book#21 \"Good Omens\" if \" (1)\" is a copy",
                     Set.of(10L), Set.of()));
+            // Also where the books the copy reading finds are several that are not alike, none of them doubted
+            ShellCandidate novel = ShellCandidate.of(21, PATH, false, true, "Good Omens", "A Novel", null, null,
+                    List.of("T. Pratchett"));
+            assertThat(shellMatch(pdf, bookOne, pratchett, novel)).isEqualTo(new Ambiguous(List.of(20L, 21L),
+                    "2 fileless books qualify: book#20 \"Good Omens\", book#21 \"Good Omens\"", Set.of(10L), Set.of()));
             // Where the name as it reads finds several books, the file refused none before; what it says it is not
             // still keeps it from a book that only weak matches give its group
             Decision ambiguous = shellMatch(file("S/Smith, Ann", "Survival - Ann Smith.epub"), shell(40, "Survival", "Ann Smith"),
