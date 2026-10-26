@@ -556,6 +556,31 @@ class RescanDryRunTest {
     }
 
     @Test
+    void anAlikeChoiceThatGoesBeforeBooksFoundAsACopyIsStillAnAttachOnlyTheNewerRulesMake() throws IOException {
+        // As it reads, "Case Histories (1)" names the two alike "Case Histories 1", which the rules before left
+        // ambiguous; read as a copy it names "Case Histories" too. The reason of the weak match the alike rule makes
+        // says that book yields, as a strong match's does, but the attach is still the newer rules' alone
+        Files.writeString(dir.resolve("shells.tsv"), """
+                10\t1\t0\t1\tCase Histories 1\tNULL\tNULL\tKate Atkinson
+                11\t1\t0\t1\tCase Histories\tNULL\tNULL\tKate Atkinson
+                12\t1\t0\t1\tCase Histories 1\tNULL\tNULL\tKate Atkinson
+                """);
+        Files.writeString(dir.resolve("existing.tsv"), "");
+        Files.writeString(dir.resolve("newfiles.tsv"), """
+                1\tA/Kate Atkinson\tCase Histories (1).epub
+                """);
+
+        Report report = run();
+
+        assertThat(decisions(report)).containsExactly(entry("A/Kate Atkinson/Case Histories (1).epub", "attach-shell 10"));
+        assertThat(report.lines().getFirst().reason()).isEqualTo("title and author agree with book#10 \"Case Histories 1\","
+                + " one of 2 alike fileless books (book#10, book#12); book#11 \"Case Histories\" qualifies only if \" (1)\""
+                + " is a copy, and yields");
+        assertThat(weakMatches(report)).containsExactly(entry("Case Histories (1).epub", "attached by its own weak match"));
+        assertThat(report.weakMatches()).containsExactly(entry("attached by its own weak match", 1));
+    }
+
+    @Test
     void readsWhatMariaDbBatchModeWrites() {
         assertThat(RescanDryRun.Exports.unescape("a\\tb\\nc\\\\d")).isEqualTo("a\tb\nc\\d");
         assertThat(RescanDryRun.Exports.unescape("plain")).isEqualTo("plain");
