@@ -74,7 +74,7 @@ import java.util.stream.Collectors;
  * </ul>
  * <p>
  * <b>The report</b> has one line per new file: decision, target, group key, reason, library_path_id, file_sub_path,
- * file_name. The decision is one of
+ * file_name and weak_match. The decision is one of
  * <ul>
  *   <li>{@code attach-shell}: attached to the fileless book {@code target};</li>
  *   <li>{@code attach-same-folder}: attached to {@code target}, a book with files in the file's folder;</li>
@@ -88,7 +88,9 @@ import java.util.stream.Collectors;
  * yields to the strong matches of the files it would be one book with: such a file is attached with them, and its
  * reason says that its own weak match yields to theirs. A reason that turns a book down with the " (1)" read as a copy
  * says so, {@code (" (1)" read as a copy)}: that keeps the file's group only from a book that weak matches alone give
- * it, never from one a strong match gives it.
+ * it, never from one a strong match gives it. So the reason does not tell the attaches only the newer rules make from
+ * the others; weak_match does: what came of a weak match for the file, as the summary counts it, or {@code -} when no
+ * weak match had a part in its decision. The outcomes that start with {@code attached} are those attaches.
  * <p>
  * The group key is the new book the file would be part of, {@code <library_path_id>:<sub path>:<key>}; files attached
  * to an existing book show the group they would have formed. Lines starting with {@code #} close the report: the
@@ -206,13 +208,13 @@ public final class RescanDryRun {
         Map<String, Integer> rejections = new TreeMap<>();
         Map<String, Integer> weakMatches = new TreeMap<>();
         for (LibraryFile file : newFiles) {
-            Line line = line(file, rowOf.get(file), groupKeys.get(file), attachments.get(file), trace);
+            String weak = weakOutcome(file, attachments.get(file), groups.get(groupKeys.get(file)), trace);
+            Line line = line(file, rowOf.get(file), groupKeys.get(file), attachments.get(file), trace).withWeakMatch(weak);
             lines.add(line);
             decisions.merge(line.decision(), 1, Integer::sum);
             if (line.decision().equals("new-book") || line.decision().equals("ambiguous")) {
                 trace.rejections(file).forEach(reason -> rejections.merge(reason, 1, Integer::sum));
             }
-            String weak = weakOutcome(file, attachments.get(file), groups.get(groupKeys.get(file)), trace);
             if (weak != null) {
                 weakMatches.merge(weak, 1, Integer::sum);
             }
@@ -578,8 +580,22 @@ public final class RescanDryRun {
 
     // ========== the report ==========
 
-    /** One new file's decision. */
-    public record Line(String decision, String target, String groupKey, String reason, NewFile file) {
+    /**
+     * One new file's decision.
+     *
+     * @param weakMatch what came of a weak match for the file, as the summary counts it: one of the outcomes of {@link
+     *                  RescanDryRun#weakOutcome}, of which those that start with "attached" are the attaches only the
+     *                  newer rules make. Null when no weak match had a part in the file's decision
+     */
+    public record Line(String decision, String target, String groupKey, String reason, NewFile file, String weakMatch) {
+
+        Line(String decision, String target, String groupKey, String reason, NewFile file) {
+            this(decision, target, groupKey, reason, file, null);
+        }
+
+        Line withWeakMatch(String weakMatch) {
+            return new Line(decision, target, groupKey, reason, file, weakMatch);
+        }
     }
 
     /**
@@ -591,10 +607,11 @@ public final class RescanDryRun {
                          Map<String, Integer> weakMatches) {
 
         public void print(PrintStream out) {
-            out.println("# decision\ttarget\tgroup_key\treason\tlibrary_path_id\tfile_sub_path\tfile_name");
+            out.println("# decision\ttarget\tgroup_key\treason\tlibrary_path_id\tfile_sub_path\tfile_name\tweak_match");
             for (Line line : lines) {
                 out.println(String.join("\t", line.decision(), line.target(), clean(line.groupKey()), clean(line.reason()),
-                        String.valueOf(line.file().libraryPathId()), clean(line.file().fileSubPath()), clean(line.file().fileName())));
+                        String.valueOf(line.file().libraryPathId()), clean(line.file().fileSubPath()), clean(line.file().fileName()),
+                        line.weakMatch() == null ? "-" : line.weakMatch()));
             }
             printSummary(out);
         }

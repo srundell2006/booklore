@@ -75,6 +75,12 @@ class RescanDryRunTest {
                 dir.resolve("newfiles.tsv")), LibraryOrganizationMode.AUTO_DETECT);
     }
 
+    /** What came of a weak match for each file, by file name: its weak_match, "-" for none. */
+    private static Map<String, String> weakMatches(Report report) {
+        return report.lines().stream().collect(Collectors.toMap(line -> line.file().fileName(),
+                line -> line.weakMatch() == null ? "-" : line.weakMatch(), (a, b) -> a, java.util.LinkedHashMap::new));
+    }
+
     private static Map<String, String> decisions(Report report) {
         return report.lines().stream().collect(Collectors.toMap(
                 line -> line.file().fileSubPath() + "/" + line.file().fileName(),
@@ -318,6 +324,18 @@ class RescanDryRunTest {
                 entry("its weak match agrees with the strong match of the files it would be one book with", 1),
                 entry("its weak match yields to the strong claims of other files on its book", 2),
                 entry("its weak match yields to the strong match of the files it would be one book with", 1));
+        // Each line says what its file's weak match came to: only "Survival.epub" got a book the rules before gave none
+        assertThat(weakMatches(report)).containsExactly(
+                entry("The Killing Floor (1).epub", "-"),
+                entry("Killing Floor.epub", "its weak match yields to the strong match of the files it would be one book with"),
+                entry("The MEG.epub", "-"),
+                entry("MEG (1).epub", "its weak match yields to the strong claims of other files on its book"),
+                entry("The Subtle Knife.epub", "-"),
+                entry("The Subtle Knife (1).epub", "its weak match agrees with the strong match of the files it would be one book with"),
+                entry("02. The Subtle Knife - Philip Pullman (2001) (1).epub",
+                        "its weak match yields to the strong claims of other files on its book"),
+                entry("Nico (1).epub", "a match by its name as it reads goes before books found with \" (1)\" read as a copy"),
+                entry("Survival.epub", "attached by its own weak match"));
     }
 
     @Test
@@ -373,6 +391,8 @@ class RescanDryRunTest {
                 entry("G/Neil Gaiman/Copies/Good Omens (1).epub", "ambiguous 10"),
                 entry("G/Neil Gaiman/Copies/Good Omens - T. Pratchett (1).pdf", "ambiguous 10"));
         assertThat(report.lines().get(1).reason()).isEqualTo("goes with the files it would be one book with");
+        assertThat(report.lines()).extracting(Line::weakMatch).containsExactly(null, null,
+                "its weak match comes to nothing: its group is split or turned down, or its book's claims rejected", null);
         assertThat(report.rejections()).containsExactly(
                 entry("fileless: is not by '...' (\" (1)\" read as a copy)", 1),
                 entry("group: the book a file it would be one book with matched turned another of them down", 2));
@@ -401,6 +421,10 @@ class RescanDryRunTest {
                 entry("A/Kate Atkinson/Survival/Audio/Survival (1).m4b", "attach-shell 20"));
         assertThat(report.weakMatches()).containsExactly(
                 entry("its weak match agrees with the strong match of the files it would be one book with", 1));
+        // Its reason is that of a " (1)" read as a copy, but the rules before gave it the book too
+        assertThat(report.lines().get(1).reason()).endsWith("(\" (1)\" read as a copy)");
+        assertThat(weakMatches(report)).containsExactly(entry("Survival.epub", "-"),
+                entry("Survival (1).m4b", "its weak match agrees with the strong match of the files it would be one book with"));
     }
 
     @Test
@@ -410,11 +434,50 @@ class RescanDryRunTest {
         RescanDryRun.main(new String[]{"--dir", dir.toString(), "--out", out.toString()});
 
         List<String> lines = Files.readAllLines(out);
-        assertThat(lines.getFirst()).isEqualTo("# decision\ttarget\tgroup_key\treason\tlibrary_path_id\tfile_sub_path\tfile_name");
+        assertThat(lines.getFirst())
+                .isEqualTo("# decision\ttarget\tgroup_key\treason\tlibrary_path_id\tfile_sub_path\tfile_name\tweak_match");
         assertThat(lines).filteredOn(line -> !line.startsWith("#")).hasSize(18)
-                .allSatisfy(line -> assertThat(line.split("\t", -1)).hasSize(7));
+                .allSatisfy(line -> assertThat(line.split("\t", -1)).hasSize(8));
         assertThat(lines).contains("#   attach-shell\t5", "#   new-book\t7",
                 "# weak matches (one of alike fileless books, or \" (1)\" read as a copy), by outcome:");
+        assertThat(lines).filteredOn(line -> line.endsWith("\tThe Martian (1).epub\t"
+                + "its weak match agrees with the strong match of the files it would be one book with")).hasSize(1);
+        assertThat(lines).filteredOn(line -> line.endsWith("\tSaga (1).epub\t-")).hasSize(1);
+    }
+
+    @Test
+    void itsWeakMatchColumnPicksOutTheAttachesOnlyTheNewerRulesMake() throws IOException {
+        // The README's cut of those attaches, $8 ~ /^attached/: by the reason, a new book turned down with its " (1)"
+        // read as a copy and a file whose weak match yields to its group's strong match would be among them
+        Files.writeString(dir.resolve("shells.tsv"), """
+                10\t1\t0\t1\tGood Omens\tNULL\tNULL\tNeil Gaiman
+                20\t1\t0\t1\tKilling Floor\tNULL\tNULL\tLee Child
+                21\t1\t0\t1\tKilling Floor\tNULL\tNULL\tLee Child
+                30\t1\t0\t1\tThe Martian\tNULL\tNULL\tAndy Weir
+                40\t1\t0\t1\tSurvival\tNULL\tNULL\tAnn Smith
+                41\t1\t0\t1\tSurvival\tNULL\tNULL\tAnn Smith
+                """);
+        Files.writeString(dir.resolve("existing.tsv"), """
+                280632\t1\tC/Lee Child/Jack Reacher\t01. Killing Floor - Lee Child (2006).mobi\tMOBI\tLee Child
+                """);
+        Files.writeString(dir.resolve("newfiles.tsv"), """
+                1\tG/Neil Gaiman\tGood Omens - T. Pratchett (1).pdf
+                1\tC/Lee Child/Jack Reacher\tThe Killing Floor (1).epub
+                1\tC/Lee Child/Jack Reacher\tKilling Floor.epub
+                1\tW/Weir, Andy\tThe Martian (1).epub
+                1\tS/Smith, Ann\tSurvival.epub
+                """);
+        Path out = dir.resolve("report.tsv");
+
+        RescanDryRun.main(new String[]{"--dir", dir.toString(), "--out", out.toString()});
+
+        List<String[]> rows = Files.readAllLines(out).stream().filter(line -> !line.startsWith("#"))
+                .map(line -> line.split("\t", -1)).toList();
+        assertThat(rows).filteredOn(row -> row[7].startsWith("attached")).extracting(row -> row[0] + " " + row[1] + " " + row[6])
+                .containsExactly("attach-shell 30 The Martian (1).epub", "attach-shell 40 Survival.epub");
+        assertThat(rows).filteredOn(row -> row[3].matches(".*(alike fileless books|read as a copy).*")).extracting(row -> row[6])
+                .containsExactly("Good Omens - T. Pratchett (1).pdf", "Killing Floor.epub", "The Martian (1).epub", "Survival.epub");
+        assertThat(Files.readAllLines(out)).contains("#   2\tattached by its own weak match");
     }
 
     @Test

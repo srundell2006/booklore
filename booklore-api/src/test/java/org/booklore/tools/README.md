@@ -33,7 +33,7 @@ and 20k new files took 13 s from the Gradle command to the written report.
 ## The report
 
 There is one tab-separated line per new file, with these columns:
-`decision  target  group_key  reason  library_path_id  file_sub_path  file_name`
+`decision  target  group_key  reason  library_path_id  file_sub_path  file_name  weak_match`
 
 | decision | meaning | target |
 |---|---|---|
@@ -47,6 +47,12 @@ There is one tab-separated line per new file, with these columns:
   show the same key.
 - `reason` comes from the matcher. For example, `fileless: book#500 "Survival" has none of its
   authors in the path`, or `folder: 2 books in the folder have this title`.
+- `weak_match` says what came of a weak match (see [Weak matches](#weak-matches)) for the file:
+  one of the outcomes the summary counts (see below), or `-` when no weak match had a part in its
+  decision. The outcomes that start with `attached` are the attaches only the newer rules make.
+  Select those by this column, not by the reason: a reason that names alike books or a ` (1)`
+  read as a copy may also be that of a new book, of a weak match that agrees with its group's
+  strong match (an attach the rules before made too), or quote a weak match that yielded.
 - An `attach-shell` reason also says when the file went to one of several alike fileless books
   (the same title, with the same year in brackets if any, series number and authors), as in `title and author agree with book#12
   "Survival", one of 2 alike fileless books (book#12, book#40)`, and when a ` (1)` at the end of
@@ -102,8 +108,9 @@ Useful cuts:
 ```bash
 grep -v '^#' report.tsv | awk -F'\t' '$1=="attach-shell"' | less        # every attach to a fileless book
 grep -v '^#' report.tsv | awk -F'\t' '$1=="new-book" && $4 ~ /is not by/' # files turned down on the author rule
-grep -v '^#' report.tsv | awk -F'\t' '$4 ~ /alike fileless books|read as a copy/' # attaches to alike books, or of a " (1)"
-grep -v '^#' report.tsv | awk -F'\t' '$4 ~ /weak match yields|weak claim on/'   # weak matches that yield
+grep -v '^#' report.tsv | awk -F'\t' '$8 ~ /^attached/'    # the attaches only the newer rules make
+grep -v '^#' report.tsv | awk -F'\t' '$8 ~ /yield/'         # weak matches that yield, and files that follow one
+grep -v '^#' report.tsv | awk -F'\t' '$8 != "-"'            # every file a weak match had a part in
 ```
 
 ### Weak matches
