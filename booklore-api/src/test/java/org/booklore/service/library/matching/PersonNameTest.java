@@ -77,6 +77,9 @@ class PersonNameTest {
             Louann Brizendine; M.D.                             | brizendine louann
             Ronald C White; Jr.                                 | white ronald c
             ANGEL PAYNE &                                       | payne angel
+            Brian K.; Staples Vaughan                           | vaughan brian k staples
+            E. & M.A. Radford                                   | radford e m a
+            Alan E. & J.A. Meyer NOURSE                         | nourse alan e j a meyer
             """)
     void readsTheAuthorsAStoredNameStandsFor(String stored, String expected) {
         // Each expected author is its surname and then its given names; a name with a bracket also stands as written

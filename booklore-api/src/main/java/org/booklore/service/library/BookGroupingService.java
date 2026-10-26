@@ -71,7 +71,10 @@ public class BookGroupingService {
         default void inFolder(LibraryFile file, Decision decision) {
         }
 
-        /** The file against the library's fileless books, when its folder gave it no book. */
+        /**
+         * The file against the library's fileless books, when its folder gave it no book, or one only with the stored
+         * author names read apart.
+         */
         default void fileless(LibraryFile file, Decision decision) {
         }
 
@@ -130,25 +133,30 @@ public class BookGroupingService {
      * away:
      * <ul>
      *   <li>A group goes to the book of its files' strong matches; their weak matches only count in a group with no
-     *       strong one, and must then agree as well. In a group with a strong match, a file whose match is weak
-     *       follows, whichever book it matched, as it would without the weak rules: "Killing Floor.epub", weakly one
-     *       of two alike fileless "Killing Floor"s, goes with "The Killing Floor (1).epub" to the book in their folder
-     *       that the latter matched, and a BOOK_PER_FOLDER "Survival/Audio/Survival (1).m4b" claims the fileless
-     *       "Survival" of its "Survival/Survival.epub" from the epub's folder, not from a second one.</li>
+     *       strong one, and must then agree as well; and those only the stored author names read apart make
+     *       ({@link Match#readApart}) only in a group with no other weak one either. In a group with a strong match,
+     *       a file whose match is weak follows, whichever book it matched, as it would without the weak rules:
+     *       "Killing Floor.epub", weakly one of two alike fileless "Killing Floor"s, goes with "The Killing Floor
+     *       (1).epub" to the book in their folder that the latter matched, and a BOOK_PER_FOLDER
+     *       "Survival/Audio/Survival (1).m4b" claims the fileless "Survival" of its "Survival/Survival.epub" from the epub's folder, not from a second one.</li>
      *   <li>Only what the rules before the weak ones find against a book ({@link Decision#refused}) turns a group
      *       down from the book of its strong matches; what only they find, such as a " (1)" read as a copy that
      *       names another author ({@link Decision#alsoRefused}), turns a group down only from a book that weak
      *       matches alone give it. So "Good Omens - T. Pratchett (1).pdf" goes with "Good Omens.epub" to the
      *       fileless "Good Omens" by Neil Gaiman that the epub matched, as before, but keeps a weak "Good Omens
      *       (1).epub" from it.</li>
-     *   <li>A file whose weak match is the group's book does not turn the group down from it, whatever it said
-     *       against it before the weak rules: "H/Barb Hendee & J.C. Hendee/Child of a Dead God - J.C. Hendee.pdf" is
-     *       no file of a "Child of a Dead God" by "Barb Hendee; J. C. Hendee" with the row read as one Hendee, and is
-     *       with the row read apart. Then only the weak rules give the group the book, and it claims it weakly.</li>
+     *   <li>A file whose match with the stored author names read apart is the group's book does not turn the group
+     *       down from it, whatever it said against it before: "H/Barb Hendee & J.C. Hendee/Child of a Dead God -
+     *       J.C. Hendee.pdf" is no file of a "Child of a Dead God" by "Barb Hendee; J. C. Hendee" with the row read as
+     *       one Hendee, and is with the row read apart. Then only that reading gives the group the book, and it claims
+     *       it as weakly as that reading does.</li>
      *   <li>The files of a group whose book only weak matches gave it claim a fileless book weakly. Where a book's
      *       claims do not agree but its strong ones alone do, it gets the files of those, and the files of the weak
      *       claims become new books: "A/Steve Alten/MEG (1).epub" yields "MEG" to "A/Steve Alten/MEG/The
-     *       MEG.epub".</li>
+     *       MEG.epub". Claims only the names read apart make yield to the others, weak ones included.</li>
+     *   <li>A book of its folder that only the stored author names read apart give a file ({@link
+     *       ExistingBookMatcher#matchInFolder}) is a weak match too, which a fileless book the file matches
+     *       outweighs.</li>
      * </ul>
      */
     public GroupingResult groupForRescan(List<LibraryFile> newFiles, LibraryEntity libraryEntity, LibraryBookFiles bookFiles) {
@@ -172,8 +180,10 @@ public class BookGroupingService {
         FileEvidence[] evidences = new FileEvidence[newFiles.size()];
         // The book each file's own decision gave it, then the book its group goes to
         Long[] targets = new Long[newFiles.size()];
-        // Whether the file's own decision was a weak match, then whether only weak matches gave its group the book
-        boolean[] weak = new boolean[newFiles.size()];
+        // How strongly the file's own decision gave it its book, then how strongly its group claims it: strong (2), by
+        // a weak rule of before the stored author names were read apart (1), or only with them read apart (0)
+        int[] rank = new int[newFiles.size()];
+        Arrays.fill(rank, 2);
         // The books each file says it is not: those its group's book must not be, and those a book only weak matches
         // give its group must not be either (Decision#alsoRefused)
         List<Set<Long>> refused = new ArrayList<>(newFiles.size());
@@ -198,7 +208,7 @@ public class BookGroupingService {
             if (inFolder != null) {
                 listener.inFolder(file, inFolder);
             }
-            if (inFolder instanceof Match match) {
+            if (inFolder instanceof Match match && !match.weak()) {
                 targets[i] = match.bookId();
                 kinds.put(match.bookId(), Kind.SAME_FOLDER);
                 log.debug("'{}/{}' belongs to book#{} in its folder", folder, file.getFileName(), match.bookId());
@@ -209,10 +219,13 @@ public class BookGroupingService {
                         ambiguous.reason(), ambiguous.bookIds());
                 continue;
             }
-            if (inFolder instanceof NoMatch noMatch) {
-                refused.get(i).addAll(noMatch.refused());
-                alsoRefused.get(i).addAll(noMatch.alsoRefused());
+            if (inFolder != null) {
+                refused.get(i).addAll(inFolder.refused());
+                alsoRefused.get(i).addAll(inFolder.alsoRefused());
             }
+            // A book of its folder only its stored author names read apart give the file goes to it only where no
+            // fileless book does, which the folder's books as stored left the file to before
+            Match readApartInFolder = inFolder instanceof Match match ? match : null;
             Decision fileless = ExistingBookMatcher.matchShell(evidence, shells);
             listener.fileless(file, fileless);
             // For a weak match, for when it yields to its group's: then the file says what the other rules alone say
@@ -220,8 +233,14 @@ public class BookGroupingService {
             alsoRefused.get(i).addAll(fileless.alsoRefused());
             if (fileless instanceof Match match) {
                 targets[i] = match.bookId();
-                weak[i] = match.weak();
+                rank[i] = match.rank();
                 kinds.put(match.bookId(), Kind.FILELESS);
+            } else if (readApartInFolder != null) {
+                targets[i] = readApartInFolder.bookId();
+                rank[i] = readApartInFolder.rank();
+                kinds.put(readApartInFolder.bookId(), Kind.SAME_FOLDER);
+                log.debug("'{}/{}' belongs to book#{} in its folder: {}", folder, file.getFileName(),
+                        readApartInFolder.bookId(), readApartInFolder.reason());
             } else if (fileless instanceof Ambiguous ambiguous) {
                 log.info("New file '{}/{}' has no fileless book of its own: {}", folder, file.getFileName(), ambiguous.reason());
             } else {
@@ -230,22 +249,23 @@ public class BookGroupingService {
         }
 
         // A file without a book of its own follows its group's, unless the group is split over books. The group's book
-        // is its strong matches'; its weak ones count only where it has none, and a weak match yields to a strong one
+        // is its strong matches'; its weak ones count only where it has none, and a weak match yields to a strong one.
+        // So does a weak match only the stored author names read apart make to a weak match of the rules before
         Map<String, List<LibraryFile>> grouped = newBookGroups(mode, newFiles);
         List<List<LibraryFile>> groups = new ArrayList<>(grouped.values());
         List<String> groupKeys = new ArrayList<>(grouped.keySet());
         Map<Integer, String> claimFolder = new HashMap<>();
         for (List<LibraryFile> group : groups) {
-            Set<Long> strongTargets = new LinkedHashSet<>();
-            Set<Long> weakTargets = new LinkedHashSet<>();
+            int top = group.stream().map(indexOf::get).filter(i -> targets[i] != null).mapToInt(i -> rank[i]).max()
+                    .orElse(-1);
+            Set<Long> groupTargets = new LinkedHashSet<>();
             group.forEach(file -> {
                 int i = indexOf.get(file);
-                if (targets[i] != null) {
-                    (weak[i] ? weakTargets : strongTargets).add(targets[i]);
+                if (targets[i] != null && rank[i] == top) {
+                    groupTargets.add(targets[i]);
                 }
             });
-            boolean weakOnly = strongTargets.isEmpty();
-            Set<Long> groupTargets = weakOnly ? weakTargets : strongTargets;
+            boolean weakOnly = top < 2;
             if (groupTargets.size() > 1) {
                 log.info("New files {} read as one book but match different books {}; they become a new book",
                         names(group), groupTargets);
@@ -257,13 +277,13 @@ public class BookGroupingService {
                 long target = groupTargets.iterator().next();
                 // A book that a strong match gives the group, only what the rules before the weak ones refuse keeps
                 // from it, as then; one that weak matches alone give it, whatever any of its files says it is not. A
-                // file's weak match to the book outweighs what the file says against it before the weak rules: its
-                // stored author names as stored, which read apart agree ("Child of a Dead God - J.C. Hendee.pdf" is
-                // not by "Barb Hendee; J. C. Hendee" read as one Hendee)
+                // file's own match to the book with the stored author names read apart outweighs what the file says
+                // against it with them as stored ("Child of a Dead God - J.C. Hendee.pdf" is not by "Barb Hendee; J.
+                // C. Hendee" read as one Hendee)
                 List<LibraryFile> refusing = group.stream().filter(file -> {
                     int i = indexOf.get(file);
-                    return !(weak[i] && Objects.equals(targets[i], target)) && (refused.get(i).contains(target)
-                            || weakOnly && alsoRefused.get(i).contains(target));
+                    return !(rank[i] == 0 && Objects.equals(targets[i], target)) && refuses(refused.get(i),
+                            alsoRefused.get(i), target, weakOnly);
                 }).toList();
                 if (!refusing.isEmpty()) {
                     log.info("New files {} read as one book, but book#{} turned {} down; they become a new book",
@@ -272,20 +292,23 @@ public class BookGroupingService {
                     group.forEach(file -> targets[indexOf.get(file)] = null);
                     continue;
                 }
-                // Where such a file would have turned the book down before, only the weak rules give the group the
-                // book: it claims the book weakly, so a strong claim of another folder takes it, as then
-                boolean claimWeak = weakOnly || group.stream().map(indexOf::get).anyMatch(i ->
-                        weak[i] && Objects.equals(targets[i], target) && refused.get(i).contains(target));
+                // Where such a file would have turned the book down before, only the names read apart give the group
+                // the book: it claims the book as weakly as they do, so that any claim of another folder the rules
+                // before make, strong or weak, takes it, as then
+                boolean readApartOnly = group.stream().map(indexOf::get).anyMatch(i -> rank[i] == 0
+                        && Objects.equals(targets[i], target)
+                        && refuses(refused.get(i), alsoRefused.get(i), target, weakOnly));
+                int claimRank = readApartOnly ? 0 : top;
                 // A follower claims a fileless book from the folder of the file it follows
                 String folderKey = group.stream()
-                        .filter(file -> Objects.equals(targets[indexOf.get(file)], target) && weak[indexOf.get(file)] == weakOnly)
+                        .filter(file -> Objects.equals(targets[indexOf.get(file)], target) && rank[indexOf.get(file)] == top)
                         .map(file -> evidences[indexOf.get(file)].folderKey()).findFirst().orElseThrow();
                 group.forEach(file -> {
                     int i = indexOf.get(file);
                     // Before the weak rules, a file whose match is weak had none, and followed: so it does in a group
                     // with a strong match, also when its weak match is the same book, and claims it from the folder
                     // of the file it follows (an audiobook in a subfolder of its ebook's, in BOOK_PER_FOLDER)
-                    if (targets[i] == null || targets[i] != target || weak[i] && !weakOnly) {
+                    if (targets[i] == null || targets[i] != target || rank[i] < top) {
                         if (targets[i] != null && targets[i] != target) {
                             log.debug("'{}' follows the files it would be one book with to book#{}; its weak match to"
                                     + " book#{} yields", file.getFileName(), target, targets[i]);
@@ -293,7 +316,7 @@ public class BookGroupingService {
                         targets[i] = target;
                         claimFolder.put(i, folderKey);
                     }
-                    weak[i] = claimWeak;
+                    rank[i] = claimRank;
                 });
             }
         }
@@ -309,7 +332,8 @@ public class BookGroupingService {
             FileEvidence evidence = evidences[i];
             claims.add(new Claim<>(i, file.getFileName(), targets[i], claimFolder.getOrDefault(i, evidence.folderKey()),
                     oneFilePerBook ? "file" : String.valueOf(file.getBookFileType()),
-                    oneFilePerBook ? evidence.folderKey() + "/" + file.getFileName() : evidence.fileNameKey(), weak[i]));
+                    oneFilePerBook ? evidence.folderKey() + "/" + file.getFileName() : evidence.fileNameKey(), rank[i] < 2,
+                    rank[i] == 0));
         }
         ClaimResolution<Integer> resolution = ExistingBookMatcher.resolveShellClaims(claims);
         resolution.rejected().forEach((bookId, why) -> {
@@ -349,6 +373,14 @@ public class BookGroupingService {
                 count(attachments, Kind.FILELESS, true), count(attachments, Kind.FILELESS, false),
                 newBookGroups.values().stream().mapToInt(List::size).sum(), newBookGroups.size());
         return new GroupingResult(attachments, newBookGroups);
+    }
+
+    /**
+     * Whether a file says its group's book is not {@code target}: as the rules before the weak ones count it, or also
+     * as only the weak ones count it, for a book that weak matches alone give the group.
+     */
+    private static boolean refuses(Set<Long> refused, Set<Long> alsoRefused, long target, boolean weakOnly) {
+        return refused.contains(target) || weakOnly && alsoRefused.contains(target);
     }
 
     private static List<String> names(List<LibraryFile> files) {

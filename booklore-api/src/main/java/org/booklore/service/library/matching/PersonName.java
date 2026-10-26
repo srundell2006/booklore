@@ -9,7 +9,6 @@ import java.util.Collection;
 import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
-import java.util.Objects;
 import java.util.Set;
 import java.util.regex.Pattern;
 
@@ -72,8 +71,10 @@ public record PersonName(String surname, List<String> givenNames) {
      * and, as {@link #parse} reads it, a person named Ed.
      * <p>
      * A name splits at ';' and '&' only when every part is a full name, with a given name or an initial, or no name at
-     * all ("Louann Brizendine; M.D."). Otherwise it is one name, as {@link #parse} reads it: "Grosset & Dunlap", or
-     * "Rachel; Levithan Cohn", a garbled Rachel Cohn and David Levithan that the folder "Rachel Cohn" agrees with.
+     * all, an honorific such as "M.D." or "Jr." ("Louann Brizendine; M.D."). Otherwise it is one name, as {@link #parse}
+     * reads it: "Grosset & Dunlap", or "Rachel; Levithan Cohn", a garbled Rachel Cohn and David Levithan that the folder
+     * "Rachel Cohn" agrees with, and "Brian K.; Staples Vaughan" or "E. & M.A. Radford", whose first part is given
+     * names without a surname.
      */
     public static List<PersonName> parseAuthor(String stored) {
         if (stored == null || stored.isBlank()) {
@@ -99,9 +100,21 @@ public record PersonName(String surname, List<String> givenNames) {
             return List.of();
         }
         if (parts.size() > 1) {
-            List<PersonName> names = parts.stream().map(PersonName::parse).filter(Objects::nonNull).toList();
-            // A part that is a surname alone, such as "Rachel" of "Rachel; Levithan Cohn", is no author of its own
-            if (!names.isEmpty() && names.stream().allMatch(PersonName::hasGivenName)) {
+            List<PersonName> names = new ArrayList<>();
+            boolean allFull = true;
+            for (String part : parts) {
+                PersonName name = parse(part);
+                if (name == null) {
+                    // "M.D." of "Louann Brizendine; M.D." is no name at all; "Brian K." of "Brian K.; Staples Vaughan"
+                    // is no full name, as a surname alone is not ("Rachel" of "Rachel; Levithan Cohn")
+                    List<String> words = tokens(part);
+                    allFull &= words.isEmpty() || SUFFIXES.contains(String.join("", words));
+                } else {
+                    allFull &= name.hasGivenName();
+                    names.add(name);
+                }
+            }
+            if (allFull && !names.isEmpty()) {
                 return names;
             }
         }

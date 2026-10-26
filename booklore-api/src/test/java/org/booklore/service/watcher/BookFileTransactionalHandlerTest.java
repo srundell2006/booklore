@@ -7,6 +7,7 @@ import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
 import org.booklore.service.NotificationService;
 import org.booklore.service.file.FileFingerprint;
+import org.booklore.repository.projection.BookAuthorRow;
 import org.booklore.repository.projection.BookFileScanRow;
 import org.booklore.repository.projection.FilelessBookRow;
 import org.booklore.service.library.ExistingBookAttacher;
@@ -443,6 +444,41 @@ class BookFileTransactionalHandlerTest {
 
             verify(existingBookAttacher).attach(eq(20L), eq(Kind.SAME_FOLDER), anyList());
             verify(libraryProcessingService, never()).processLibraryFiles(any(), any());
+        }
+
+        /** Book 5 in "Books", whose only author row packs Douglas Preston and Lincoln Child. */
+        private void aBookWhoseRowPacksTwoAuthors() {
+            subPath("Books");
+            noEarlierMatch();
+            BookEntity packed = buildBook(5L, false);
+            BookFileEntity epub = buildBookFile(50L, packed, "Cradle - Douglas Preston.epub", "otherhash");
+            epub.setFileSubPath("Books");
+            packed.setBookFiles(new ArrayList<>(List.of(epub)));
+            inFolder("Books", packed);
+            when(bookRepository.findAuthorNamesByBookIds(anyCollection()))
+                    .thenReturn(List.of(new BookAuthorRow(5L, "Douglas Preston;Lincoln Child")));
+        }
+
+        @Test
+        void autoDetect_aBookOfTheFolderOnlyItsRowReadApartFindsYieldsToAFilelessBook() {
+            // As stored, the row is one Child, Douglas Preston Lincoln, whom "Lincoln Child" is not: the folder's book
+            // was not the file's, and the fileless "Cradle" by Lincoln Child was, as it still is
+            aBookWhoseRowPacksTwoAuthors();
+            shells(shellRow(9L, null, "Cradle", "Lincoln Child"));
+
+            handler.handleNewBookFile(1L, Path.of("/library/Books/Cradle - Lincoln Child.pdf"));
+
+            verify(existingBookAttacher).attach(eq(9L), eq(Kind.FILELESS), anyList());
+            verify(existingBookAttacher, never()).attach(eq(5L), any(), anyList());
+        }
+
+        @Test
+        void autoDetect_aBookOfTheFolderOnlyItsRowReadApartFindsIsTheFilesWhereNoFilelessBookIs() {
+            aBookWhoseRowPacksTwoAuthors();
+
+            handler.handleNewBookFile(1L, Path.of("/library/Books/Cradle - Lincoln Child.pdf"));
+
+            verify(existingBookAttacher).attach(eq(5L), eq(Kind.SAME_FOLDER), anyList());
         }
 
         @Test

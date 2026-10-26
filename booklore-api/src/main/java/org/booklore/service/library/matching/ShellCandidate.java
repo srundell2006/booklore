@@ -132,7 +132,7 @@ public record ShellCandidate(long bookId,
             addTitle(TitleKey.ofTitle(titles.get(i), contextAsStored), i == 1 && suffixIsPlace, identitiesAsStored, years,
                     volumeNumbers);
             if (!authors.equals(asStored)) {
-                    addTitle(TitleKey.ofTitle(titles.get(i), context), i == 1 && suffixIsPlace, identities, years,
+                addTitle(TitleKey.ofTitle(titles.get(i), context), i == 1 && suffixIsPlace, identities, years,
                         volumeNumbers);
             }
         }
@@ -151,8 +151,8 @@ public record ShellCandidate(long bookId,
 
         Integer number = wholeNumber(seriesNumber);
         return new ShellCandidate(bookId, libraryPathId, physical, hasCover, fullTitle, identities, identitiesAsStored,
-                years, authors, asStored, number != null ? number : wholeNumber(suffixPlace), seriesNumber != null ? seriesNumber : suffixPlace,
-                series, seriesIdentities, List.copyOf(volumeNumbers));
+                years, authors, asStored, number != null ? number : wholeNumber(suffixPlace),
+                seriesNumber != null ? seriesNumber : suffixPlace, series, seriesIdentities, List.copyOf(volumeNumbers));
     }
 
     /**

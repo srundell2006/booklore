@@ -288,7 +288,8 @@ public class BookFileTransactionalHandler {
      * stored author names read apart) attaches as any other: where a rescan weighs it against the other new files,
      * which outweigh it, here there is only the one file. So a lone
      * "A/Steve Alten/MEG (1).epub" goes to a fileless "MEG", which a rescan that also finds "A/Steve Alten/MEG/The
-     * MEG.epub" gives to the latter.
+     * MEG.epub" gives to the latter. A book of the folder that only its stored author names read apart give the file
+     * goes after the fileless books, which the folder's books as stored left the file to before.
      *
      * @return false when the file belongs to no existing book, or its book changed since it was read
      */
@@ -305,7 +306,7 @@ public class BookFileTransactionalHandler {
             case BOOK_PER_FOLDER -> bookOfFolder(libraryPathId, file);
             case BOOK_PER_FILE -> null;
         };
-        if (inFolder instanceof Match match) {
+        if (inFolder instanceof Match match && !match.weak()) {
             return attach(match, file);
         }
         if (inFolder instanceof Ambiguous ambiguous) {
@@ -314,6 +315,10 @@ public class BookFileTransactionalHandler {
         }
         Decision fileless = ExistingBookMatcher.matchShell(evidence, filelessShells.forWatcher(library.getId()));
         if (fileless instanceof Match match) {
+            return attach(match, file);
+        }
+        if (inFolder instanceof Match match) {
+            // A book of its folder that only its stored author names read apart give the file: no fileless book is
             return attach(match, file);
         }
         if (fileless instanceof Ambiguous ambiguous) {
