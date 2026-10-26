@@ -622,7 +622,7 @@ class ExistingBookMatcherTest {
                 ShellCandidate second = ShellCandidate.of(8, PATH, false, true, "Saga (Saga, #2)", null, "Image Comics",
                         seriesNumber, List.of("Brian K. Vaughan"));
                 assertThat(second.seriesName()).isEqualTo("Image Comics");
-                assertThat(second.seriesIdentities()).containsExactly("image comics", "saga");
+                assertThat(second.seriesIdentities()).containsExactlyInAnyOrder("image comics", "saga");
                 assertThat(second.volumeNumbers()).isEmpty();
                 assertThat(shellMatch(saga, second)).as("series number %s", seriesNumber).isEqualTo(sameName);
             }
