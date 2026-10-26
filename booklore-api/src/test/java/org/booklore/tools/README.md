@@ -61,9 +61,12 @@ There is one tab-separated line per new file, with these columns:
   `(Series, #N)` suffix on the title), and `is number 2 of a series of the same name, and " (1)"
   may mean volume 1` when the series' name reads as the file's name without the ` (1)`, maybe
   followed by one of `Series`, `Trilogy`, `Duology`, `Quartet`, `Quintet`, `Saga`, `Cycle`,
-  `Sequence` and `Chronicles`. A series of another name does not count: `The Testaments (1).epub`
-  goes to a fileless `The Testaments`, number 2 of The Handmaid's Tale, while `Saga (1).epub` does
-  not go to a `Saga` numbered 2 in a series `Saga`.
+  `Sequence` and `Chronicles`. The series' name is `series_name`, and also the series of a
+  `(Series, #N)` suffix on the title where the suffix gives the book's place (`series_number` is
+  empty or the same number), whatever `series_name` says: `Saga (1).epub` does not go to a
+  `Saga (Saga, #2)` whose `series_name` is `Image Comics`. A series of another name does not
+  count: `The Testaments (1).epub` goes to a fileless `The Testaments`, number 2 of The Handmaid's
+  Tale, while `Saga (1).epub` does not go to a `Saga` numbered 2 in a series `Saga`.
 
 The report ends with lines starting with `#`:
 - the count of each decision;

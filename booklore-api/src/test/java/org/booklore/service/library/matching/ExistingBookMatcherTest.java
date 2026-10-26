@@ -599,7 +599,7 @@ class ExistingBookMatcherTest {
             assertThat(saga.seriesName()).isEqualTo("Saga");
             assertThat(shellMatch(file("V/Brian K. Vaughan", "Saga (1).epub"), saga)).isEqualTo(new NoMatch(
                     "book#8 \"Saga (Saga, #2)\" is number 2 of a series of the same name, and \" (1)\" may mean volume 1"));
-            // The metadata's series name comes first, the suffix's counts only without one
+            // The metadata's series name is the one the book gives; the suffix's, whose place it is, counts as well
             FileEvidence copy = file("A/Atwood, Margaret", "The Testaments (1).epub");
             ShellCandidate bySuffix = ShellCandidate.of(2, PATH, false, true, "The Testaments (The Testaments, #2)", null,
                     null, null, List.of("Margaret Atwood"));
@@ -607,8 +607,41 @@ class ExistingBookMatcherTest {
                     " The Handmaid's Tale ", null, List.of("Margaret Atwood"));
             assertThat(shellMatch(copy, bySuffix)).isInstanceOf(NoMatch.class);
             assertThat(byMetadata.seriesName()).isEqualTo("The Handmaid's Tale");
-            assertThat(matchedId(shellMatch(copy, byMetadata))).isEqualTo(2);
+            assertThat(shellMatch(copy, byMetadata)).isInstanceOf(NoMatch.class);
             assertThat(ShellCandidate.of(1, PATH, false, true, "The Testaments", null, null, 2f, List.of()).seriesName()).isNull();
+        }
+
+        @Test
+        void aProvidersSuffixThatGivesThePlaceNamesItsSeriesWhateverTheMetadataCallsIt() {
+            // "Saga (Saga, #2)" says it is number 2 of a series "Saga": "Saga (1).epub" may be its volume 1, whatever
+            // other series the metadata names
+            FileEvidence saga = file("V/Brian K. Vaughan", "Saga (1).epub");
+            NoMatch sameName = new NoMatch(
+                    "book#8 \"Saga (Saga, #2)\" is number 2 of a series of the same name, and \" (1)\" may mean volume 1");
+            for (Float seriesNumber : new Float[]{null, 2f}) {
+                ShellCandidate second = ShellCandidate.of(8, PATH, false, true, "Saga (Saga, #2)", null, "Image Comics",
+                        seriesNumber, List.of("Brian K. Vaughan"));
+                assertThat(second.seriesName()).isEqualTo("Image Comics");
+                assertThat(second.seriesIdentities()).containsExactly("image comics", "saga");
+                assertThat(second.volumeNumbers()).isEmpty();
+                assertThat(shellMatch(saga, second)).as("series number %s", seriesNumber).isEqualTo(sameName);
+            }
+            ShellCandidate bySeriesNoun = ShellCandidate.of(8, PATH, false, true, "Saga (Saga Series, #2)", null,
+                    "Image Comics", null, List.of("Brian K. Vaughan"));
+            assertThat(shellMatch(saga, bySeriesNoun)).isInstanceOf(NoMatch.class);
+            ShellCandidate walkingDead = ShellCandidate.of(9, PATH, false, true, "The Walking Dead (The Walking Dead, #2)",
+                    null, "Image Comics", 2f, List.of("Robert Kirkman"));
+            assertThat(shellMatch(file("K/Robert Kirkman", "The Walking Dead (1).epub"), walkingDead)).isEqualTo(new NoMatch(
+                    "book#9 \"The Walking Dead (The Walking Dead, #2)\" is number 2 of a series of the same name, and"
+                            + " \" (1)\" may mean volume 1"));
+            // A suffix of a series of another name lets the copy through, whatever the metadata's series name
+            FileEvidence copy = file("A/Atwood, Margaret", "The Testaments (1).epub");
+            for (String seriesName : new String[]{null, "Image Comics", "The Handmaid's Tale"}) {
+                ShellCandidate testaments = ShellCandidate.of(1, PATH, false, true, "The Testaments (The Handmaid's Tale, #2)",
+                        null, seriesName, null, List.of("Margaret Atwood"));
+                assertThat(shellMatch(copy, testaments)).as("series name %s", seriesName).isEqualTo(weakMatch(1,
+                        "title and author agree with book#1 \"The Testaments (The Handmaid's Tale, #2)\" (\" (1)\" read as a copy)"));
+            }
         }
 
         @Test

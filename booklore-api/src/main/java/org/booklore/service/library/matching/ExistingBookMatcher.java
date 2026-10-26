@@ -55,7 +55,9 @@ import java.util.stream.Collectors;
  * Volume Two"). A series may be what the name calls it when it has no name, or its name reads as the name without
  * its " (1)", maybe with a last word such as "Series" or "Trilogy" ({@link TitleWords#SERIES_NOUNS}): "Saga (1).epub"
  * may be volume 1 of a series "Saga", but "The Testaments (1).epub" is no volume of The Handmaid's Tale, whose first
- * volume would be named after it, and is the copy of "The Testaments", its number 2. A book turned down so may be the
+ * volume would be named after it, and is the copy of "The Testaments", its number 2. A "(Series, #N)" suffix that
+ * gives the book's place names its series too, whatever the metadata's series name: "Saga (Saga, #2)" is number 2 of
+ * a series "Saga" ({@link ShellCandidate#seriesIdentities}). A book turned down so may be the
  * file's book all the same, if the " (1)" is a copy's: so when another book qualifies as a copy too the file is
  * ambiguous ("Saga (1).epub" against a "Saga" numbered 1 and one numbered 2), and only when none does is it no match;
  * a book the name reads as without the copy reading ("Saga: Volume 1") is the file's book. A bare number in
@@ -517,12 +519,13 @@ public final class ExistingBookMatcher {
      * the name may call that series what the name without its " (1)" says; or its titles name volumes after a series
      * keyword and none of them is 1 ("Saga: Volume Two", "The Walking Dead: Vol. 2: Miles Behind Us"). The name may
      * call the series so when it has no name, or a name that reads as the name without its " (1)" ({@link
-     * ShellCandidate#seriesIdentities}): "Saga (1).epub" may be volume 1 of "Saga" or of the "Saga Series", but
-     * "The Testaments (1).epub" is no volume of The Handmaid's Tale. A bare number says nothing: "World War II" or
-     * "1936" in a subtitle is what a book is about. Null when nothing says so. Never evidence against the book, of
-     * which the file may be a copy all the same: so it only keeps the file from that book when no other book
-     * qualifies, and makes the file ambiguous when one does as a copy too. A book the name reads as without the copy
-     * reading goes before both.
+     * ShellCandidate#seriesIdentities}, which holds the series of a "(Series, #N)" suffix giving the book's place
+     * too): "Saga (1).epub" may be volume 1 of "Saga", of the "Saga Series", or of the series "Saga (Saga, #2)" names
+     * whatever its series name, but "The Testaments (1).epub" is no volume of The Handmaid's Tale. A bare number says
+     * nothing: "World War II" or "1936" in a subtitle is what a book is about. Null when nothing says so. Never
+     * evidence against the book, of which the file may be a copy all the same: so it only keeps the file from that
+     * book when no other book qualifies, and makes the file ambiguous when one does as a copy too. A book the name
+     * reads as without the copy reading goes before both.
      */
     private static Rejection anotherVolumeThanOne(ShellCandidate shell, TitleKey reading) {
         if (shell.seriesPlace() != null && shell.seriesPlace() != 1f) {

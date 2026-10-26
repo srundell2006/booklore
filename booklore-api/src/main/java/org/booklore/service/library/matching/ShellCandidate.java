@@ -28,11 +28,15 @@ import java.util.regex.Pattern;
  *                      number of a "(Series, #N)" suffix; null when it has neither. Where {@link #seriesNumber} is null
  *                      for 1.5, 2.5 and no number alike, this tells them apart
  * @param seriesName    the name of its series as given: the metadata's series name, else the series of a "(Series,
- *                      #N)" suffix ("Storm Front (The Dresden Files, #1)"); null when it has neither
- * @param seriesIdentities the {@link TitleKey#identity}s {@link #seriesName} reads as when read as a title: as it is
- *                      written, and without a last word such as "Series" or "Trilogy" ({@link TitleWords#SERIES_NOUNS})
- *                      when it ends in one. Empty when the series has no name, or one that reads as nothing: then
- *                      nothing says what its series is called
+ *                      #N)" suffix ("Storm Front (The Dresden Files, #1)"); null when it has neither. What the matcher
+ *                      takes the series to be called is {@link #seriesIdentities}
+ * @param seriesIdentities the {@link TitleKey#identity}s the names of its series read as when read as a title: as each
+ *                      is written, and without a last word such as "Series" or "Trilogy" ({@link
+ *                      TitleWords#SERIES_NOUNS}) when it ends in one. The names are {@link #seriesName}, and the series
+ *                      of a "(Series, #N)" suffix that gives the book's place ({@link #seriesPlace}), which is a place
+ *                      in that series whatever the metadata calls its own: "Saga (Saga, #2)" is number 2 of a series
+ *                      "Saga" also when its series name is "Image Comics". Empty when the series has no name, or one
+ *                      that reads as nothing: then nothing says what its series is called
  * @param volumeNumbers the volume numbers its titles name after a series keyword, as {@link TitleKey#keywordNumbers}
  *                      reads them ("Saga: Volume Two" names 2), in order and each once. A bare number is none: "Unbroken:
  *                      A World War II Story" and "The Boys in the Boat: ... the 1936 Berlin Olympics" name no volume.
@@ -115,21 +119,32 @@ public record ShellCandidate(long bookId,
 
         String series = seriesName != null && !seriesName.isBlank() ? seriesName.trim() : suffixSeries;
         Set<String> seriesIdentities = new LinkedHashSet<>();
-        if (series != null) {
-            TitleKey key = TitleKey.ofTitle(series, context);
-            if (!key.identity().isEmpty()) {
-                seriesIdentities.add(key.identity());
-                String withoutNoun = key.identityWithoutLastWord(TitleWords.SERIES_NOUNS);
-                if (withoutNoun != null) {
-                    seriesIdentities.add(withoutNoun);
-                }
-            }
+        addSeriesIdentities(series, context, seriesIdentities);
+        if (suffixIsPlace) {
+            // The suffix's place is in the suffix's series: "Saga (Saga, #2)" is number 2 of a series "Saga", whatever
+            // other series the metadata names
+            addSeriesIdentities(suffixSeries, context, seriesIdentities);
         }
 
         Integer number = wholeNumber(seriesNumber);
         return new ShellCandidate(bookId, libraryPathId, physical, hasCover, fullTitle, identities, years, authors,
                 number != null ? number : wholeNumber(suffixPlace), seriesNumber != null ? seriesNumber : suffixPlace,
                 series, seriesIdentities, List.copyOf(volumeNumbers));
+    }
+
+    /** Adds the identities a series name reads as when read as a title, as {@link #seriesIdentities} has them. */
+    private static void addSeriesIdentities(String series, NameContext context, Set<String> seriesIdentities) {
+        if (series == null) {
+            return;
+        }
+        TitleKey key = TitleKey.ofTitle(series, context);
+        if (!key.identity().isEmpty()) {
+            seriesIdentities.add(key.identity());
+            String withoutNoun = key.identityWithoutLastWord(TitleWords.SERIES_NOUNS);
+            if (withoutNoun != null) {
+                seriesIdentities.add(withoutNoun);
+            }
+        }
     }
 
     /** 3 for 3.0; null for 2.5 (a novella between two volumes), a negative number or none. */
