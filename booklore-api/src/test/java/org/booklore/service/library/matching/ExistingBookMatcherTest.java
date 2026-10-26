@@ -21,6 +21,7 @@ import java.util.Map;
 import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
+import static org.assertj.core.api.Assertions.tuple;
 
 /**
  * Which existing book a new file belongs to. Most cases come from the production rescan that attached files to the
@@ -64,6 +65,18 @@ class ExistingBookMatcherTest {
 
     private static long matchedId(Decision decision) {
         assertThat(decision).isInstanceOf(Match.class);
+        return ((Match) decision).bookId();
+    }
+
+    private static long weaklyMatchedId(Decision decision) {
+        assertThat(decision).isInstanceOf(Match.class);
+        assertThat(((Match) decision).weak()).as(decision.reason()).isTrue();
+        return ((Match) decision).bookId();
+    }
+
+    private static long stronglyMatchedId(Decision decision) {
+        assertThat(decision).isInstanceOf(Match.class);
+        assertThat(((Match) decision).weak()).as(decision.reason()).isFalse();
         return ((Match) decision).bookId();
     }
 
@@ -284,7 +297,8 @@ class ExistingBookMatcherTest {
     class AuthorRowsThatPackSeveralAuthors {
         // Production: a book's author rows are one name each, but some rows hold several authors. Read as one person
         // named after the last word ("Arthur C. Clarke;Gentry Lee" as a Lee), the path never agreed with them, and 8
-        // files of these fileless books became new books
+        // files of these fileless books became new books. Only the rows read apart find these books, so the matches
+        // are weak: they add a book where the rows as stored find none
 
         private ShellCandidate shell(long id, String title, String subtitle, String seriesName, Float seriesNumber,
                                      String authorRow) {
@@ -293,33 +307,35 @@ class ExistingBookMatcherTest {
 
         @Test
         void cradle() {
-            assertThat(matchedId(shellMatch(file("C/Arthur C. Clarke", "Cradle by Arthur Charles Clarke.epub"),
-                    shell(1, "Cradle", null, null, 1f, "Arthur C. Clarke;Gentry Lee")))).isEqualTo(1);
+            assertThat(shellMatch(file("C/Arthur C. Clarke", "Cradle by Arthur Charles Clarke.epub"),
+                    shell(1, "Cradle", null, null, 1f, "Arthur C. Clarke;Gentry Lee"))).isEqualTo(new Match(1, Kind.FILELESS,
+                    "title and author agree with book#1 \"Cradle\" (its stored author names read apart)", true, Set.of(),
+                    Set.of()));
         }
 
         @Test
         void powerAndProgress() {
-            assertThat(matchedId(shellMatch(file("A/Daron Acemoğlu", "Power and Progress.epub"),
+            assertThat(weaklyMatchedId(shellMatch(file("A/Daron Acemoğlu", "Power and Progress.epub"),
                     shell(2, "Power and Progress", "Our Thousand-Year Struggle Over Technology and Prosperity",
                             "Dungeon Crawler Carl", 1f, "Daron Acemoglu;Simon Johnson;")))).isEqualTo(2);
         }
 
         @Test
         void zenMindBeginnersMind() {
-            assertThat(matchedId(shellMatch(file("S/Shunryu Suzuki", "Zen Mind, Beginner's Mind.epub"),
+            assertThat(weaklyMatchedId(shellMatch(file("S/Shunryu Suzuki", "Zen Mind, Beginner's Mind.epub"),
                     shell(3, "Zen Mind, Beginner's Mind", null, null, 1f, "Shunryū Suzuki; Trudy Dixon; Richard Baker"))))
                     .isEqualTo(3);
         }
 
         @Test
         void essentialSnmp() {
-            assertThat(matchedId(shellMatch(file("M/Douglas R. Mauro", "Essential SNMP, Second Edition.epub"),
+            assertThat(weaklyMatchedId(shellMatch(file("M/Douglas R. Mauro", "Essential SNMP, Second Edition.epub"),
                     shell(4, "Essential SNMP, 2nd Edition", null, null, null, "Douglas Mauro; Kevin Schmidt")))).isEqualTo(4);
         }
 
         @Test
         void prettyMinnieInParis() {
-            assertThat(matchedId(shellMatch(file("S/Danielle Steel", "Pretty Minnie in Paris by Danielle Steel.epub"),
+            assertThat(weaklyMatchedId(shellMatch(file("S/Danielle Steel", "Pretty Minnie in Paris by Danielle Steel.epub"),
                     shell(5, "Pretty Minnie in Paris", null, "Dungeon Crawler Carl", 1f,
                             "Danielle Steel; illustrated by Kristi Valiant")))).isEqualTo(5);
         }
@@ -330,15 +346,16 @@ class ExistingBookMatcherTest {
             assertThat(shellMatch(file("C/David W. Cloud",
                             "The Fourth Star - Four Generals and the Epic Struggle for the Future of the United States Army (1).epub"),
                     shell(6, title, null, null, null, "David Cloud; Greg Jaffe")))
-                    .isEqualTo(weakMatch(6, "title and author agree with book#6 \"" + title + "\" (\" (1)\" read as a copy)"));
+                    .isEqualTo(weakMatch(6, "title and author agree with book#6 \"" + title + "\" (\" (1)\" read as a copy)"
+                            + " (its stored author names read apart)"));
         }
 
         @Test
         void aRowThatIsNoListStillReadsAsOneName() {
             // "Rachel; Levithan Cohn" is Rachel Cohn and David Levithan garbled: "Rachel" alone is no full name, so the
             // row reads as one name, Rachel Levithan Cohn, which the folder "Rachel Cohn" agrees with. It attached
-            // before and still does
-            assertThat(matchedId(shellMatch(file("C/Rachel Cohn/Dash & Lily", "Dash & Lily's Book of Dares.epub"),
+            // before and still does, as strongly
+            assertThat(stronglyMatchedId(shellMatch(file("C/Rachel Cohn/Dash & Lily", "Dash & Lily's Book of Dares.epub"),
                     shell(8, "Dash & Lily's Book of Dares", null, "Dash & Lily", 1f, "Rachel; Levithan Cohn")))).isEqualTo(8);
         }
 
@@ -346,7 +363,7 @@ class ExistingBookMatcherTest {
         void aFolderNamedAfterARowWithItsBracket() {
             // The folder reads "Alfred Hitchcock (ed.)" as a person named Ed, as the row read before; the row without its
             // bracket is Alfred Hitchcock, and it also still stands as written, so the folder keeps agreeing with it
-            assertThat(matchedId(shellMatch(file("E/Alfred Hitchcock (ed.)", "Alfred Hitchcock Presents - Fear and Trembling.epub"),
+            assertThat(stronglyMatchedId(shellMatch(file("E/Alfred Hitchcock (ed.)", "Alfred Hitchcock Presents - Fear and Trembling.epub"),
                     shell(9, "Alfred Hitchcock Presents: Fear and Trembling", null, null, null, "Alfred Hitchcock (ed.)"))))
                     .isEqualTo(9);
         }
@@ -354,8 +371,153 @@ class ExistingBookMatcherTest {
         @Test
         void aFolderNamedAfterARowWhoseBracketHoldsTheName() {
             // Without its bracket the row is Fel alone, a surname without a given name that never agrees strongly enough
-            assertThat(matchedId(shellMatch(file("G/Fel (James Galloway)/Tarrin Kael Firestaff Series", "Into the Light.epub"),
+            assertThat(stronglyMatchedId(shellMatch(file("G/Fel (James Galloway)/Tarrin Kael Firestaff Series", "Into the Light.epub"),
                     shell(10, "Into the Light", null, null, null, "Fel (James Galloway)")))).isEqualTo(10);
+        }
+
+        @Test
+        void anEditorsRowWithItsBracket() {
+            // As stored, "Groff Conklin (ed.)" is a person named Ed, whom the folder "Groff (ed) Conklin" is not
+            assertThat(shellMatch(file("C/Groff (ed) Conklin", "In the Grip of Terror.epub"),
+                    shell(11, "In The Grip of Terror", null, null, null, "Groff Conklin (ed.)"))).isEqualTo(new Match(11,
+                    Kind.FILELESS, "title and author agree with book#11 \"In The Grip of Terror\" (its stored author names"
+                    + " read apart)", true, Set.of(), Set.of()));
+        }
+    }
+
+    @Nested
+    class AStoredAuthorNameReadApartOnlyAddsABook {
+        // The dry run: reading the rows apart made a second fileless record of the same book qualify, one the rows as
+        // stored did not find, and 4 files lost the book they had to a new book. Such a book yields to the books the
+        // rows as stored find, as a book found only with " (1)" read as a copy does
+
+        private ShellCandidate shell(long id, String title, String subtitle, String seriesName, Float seriesNumber,
+                                     String... authorRows) {
+            return ShellCandidate.of(id, PATH, false, true, title, subtitle, seriesName, seriesNumber, List.of(authorRows));
+        }
+
+        @Test
+        void reliquary() {
+            Decision decision = shellMatch(file("P/Douglas Preston", "02. Reliquary - Douglas Preston (1998).epub"),
+                    shell(178152, "Reliquary", null, "Pendergast", 2f, "Douglas Preston"),
+                    shell(210267, "Reliquary", null, "Pendergast", 2f, "Douglas Preston;Lincoln Child"));
+
+            assertThat(decision).isEqualTo(new Match(178152, Kind.FILELESS, "title and author agree with book#178152"
+                    + " \"Reliquary\"; book#210267 \"Reliquary\" qualifies only with its stored author names read apart,"
+                    + " and yields"));
+        }
+
+        @Test
+        void judgmentInDeath() {
+            // Two alike records of the rows as stored, so the match is weak as before; the third yields to them
+            ShellCandidate first = shell(238158, "Judgment in Death", null, "In Death", 11f, "J.D. Robb");
+            ShellCandidate second = shell(253049, "Judgment in Death", null, "In Death", 11f, "J.D. Robb");
+            ShellCandidate packed = shell(202938, "Judgment in Death", null, "In Death", 11f, "Nora Roberts; J. D. Robb");
+
+            Decision decision = shellMatch(file("R/J.D. Robb/In Death", "Judgment in Death (1).epub"), packed, second, first);
+
+            assertThat(decision).isInstanceOf(Match.class);
+            Match match = (Match) decision;
+            assertThat(match.bookId()).isEqualTo(238158);
+            assertThat(match.weak()).isTrue();
+            assertThat(match.reason()).contains("one of 2 alike fileless books (book#238158, book#253049)")
+                    .contains("book#202938 \"Judgment in Death\" qualifies only with its stored author names read apart,"
+                            + " and yields");
+        }
+
+        @Test
+        void childOfADeadGod() {
+            // Read as one name, "Barb Hendee; J. C. Hendee" is no name at all, so as stored that book has no authors
+            Decision decision = shellMatch(file("H/Barb Hendee", "Child of a Dead God - Barb Hendee, J.C. Hendee (2008).epub"),
+                    shell(276250, "Child of a Dead God", null, "Saga of the Noble Dead", 6f, "Barb Hendee; J. C. Hendee"),
+                    shell(142847, "Child of a Dead God", null, null, null, "Barb Hendee", "J.C. Hendee"));
+
+            assertThat(decision).isEqualTo(new Match(142847, Kind.FILELESS, "title and author agree with book#142847"
+                    + " \"Child of a Dead God\"; book#276250 \"Child of a Dead God\" qualifies only with its stored author"
+                    + " names read apart, and yields"));
+        }
+
+        @Test
+        void theLineup() {
+            Decision decision = shellMatch(file("P/Otto Penzler", "The Lineup.epub"),
+                    shell(223555, "the Lineup (2010)", "The World's Greatest Crime Writers Tell the Inside Story of Their"
+                            + " Greatest Detectives", null, 1f, "Penzler, Otto"),
+                    shell(205957, "The Lineup", null, null, null, "Otto Penzler (Editor)"));
+
+            assertThat(decision).isEqualTo(new Match(223555, Kind.FILELESS, "title and author agree with book#223555"
+                    + " \"the Lineup (2010)\"; book#205957 \"The Lineup\" qualifies only with its stored author names"
+                    + " read apart, and yields"));
+        }
+
+        @Test
+        void withNoBookTheRowsAsStoredFindTheBooksTheyFindReadApartDecideWeakly() {
+            ShellCandidate cradle = shell(1, "Cradle", null, null, null, "Arthur C. Clarke;Gentry Lee");
+            ShellCandidate twin = shell(2, "Cradle", null, null, null, "Gentry Lee; Arthur C. Clarke");
+            ShellCandidate other = shell(3, "Cradle", "A Novel", null, null, "Arthur C. Clarke & Gentry Lee");
+            FileEvidence file = file("C/Arthur C. Clarke", "Cradle.epub");
+
+            // Alike: one of them, weakly
+            assertThat(shellMatch(file, twin, cradle)).isEqualTo(weakMatch(1, "title and author agree with book#1"
+                    + " \"Cradle\" (its stored author names read apart), one of 2 alike fileless books (book#1, book#2)"));
+            // Not alike: ambiguous, refusing what the file says it is not as the rows as stored have it
+            ShellCandidate elsewhere = ShellCandidate.of(4, 2L, false, true, "Cradle", null, null, null,
+                    List.of("Arthur C. Clarke"));
+            Decision ambiguous = shellMatch(file, cradle, other, elsewhere);
+            assertThat(ambiguous).isInstanceOf(Ambiguous.class);
+            assertThat(((Ambiguous) ambiguous).bookIds()).containsExactly(1L, 3L);
+            assertThat(ambiguous.refused()).containsExactly(4L);
+            // One of them refuses what the file says it is not too, should it yield to its group's book
+            Decision weak = shellMatch(file, cradle, elsewhere);
+            assertThat(weaklyMatchedId(weak)).isEqualTo(1);
+            assertThat(weak.refused()).containsExactly(4L);
+            assertThat(weak.alsoRefused()).isEmpty();
+        }
+
+        @Test
+        void aBookFoundOnlyAsACopyYieldsToABookTheRowsReadApartFind() {
+            // "Cradle (1).epub" reads as "Cradle 1", which the packed row's book is, before "Cradle" read as a copy
+            ShellCandidate first = shell(1, "Cradle 1", null, null, null, "Arthur C. Clarke;Gentry Lee");
+            ShellCandidate plain = shell(2, "Cradle", null, null, null, "Arthur C. Clarke");
+
+            Decision decision = shellMatch(file("C/Arthur C. Clarke", "Cradle (1).epub"), plain, first);
+
+            assertThat(decision).isEqualTo(weakMatch(1, "title and author agree with book#1 \"Cradle 1\" (its stored"
+                    + " author names read apart); book#2 \"Cradle\" qualifies only if \" (1)\" is a copy, and yields"));
+        }
+
+        @Test
+        void ofTheBooksFoundAsACopyThoseTheRowsAsStoredFindDecideFirst() {
+            // The dry run: "Judgment in Death (1).epub" went to one of two alike records by J.D. Robb; the third, whose
+            // row packs Nora Roberts too, yields to them. Alone, it is the file's book, and the reason says how
+            ShellCandidate first = shell(238158, "Judgment in Death", null, "In Death", 11f, "J.D. Robb");
+            ShellCandidate packed = shell(202938, "Judgment in Death", null, "In Death", 11f, "Nora Roberts; J. D. Robb");
+            FileEvidence copy = file("R/J.D. Robb/In Death", "Judgment in Death (1).epub");
+
+            assertThat(shellMatch(copy, packed, first)).isEqualTo(weakMatch(238158, "title and author agree with"
+                    + " book#238158 \"Judgment in Death\" (\" (1)\" read as a copy); book#202938 \"Judgment in Death\""
+                    + " qualifies only with its stored author names read apart, and yields"));
+            assertThat(shellMatch(copy, packed)).isEqualTo(weakMatch(202938, "title and author agree with book#202938"
+                    + " \"Judgment in Death\" (\" (1)\" read as a copy) (its stored author names read apart)"));
+        }
+
+        @Test
+        void whatTheRowsAsStoredSayAgainstABookTheyReadApartAcceptIsNoEvidence() {
+            // As stored, "Arthur C. Clarke;Gentry Lee" is a Lee, and the author part says the file is by Clarke
+            Decision decision = shellMatch(file("SF", "Cradle - Arthur C. Clarke.epub"),
+                    shell(1, "Cradle", null, null, null, "Arthur C. Clarke;Gentry Lee"));
+            assertThat(decision).isEqualTo(new Match(1, Kind.FILELESS,
+                    "title and author agree with book#1 \"Cradle\" (its stored author names read apart)", true, Set.of(),
+                    Set.of()));
+        }
+
+        @Test
+        void aBookTheRowsAsStoredFindIsNeverLost() {
+            // As stored, "Louann Brizendine; M.D." is no name (its last word "d" is too short), so the physical book
+            // matches by the folders alone, as before; read apart, the row is Brizendine, whom the path does not name,
+            // which takes nothing away
+            ShellCandidate physical = ShellCandidate.of(1, PATH, true, false, "The Female Brain", null, null, null,
+                    List.of("Louann Brizendine; M.D."));
+            assertThat(stronglyMatchedId(shellMatch(file("Science", "The Female Brain.epub"), physical))).isEqualTo(1);
         }
     }
 
@@ -377,9 +539,13 @@ class ExistingBookMatcherTest {
 
         @Test
         void authorsAreAlikeWhetherTheyAreStoredOnePerRowOrPackedInOne() {
-            assertThat(matchedId(shellMatch(file("H/Barb Hendee", "Child of a Dead God.epub"),
+            // As stored, the packed row is one Hendee, which the folder agrees with as well: both books qualify as
+            // before, and with the row read apart they are alike
+            assertThat(shellMatch(file("H/Barb Hendee", "Child of a Dead God.epub"),
                     shell(40, "Child of a Dead God", "Barb Hendee", "J.C. Hendee"),
-                    shell(12, "Child of a Dead God", "Barb Hendee; J. C. Hendee")))).isEqualTo(12);
+                    shell(12, "Child of a Dead God", "Barb Hendee; J. C. Hendee"))).isEqualTo(weakMatch(12,
+                    "title and author agree with book#12 \"Child of a Dead God\", one of 2 alike fileless books"
+                            + " (book#12, book#40)"));
         }
 
         @Test
@@ -1029,7 +1195,8 @@ class ExistingBookMatcherTest {
             for (FileEvidence file : files) {
                 if (ExistingBookMatcher.matchShell(file, index) instanceof Match match) {
                     String extension = file.fileName().substring(file.fileName().lastIndexOf('.') + 1);
-                    claims.add(new Claim<>(file, file.fileName(), match.bookId(), file.folderKey(), extension, file.fileNameKey()));
+                    claims.add(new Claim<>(file, file.fileName(), match.bookId(), file.folderKey(), extension, file.fileNameKey(),
+                            match.weak()));
                 }
             }
             return claims;
@@ -1116,15 +1283,17 @@ class ExistingBookMatcherTest {
 
         @Test
         void aSecondDownloadOfABookWhoseAuthorRowPacksTwoAuthorsGoesToItToo() {
-            // Production: both became a new book; the one author row holds both authors
-            ShellCandidate fullBloom = ShellCandidate.of(64, PATH, false, true, "Full Bloom", null, "Full Series", 5f,
+            // Production: both became a new book; the one author row holds both authors. Only the row read apart, and
+            // a " (1)" read as a copy, find the book, so both claims are weak, and weak claims that agree get it
+            ShellCandidate fullBloom = ShellCandidate.of(273322, PATH, false, true, "Full Bloom", null, "Full Series", 5f,
                     List.of("Janet Evanovich; Charlotte Hughes"));
             List<Claim<FileEvidence>> claims = claims(FilelessShellIndex.of(List.of(fullBloom)),
                     file("E/Janet Evanovich/Full", "Full Bloom.epub"),
                     file("E/Janet Evanovich/Full", "Full Bloom (1).epub"));
-            assertThat(claims).extracting(Claim::bookId).containsExactly(64L, 64L);
+            assertThat(claims).extracting(Claim::bookId, Claim::weak)
+                    .containsExactly(tuple(273322L, true), tuple(273322L, true));
 
-            assertThat(ExistingBookMatcher.resolveShellClaims(claims).accepted().get(64L)).hasSize(2);
+            assertThat(ExistingBookMatcher.resolveShellClaims(claims).accepted().get(273322L)).hasSize(2);
         }
 
         @Test
@@ -1212,6 +1381,23 @@ class ExistingBookMatcherTest {
             assertThat(resolution.yielded().get(70L).files()).containsExactly(weak);
             assertThat(resolution.yielded().get(70L).why()).isEqualTo("claimed by files of 2 folders [1:A/Steve Alten,"
                     + " 1:A/Steve Alten/MEG]: MEG (1).epub, The MEG.epub; the weak claims of MEG (1).epub yield to the others");
+        }
+
+        @Test
+        void aWeakClaimOfARowReadApartYieldsToTheStrongOne() {
+            // As stored, the rows find the book by Gentry Lee only; read apart, the first is Clarke's too
+            FilelessShellIndex index = FilelessShellIndex.of(List.of(ShellCandidate.of(72, PATH, false, true, "Cradle", null,
+                    null, null, List.of("Arthur C. Clarke;Gentry Lee", "Gentry Lee"))));
+            FileEvidence strong = file("L/Gentry Lee", "Cradle.epub");
+            FileEvidence weak = file("C/Arthur C. Clarke", "Cradle.epub");
+            List<Claim<FileEvidence>> claims = claims(index, weak, strong);
+            assertThat(claims).extracting(Claim::file, Claim::weak).containsExactly(tuple(weak, true), tuple(strong, false));
+
+            ClaimResolution<FileEvidence> resolution = ExistingBookMatcher.resolveShellClaims(claims);
+
+            assertThat(resolution.accepted()).containsExactly(Map.entry(72L, List.of(strong)));
+            assertThat(resolution.rejected()).isEmpty();
+            assertThat(resolution.yielded().get(72L).files()).containsExactly(weak);
         }
 
         @Test

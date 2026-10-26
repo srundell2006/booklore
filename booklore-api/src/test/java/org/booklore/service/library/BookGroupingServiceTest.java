@@ -1690,6 +1690,46 @@ class BookGroupingServiceTest {
     }
 
     @Test
+    void rescan_bookPerFolder_aMatchOnlyAnAuthorRowReadApartMakesYieldsToTheStrongMatchOfItsFolder() {
+        // "Cradle.pdf" is the fileless "Cradle" only with its row "Arthur C. Clarke;Gentry Lee" read apart; as before,
+        // it goes with "Cradle 1.epub" of its folder to the book that file strongly matches
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
+        shell(10, "Cradle", "Arthur C. Clarke;Gentry Lee");
+        shell(20, "Cradle 1", "Arthur C. Clarke");
+        LibraryFile first = newFile(lib, path, "C/Arthur C. Clarke/Cradle", "Cradle 1.epub");
+        LibraryFile plain = newFile(lib, path, "C/Arthur C. Clarke/Cradle", "Cradle.pdf");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, first, plain);
+
+        assertThat(attached(result)).containsExactly(Map.entry(20L, List.of(first, plain)));
+        assertThat(outcomes.weakMatch("Cradle.pdf").bookId()).isEqualTo(10);
+        assertThat(outcomes.lines).isEmpty();
+    }
+
+    @Test
+    void rescan_autoDetect_aSecondDownloadOfABookWhoseAuthorRowPacksTwoAuthorsGoesToItWithTheFirst() {
+        // Production: both became a new book. Only the row read apart finds the book for the first, and the " (1)"
+        // read as a copy as well for the second: both are weak, and with no strong match in their group they decide
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shellRows.add(new FilelessBookRow(273322L, null, false, "cover", null, "Full Bloom", null, "Full Series", 5f,
+                "Janet Evanovich; Charlotte Hughes"));
+        LibraryFile plain = newFile(lib, path, "E/Janet Evanovich/Full", "Full Bloom.epub");
+        LibraryFile copy = newFile(lib, path, "E/Janet Evanovich/Full", "Full Bloom (1).epub");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, plain, copy);
+
+        assertThat(attached(result)).containsExactly(Map.entry(273322L, List.of(plain, copy)));
+        assertThat(result.newBookGroups()).isEmpty();
+        outcomes.weakMatch("Full Bloom.epub");
+        outcomes.weakMatch("Full Bloom (1).epub");
+        assertThat(outcomes.lines).isEmpty();
+    }
+
+    @Test
     void rescan_bookPerFolder_weakMatchesOfAGroupWithoutAStrongOneMustAgree() {
         var path = pathEntity(1L, "/books");
         var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);

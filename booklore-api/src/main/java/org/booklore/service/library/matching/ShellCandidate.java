@@ -23,6 +23,10 @@ import java.util.regex.Pattern;
  *                      {@link TitleKey#years} reads them; no identity holds them, so they alone tell two editions apart
  * @param authors       its authors, each stored name read as {@link PersonName#parseAuthor} reads it: one name that
  *                      packs several ("Arthur C. Clarke;Gentry Lee") is each of them
+ * @param authorsAsStored its authors with each stored name read as one person ({@link PersonName#parse}), as the
+ *                      matcher read them before it read them apart: the reading the weak rule yields to ({@link
+ *                      ExistingBookMatcher.Match#weak}). The same list as {@link #authors} when they read alike, which
+ *                      most do
  * @param seriesNumber  its place in its series when that is a whole number: the metadata's series number, else the
  *                      number of a "(Series, #N)" suffix; null otherwise
  * @param seriesPlace   its place in its series as given, fractions included: the metadata's series number, else the
@@ -52,6 +56,7 @@ public record ShellCandidate(long bookId,
                              Set<String> identities,
                              Set<Integer> years,
                              List<PersonName> authors,
+                             List<PersonName> authorsAsStored,
                              Integer seriesNumber,
                              Float seriesPlace,
                              String seriesName,
@@ -69,6 +74,8 @@ public record ShellCandidate(long bookId,
         identities = Set.copyOf(identities);
         years = Set.copyOf(years);
         authors = List.copyOf(authors);
+        // Most books' names read alike either way: one list then, not two
+        authorsAsStored = authorsAsStored.equals(authors) ? authors : List.copyOf(authorsAsStored);
         seriesIdentities = Set.copyOf(seriesIdentities);
         volumeNumbers = List.copyOf(volumeNumbers);
     }
@@ -81,6 +88,7 @@ public record ShellCandidate(long bookId,
                                     String subtitle, String seriesName, Float seriesNumber, Collection<String> authorNames) {
         List<String> names = authorNames == null ? List.of() : authorNames.stream().filter(Objects::nonNull).toList();
         List<PersonName> authors = PersonName.parseAuthors(names);
+        List<PersonName> asStored = names.stream().map(PersonName::parse).filter(Objects::nonNull).toList();
         // A title such as "The Hobbit - J.R.R. Tolkien" reads without the author part only when it is this book's author
         NameContext context = NameContext.NONE.withAuthors(names);
 
@@ -128,9 +136,17 @@ public record ShellCandidate(long bookId,
         }
 
         Integer number = wholeNumber(seriesNumber);
-        return new ShellCandidate(bookId, libraryPathId, physical, hasCover, fullTitle, identities, years, authors,
+        return new ShellCandidate(bookId, libraryPathId, physical, hasCover, fullTitle, identities, years, authors, asStored,
                 number != null ? number : wholeNumber(suffixPlace), seriesNumber != null ? seriesNumber : suffixPlace,
                 series, seriesIdentities, List.copyOf(volumeNumbers));
+    }
+
+    /**
+     * Whether its stored author names read apart are other authors than each read as one person: a name packs
+     * several ("Arthur C. Clarke;Gentry Lee"), or holds an HTML entity or a part in brackets.
+     */
+    public boolean readsAuthorsApart() {
+        return authorsAsStored != authors && !authorsAsStored.equals(authors);
     }
 
     /** Adds the identities a series name reads as when read as a title, as {@link #seriesIdentities} has them. */

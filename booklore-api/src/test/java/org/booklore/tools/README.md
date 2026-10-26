@@ -59,7 +59,9 @@ There is one tab-separated line per new file, with these columns:
   (the same title, with the same year in brackets if any, series number and authors), as in `title and author agree with book#12
   "Survival", one of 2 alike fileless books (book#12, book#40)`, and when a ` (1)` at the end of
   its name was read as a copy, as in `title and author agree with book#7 "Saga" (" (1)" read as a
-  copy)`.
+  copy)`, and when only the book's stored author names read apart agree with the path, as in
+  `title and author agree with book#1 "Cradle" (its stored author names read apart)`: a row such
+  as `Arthur C. Clarke;Gentry Lee` read as both authors, not as one Lee.
 - An `ambiguous` reason names apart the fileless books that qualify only if a ` (1)` is a copy,
   not volume 1, as in `fileless: 2 fileless books qualify: book#1 "Saga", and book#2 "Saga" if
   " (1)" is a copy`: book#2 is number 2 of its series, and the name does not say which it is.
@@ -105,6 +107,7 @@ The report ends with lines starting with `#`:
   | `its weak match comes to nothing: ...` | becomes a new book: its group's matches do not agree or a file of it is turned down, or its book's claims were rejected |
   | `follows a weak match that comes to nothing: ...` | as the last, without a match of its own: its group has no strong match, and the book its weak matches gave it is lost the same way |
   | `a match by its name as it reads goes before books found with " (1)" read as a copy` | matched a book strongly; the books its ` (1)` read as a copy finds yield to it |
+  | `a match by its name as it reads goes before books found with their stored author names read apart` | matched a book strongly; the books that qualify only with their stored author names read apart yield to it |
 
 Useful cuts:
 
@@ -118,15 +121,21 @@ grep -v '^#' report.tsv | awk -F'\t' '$8 != "-"'            # every file a weak 
 
 ### Weak matches
 
-A match that only the choice among alike fileless books, or a ` (1)` read as a copy, makes is
-weak. These two rules only ever add a book to a file that the rules before them gave none; they
-never take one away or change it. So:
+A match that only the choice among alike fileless books, a ` (1)` read as a copy, or a book's
+stored author names read apart makes is weak. These three rules only ever add a book to a file
+that the rules before them gave none; they never take one away or change it. So:
 
 - A book the name reads as goes before the books only its ` (1)` read as a copy finds, and the
   reason names those: `title and author agree with book#1 "Nico (Book 1)";
   book#2 "Nico" qualifies only if " (1)" is a copy, and yields`. A book the name as it reads
   turns down stays turned down: `01 - Survival (1).epub` is number 1 of a series, so not a
   fileless `Survival: Book 1` without a number, which it would be with its ` (1)` read as a copy.
+- So does a book whose stored author names, each read as one person, agree with the path, go
+  before another record of the book that qualifies only with its names read apart: `P/Douglas
+  Preston/02. Reliquary - Douglas Preston (1998).epub` is `title and author agree with
+  book#178152 "Reliquary"; book#210267 "Reliquary" qualifies only with its stored author names
+  read apart, and yields` (book#210267's row is `Douglas Preston;Lincoln Child`). Of the books
+  found with a ` (1)` read as a copy too, those whose names as stored agree decide first.
 - The files that would be one new book go to the book of their strong matches. A file whose own
   weak match is another book is attached with them, and its reason says so: `goes with the files
   it would be one book with; its own weak match yields to theirs: title and author agree with

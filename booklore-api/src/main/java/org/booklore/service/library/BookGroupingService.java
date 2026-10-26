@@ -125,8 +125,9 @@ public class BookGroupingService {
      * names another author or year), becomes a new book instead. A fileless book claimed from more than one folder, or
      * by two different files of one format, the files that follow a claim included, gets none of them.
      * <p>
-     * A weak match ({@link Match#weak}: one of alike fileless books, or a " (1)" read as a copy) only gives files a
-     * book that the other rules give none, and never takes one away:
+     * A weak match ({@link Match#weak}: one of alike fileless books, a " (1)" read as a copy, or a book found only with
+     * its stored author names read apart) only gives files a book that the other rules give none, and never takes one
+     * away:
      * <ul>
      *   <li>A group goes to the book of its files' strong matches; their weak matches only count in a group with no
      *       strong one, and must then agree as well. In a group with a strong match, a file whose match is weak

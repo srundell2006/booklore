@@ -649,6 +649,33 @@ class RescanDryRunTest {
     }
 
     @Test
+    void aMatchThatAnotherRecordOfItsBookYieldsToOnlyItsAuthorNamesReadApartAgreeWithIsNoNewAttach() throws IOException {
+        // The dry run: with the row "Douglas Preston;Lincoln Child" read apart, the second record qualified too, and
+        // the file became a new book. It yields to the record the rows as stored find, which the file got before
+        Files.writeString(dir.resolve("shells.tsv"), us("""
+                id\tlibrary_path_id\tis_physical\thas_cover\ttitle\tsubtitle\tseries_number\tauthors\tseries_name
+                178152\t1\t0\t1\tReliquary\tNULL\t2\tDouglas Preston␟\tPendergast
+                210267\t1\t0\t1\tReliquary\tNULL\t2\tDouglas Preston;Lincoln Child␟\tPendergast
+                1\t1\t0\t1\tCradle\tNULL\t1\tArthur C. Clarke;Gentry Lee␟\tNULL
+                """));
+        Files.writeString(dir.resolve("existing.tsv"), "");
+        Files.writeString(dir.resolve("newfiles.tsv"), """
+                1\tP/Douglas Preston\t02. Reliquary - Douglas Preston (1998).epub
+                1\tC/Arthur C. Clarke\tCradle by Arthur Charles Clarke.epub
+                """);
+
+        Report report = run();
+
+        assertThat(decisions(report)).containsExactly(
+                entry("P/Douglas Preston/02. Reliquary - Douglas Preston (1998).epub", "attach-shell 178152"),
+                entry("C/Arthur C. Clarke/Cradle by Arthur Charles Clarke.epub", "attach-shell 1"));
+        assertThat(weakMatches(report)).containsExactly(
+                entry("02. Reliquary - Douglas Preston (1998).epub",
+                        "a match by its name as it reads goes before books found with their stored author names read apart"),
+                entry("Cradle by Arthur Charles Clarke.epub", "attached by its own weak match"));
+    }
+
+    @Test
     void readsWhatMariaDbBatchModeWrites() {
         assertThat(RescanDryRun.Exports.unescape("a\\tb\\nc\\\\d")).isEqualTo("a\tb\nc\\d");
         assertThat(RescanDryRun.Exports.unescape("plain")).isEqualTo("plain");
