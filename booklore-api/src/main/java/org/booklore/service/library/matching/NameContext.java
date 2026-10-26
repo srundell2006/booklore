@@ -69,6 +69,19 @@ public final class NameContext {
         return new NameContext(folderNames, List.copyOf(parsed), leafName);
     }
 
+    /**
+     * This context plus authors already read: a fileless book's stored names each read as one person, as the matcher
+     * read them before it read them apart.
+     */
+    NameContext withPersons(List<PersonName> persons) {
+        if (persons.isEmpty()) {
+            return this;
+        }
+        List<PersonName> parsed = new ArrayList<>(authors);
+        parsed.addAll(persons);
+        return new NameContext(folderNames, List.copyOf(parsed), leafName);
+    }
+
     /** The names the file's folders could be, for a caller checking a book's authors against them. */
     public List<PersonName> folderNames() {
         return folderNames;

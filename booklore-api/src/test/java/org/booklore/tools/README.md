@@ -149,7 +149,12 @@ that the rules before them gave none; they never take one away or change it. So:
   (1).epub yield to the others`. A file of a group that a strong match gave its book claims it
   as strongly, whatever its own match, and from the folder of the file it follows, as a file
   without a match did before: in BOOK_PER_FOLDER, `Survival/Audio/Survival (1).m4b` claims the
-  fileless `Survival` of `Survival/Survival.epub` from the epub's folder, and both get it.
+  fileless `Survival` of `Survival/Survival.epub` from the epub's folder, and both get it. Unless
+  a file of the group weakly matched that book only with its stored author names read apart, and
+  the names as stored say the file is not it: `H/Barb Hendee & J.C. Hendee/Child of a Dead God -
+  J.C. Hendee.pdf` is not by `Barb Hendee; J. C. Hendee` read as one Hendee, which before turned
+  its group down. Then the group claims the book weakly, and gets it only where no strong claim
+  of another folder does.
 - What a file says against a book only with its ` (1)` read as a copy, a book the rules before
   never looked at for it, does not keep its group from a book a strong match gives it: `G/Neil
   Gaiman/Good Omens - T. Pratchett (1).pdf` (`book#10 "Good Omens" is not by 'T. Pratchett' ("

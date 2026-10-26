@@ -18,6 +18,8 @@ import org.booklore.service.library.matching.ExistingBookMatcher.NoMatch;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -1727,6 +1729,67 @@ class BookGroupingServiceTest {
         outcomes.weakMatch("Full Bloom.epub");
         outcomes.weakMatch("Full Bloom (1).epub");
         assertThat(outcomes.lines).isEmpty();
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = LibraryOrganizationMode.class, names = {"AUTO_DETECT", "BOOK_PER_FOLDER"})
+    void rescan_aGroupThatHasItsBookOnlyWithTheRowReadApartClaimsItWeakly(LibraryOrganizationMode mode) {
+        // As stored, "Barb Hendee; J. C. Hendee" is one Hendee, whom the pdf's "J.C. Hendee" is not: before, that
+        // turned its folder's group down, and the book went to the file of the other folder. Read apart the pdf is
+        // the book's, weakly, so its group claims the book only weakly and yields, as before
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(mode, path);
+        shell(10, "Child of a Dead God", "Barb Hendee; J. C. Hendee");
+        LibraryFile alone = newFile(lib, path, "H/Barb Hendee", "Child of a Dead God.epub");
+        LibraryFile epub = newFile(lib, path, "H/Barb Hendee & J.C. Hendee", "Child of a Dead God.epub");
+        LibraryFile pdf = newFile(lib, path, "H/Barb Hendee & J.C. Hendee", "Child of a Dead God - J.C. Hendee.pdf");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, alone, epub, pdf);
+
+        assertThat(attached(result)).containsExactly(Map.entry(10L, List.of(alone)));
+        assertThat(newBooks(result)).containsExactly(List.of("Child of a Dead God.epub",
+                "Child of a Dead God - J.C. Hendee.pdf"));
+        assertThat(outcomes.weakMatch("Child of a Dead God - J.C. Hendee.pdf").refused()).containsExactly(10L);
+        assertThat(outcomes.lines).singleElement().asString().startsWith("yielded 10 [Child of a Dead God.epub,"
+                + " Child of a Dead God - J.C. Hendee.pdf]");
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = LibraryOrganizationMode.class, names = {"AUTO_DETECT", "BOOK_PER_FOLDER"})
+    void rescan_aGroupThatHasItsBookOnlyWithTheRowReadApartGetsItWhenNothingOutweighsIt(LibraryOrganizationMode mode) {
+        // Before, the pdf turned the book down and both files became a new book; now its weak match adds the book
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(mode, path);
+        shell(10, "Child of a Dead God", "Barb Hendee; J. C. Hendee");
+        LibraryFile epub = newFile(lib, path, "H/Barb Hendee & J.C. Hendee", "Child of a Dead God.epub");
+        LibraryFile pdf = newFile(lib, path, "H/Barb Hendee & J.C. Hendee", "Child of a Dead God - J.C. Hendee.pdf");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, epub, pdf);
+
+        assertThat(attached(result)).containsExactly(Map.entry(10L, List.of(epub, pdf)));
+        assertThat(result.newBookGroups()).isEmpty();
+        assertThat(outcomes.lines).isEmpty();
+    }
+
+    @Test
+    void rescan_autoDetect_aTitleThatReadsAsTheNameOnlyWithTheRowReadApartYieldsToTheTitleAsStored() {
+        // "Child of a Dead God - John Hendee" is "Child of a Dead God" only with its row read apart: the second file's
+        // claim is weak, and the first file gets the book, as before
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shell(10, "Child of a Dead God - John Hendee", "Barb Hendee; John Hendee");
+        LibraryFile titled = newFile(lib, path, "H/Barb Hendee", "Child of a Dead God - John Hendee.epub");
+        LibraryFile plain = newFile(lib, path, "H/John Hendee", "Child of a Dead God.epub");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, titled, plain);
+
+        assertThat(attached(result)).containsExactly(Map.entry(10L, List.of(titled)));
+        assertThat(newBooks(result)).containsExactly(List.of("Child of a Dead God.epub"));
+        outcomes.weakMatch("Child of a Dead God.epub");
+        assertThat(outcomes.lines).singleElement().asString().startsWith("yielded 10 [Child of a Dead God.epub]");
     }
 
     @Test
