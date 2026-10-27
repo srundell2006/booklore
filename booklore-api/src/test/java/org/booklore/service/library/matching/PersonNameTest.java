@@ -4,6 +4,7 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.params.ParameterizedTest;
 import org.junit.jupiter.params.provider.CsvSource;
 
+import java.util.Arrays;
 import java.util.List;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -44,6 +45,69 @@ class PersonNameTest {
         assertThat(PersonName.parseAll("Lora Leigh; Michelle Rowan & Ava Gray")).extracting(PersonName::surname)
                 .containsExactly("leigh", "rowan", "gray");
         assertThat(PersonName.parseAll("Foundation and Empire")).hasSize(1);
+    }
+
+    @ParameterizedTest(name = "{0} -> {1}")
+    @CsvSource(delimiter = '|', quoteCharacter = '"', textBlock = """
+            Arthur C. Clarke;Gentry Lee                         | clarke arthur c; lee gentry
+            Daron Acemoglu;Simon Johnson;                       | acemoglu daron; johnson simon
+            Kafka, Franz; Mitchell, Mike; Robertson, Ritchie    | kafka franz; mitchell mike; robertson ritchie
+            Hobson, J. Allan;                                   | hobson j allan
+            Walton, Charles; Walton, Charles;                   | walton charles
+            Barb Hendee; J. C. Hendee                           | hendee barb; hendee j c
+            Nora Roberts; J. D. Robb                            | roberts nora; robb j d
+            Danielle Steel; illustrated by Kristi Valiant       | steel danielle; valiant illustrated by kristi
+            Shunryū Suzuki; Trudy Dixon; Richard Baker          | suzuki shunryu; dixon trudy; baker richard
+            Katie Tsang & Kevin Tsang                           | tsang katie; tsang kevin
+            Rachel; Levithan Cohn                               | cohn rachel levithan
+            Lauren & Devon Royal                                | royal lauren devon
+            Grosset & Dunlap                                    | dunlap grosset
+            Niccol&ograve; Machiavelli                          | machiavelli niccolo
+            P&eacute;ter N&aacute;das                           | nadas peter
+            Mima Simi&#263;                                     | simic mima
+            Patrick K. O&rsquo;Donnell                          | odonnell patrick k
+            Aaron&nbsp;C. Davis                                 | davis aaron c
+            Kenneth (Lester Dent & Evelyn Coulson) Robeson      | robeson kenneth; robeson kenneth lester dent evelyn coulson
+            Lindsey Priestley (Edited by)                       | priestley lindsey; by lindsey priestley edited
+            David G. Hartwell (ed.)                             | hartwell david g; ed david g hartwell
+            Fel (James Galloway)                                | fel; galloway fel james
+            Oscar Lewis; Alberto Beltran (illustrations         | lewis oscar; beltran alberto; illustrations oscar lewis alberto beltran
+            Jane Doe [Translator]                               | doe jane; translator jane doe
+            Oscar Lewis; Alberto Beltran [illustrations         | lewis oscar; beltran alberto; illustrations oscar lewis alberto beltran
+            Louann Brizendine; M.D.                             | brizendine louann
+            Ronald C White; Jr.                                 | white ronald c
+            ANGEL PAYNE &                                       | payne angel
+            Brian K.; Staples Vaughan                           | vaughan brian k staples
+            E. & M.A. Radford                                   | radford e m a
+            Alan E. & J.A. Meyer NOURSE                         | nourse alan e j a meyer
+            """)
+    void readsTheAuthorsAStoredNameStandsFor(String stored, String expected) {
+        // Each expected author is its surname and then its given names; a name with a bracket also stands as written
+        assertThat(PersonName.parseAuthor(stored)).extracting(name -> (name.surname() + " " + String.join(" ", name.givenNames())).trim())
+                .containsExactly(expected.split("; "));
+    }
+
+    @Test
+    void readsNoAuthorInABlankStoredName() {
+        assertThat(PersonName.parseAuthor(null)).isEmpty();
+        assertThat(PersonName.parseAuthor("")).isEmpty();
+        assertThat(PersonName.parseAuthor(" ; ")).isEmpty();
+        assertThat(PersonName.parseAuthors(null)).isEmpty();
+    }
+
+    @Test
+    void readsTheAuthorsOfSeveralStoredNamesInOrderEachOnce() {
+        assertThat(PersonName.parseAuthors(List.of("Barb Hendee", "J.C. Hendee")))
+                .isEqualTo(PersonName.parseAuthor("Barb Hendee; J. C. Hendee"));
+        assertThat(PersonName.parseAuthors(Arrays.asList("Arthur C. Clarke;Gentry Lee", null, "Lee, Gentry")))
+                .extracting(PersonName::surname).containsExactly("clarke", "lee");
+    }
+
+    @Test
+    void readsAFolderNameAsBefore() {
+        // Only a stored author name is read as a list of full names; parse and parseAll read what they did
+        assertThat(PersonName.parse("Arthur C. Clarke;Gentry Lee").surname()).isEqualTo("lee");
+        assertThat(PersonName.parseAll("Rachel; Levithan Cohn")).extracting(PersonName::surname).containsExactly("rachel", "cohn");
     }
 
     @ParameterizedTest(name = "{0} / {1} -> {2}")

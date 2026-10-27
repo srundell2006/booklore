@@ -63,12 +63,13 @@ import java.util.stream.Collectors;
  * columns is skipped. The SQL that writes them from MariaDB is in {@code README.md} next to this class.
  * <ul>
  *   <li>{@code shells.tsv}: the library's books without any book_file row, not deleted: id, library_path_id,
- *       is_physical, has_cover, title, subtitle, series_number, authors (joined with "; "), and optionally
- *       series_name. Without it, a book's series has no name unless its title has a "(Series, #N)" suffix, and the
- *       rule for a lone " (1)" turns down more books than the rescan would.</li>
+ *       is_physical, has_cover, title, subtitle, series_number, authors (each ending with the unit separator, 0x1F), and
+ *       optionally series_name. Without it, a book's series has no name unless its title has a "(Series, #N)"
+ *       suffix, and the rule for a lone " (1)" turns down more books than the rescan would.</li>
  *   <li>{@code existing.tsv}: the book formats of the library's books that are not deleted: book_id, library_path_id,
- *       file_sub_path, file_name, book_type, and optionally the book's authors joined with "; ". Without authors,
- *       same-folder matching cannot drop an author part of a name that only the book's authors vouch for.</li>
+ *       file_sub_path, file_name, book_type, and optionally the book's authors, each ending with the unit separator.
+ *       Without authors, same-folder matching cannot drop an author part of a name that only the book's authors
+ *       vouch for.</li>
  *   <li>{@code newfiles.tsv}: the files the rescan would find new: library_path_id, file_sub_path, file_name. A name
  *       without a book extension is taken for a folder audiobook, as the walk reports one.</li>
  * </ul>
@@ -84,9 +85,10 @@ import java.util.stream.Collectors;
  *       files, which get the book;</li>
  *   <li>{@code new-book}: becomes a new book, matching no existing one.</li>
  * </ul>
- * A weak match ({@code ExistingBookMatcher.Match.weak}: one of alike fileless books, or a " (1)" read as a copy)
- * yields to the strong matches of the files it would be one book with: such a file is attached with them, and its
- * reason says that its own weak match yields to theirs. A reason that turns a book down with the " (1)" read as a copy
+ * A weak match ({@code ExistingBookMatcher.Match.weak}: one of alike fileless books, a " (1)" read as a copy, or a
+ * book's stored author names read apart, which a reason marks {@code (its stored author names read apart)}) yields
+ * to the strong matches of the files it would be one book with: such a file is attached with them, and its reason
+ * says that its own weak match yields to theirs. A reason that turns a book down with the " (1)" read as a copy
  * says so, {@code (" (1)" read as a copy)}: that keeps the file's group only from a book that weak matches alone give
  * it, never from one a strong match gives it. So the reason does not tell the attaches only the newer rules make from
  * the others; weak_match does: what came of a weak match for the file, its own or, for a file without one, those its
@@ -108,6 +110,13 @@ public final class RescanDryRun {
      * a copy, which yield to it: "...; book#2 "Nico" qualifies only if " (1)" is a copy, and yields".
      */
     private static final String YIELDING_AS_COPY = "only if \" (1)\" is a copy, and yield";
+
+    /**
+     * How the matcher's reason for a match by the name as it reads names the books found only with their stored author
+     * names read apart, which yield to it: "...; book#210267 "Reliquary" qualifies only with its stored author names
+     * read apart, and yields".
+     */
+    private static final String YIELDING_BY_AUTHOR_READING = "stored author names read apart, and yield";
 
     private RescanDryRun() {
     }
@@ -224,14 +233,18 @@ public final class RescanDryRun {
     }
 
     /**
-     * What came of a weak match ({@code Match.weak}: one of alike fileless books, or a " (1)" read as a copy) for the
-     * file: its own, or, for a file without one, those that alone gave its group a book, which it follows to that book,
-     * or into a claim that yields, a split, a refusal or rejected claims; or of the books only a " (1)" read as a copy
-     * found, where a match by the name as it reads went before them. The outcomes that start with "attached" are the
+     * What came of a weak match ({@code Match.weak}: one of alike fileless books, a " (1)" read as a copy, or a book's
+     * stored author names read apart) for the file: its own, or, for a file without one, those that alone gave its
+     * group a book, which it follows to that book, or into a claim that yields, a split, a refusal or rejected claims;
+     * or of the books only a " (1)" read as a copy, or their stored author names read apart, found, where a match by
+     * the name as it reads went before them. The outcomes that start with "attached" are the
      * attaches only the newer rules make. Null when no weak match had a part in the file's decision.
      */
     private static String weakOutcome(LibraryFile file, Attachment attachment, List<LibraryFile> group, Trace trace) {
         Decision fileless = trace.fileless.get(file);
+        if (fileless instanceof Match own && !own.weak() && own.reason().contains(YIELDING_BY_AUTHOR_READING)) {
+            return "a match by its name as it reads goes before books found with their stored author names read apart";
+        }
         if (fileless instanceof Match own && !own.weak() && own.reason().contains(YIELDING_AS_COPY)) {
             return "a match by its name as it reads goes before books found with \" (1)\" read as a copy";
         }
@@ -577,11 +590,17 @@ public final class RescanDryRun {
             return out.toString();
         }
 
+        /**
+         * A book's author names, one per author row. Exports end each name with the unit separator (0x1F), since a
+         * stored name may hold a ';' itself ("Arthur C. Clarke;Gentry Lee", "P&eacute;ter"), also when it is the book's
+         * only one; older exports joined them with "; ", and are split at ';' as before.
+         */
         private static List<String> names(String joined) {
             if (joined == null || joined.isBlank()) {
                 return List.of();
             }
-            return Arrays.stream(joined.split(";")).map(String::trim).filter(name -> !name.isEmpty()).toList();
+            String separator = joined.indexOf('\u001F') >= 0 ? "\u001F" : ";";
+            return Arrays.stream(joined.split(separator)).map(String::trim).filter(name -> !name.isEmpty()).toList();
         }
 
         private static boolean flag(String value) {

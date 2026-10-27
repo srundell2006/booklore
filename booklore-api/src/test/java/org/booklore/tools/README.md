@@ -59,7 +59,9 @@ There is one tab-separated line per new file, with these columns:
   (the same title, with the same year in brackets if any, series number and authors), as in `title and author agree with book#12
   "Survival", one of 2 alike fileless books (book#12, book#40)`, and when a ` (1)` at the end of
   its name was read as a copy, as in `title and author agree with book#7 "Saga" (" (1)" read as a
-  copy)`.
+  copy)`, and when only the book's stored author names read apart agree with the path, as in
+  `title and author agree with book#1 "Cradle" (its stored author names read apart)`: a row such
+  as `Arthur C. Clarke;Gentry Lee` read as both authors, not as one Lee.
 - An `ambiguous` reason names apart the fileless books that qualify only if a ` (1)` is a copy,
   not volume 1, as in `fileless: 2 fileless books qualify: book#1 "Saga", and book#2 "Saga" if
   " (1)" is a copy`: book#2 is number 2 of its series, and the name does not say which it is.
@@ -105,6 +107,7 @@ The report ends with lines starting with `#`:
   | `its weak match comes to nothing: ...` | becomes a new book: its group's matches do not agree or a file of it is turned down, or its book's claims were rejected |
   | `follows a weak match that comes to nothing: ...` | as the last, without a match of its own: its group has no strong match, and the book its weak matches gave it is lost the same way |
   | `a match by its name as it reads goes before books found with " (1)" read as a copy` | matched a book strongly; the books its ` (1)` read as a copy finds yield to it |
+  | `a match by its name as it reads goes before books found with their stored author names read apart` | matched a book strongly; the books that qualify only with their stored author names read apart yield to it |
 
 Useful cuts:
 
@@ -118,15 +121,21 @@ grep -v '^#' report.tsv | awk -F'\t' '$8 != "-"'            # every file a weak 
 
 ### Weak matches
 
-A match that only the choice among alike fileless books, or a ` (1)` read as a copy, makes is
-weak. These two rules only ever add a book to a file that the rules before them gave none; they
-never take one away or change it. So:
+A match that only the choice among alike fileless books, a ` (1)` read as a copy, or a book's
+stored author names read apart makes is weak. These three rules only ever add a book to a file
+that the rules before them gave none; they never take one away or change it. So:
 
 - A book the name reads as goes before the books only its ` (1)` read as a copy finds, and the
   reason names those: `title and author agree with book#1 "Nico (Book 1)";
   book#2 "Nico" qualifies only if " (1)" is a copy, and yields`. A book the name as it reads
   turns down stays turned down: `01 - Survival (1).epub` is number 1 of a series, so not a
   fileless `Survival: Book 1` without a number, which it would be with its ` (1)` read as a copy.
+- So does a book whose stored author names, each read as one person, agree with the path, go
+  before another record of the book that qualifies only with its names read apart: `P/Douglas
+  Preston/02. Reliquary - Douglas Preston (1998).epub` is `title and author agree with
+  book#178152 "Reliquary"; book#210267 "Reliquary" qualifies only with its stored author names
+  read apart, and yields` (book#210267's row is `Douglas Preston;Lincoln Child`). Of the books
+  found with a ` (1)` read as a copy too, those whose names as stored agree decide first.
 - The files that would be one new book go to the book of their strong matches. A file whose own
   weak match is another book is attached with them, and its reason says so: `goes with the files
   it would be one book with; its own weak match yields to theirs: title and author agree with
@@ -140,7 +149,12 @@ never take one away or change it. So:
   (1).epub yield to the others`. A file of a group that a strong match gave its book claims it
   as strongly, whatever its own match, and from the folder of the file it follows, as a file
   without a match did before: in BOOK_PER_FOLDER, `Survival/Audio/Survival (1).m4b` claims the
-  fileless `Survival` of `Survival/Survival.epub` from the epub's folder, and both get it.
+  fileless `Survival` of `Survival/Survival.epub` from the epub's folder, and both get it. Unless
+  a file of the group weakly matched that book only with its stored author names read apart, and
+  the names as stored say the file is not it: `H/Barb Hendee & J.C. Hendee/Child of a Dead God -
+  J.C. Hendee.pdf` is not by `Barb Hendee; J. C. Hendee` read as one Hendee, which before turned
+  its group down. Then the group claims the book weakly, and gets it only where no strong claim
+  of another folder does.
 - What a file says against a book only with its ` (1)` read as a copy, a book the rules before
   never looked at for it, does not keep its group from a book a strong match gives it: `G/Neil
   Gaiman/Good Omens - T. Pratchett (1).pdf` (`book#10 "Good Omens" is not by 'T. Pratchett' ("
@@ -159,11 +173,19 @@ A first line that names the columns is skipped. Lines starting with `#` are skip
 
 | file | columns |
 |---|---|
-| `shells.tsv` | `id, library_path_id, is_physical, has_cover, title, subtitle, series_number, authors[, series_name]` (authors joined with `; `; series_name optional) |
-| `existing.tsv` | `book_id, library_path_id, file_sub_path, file_name, book_type[, authors]` (book formats of books that are not deleted; authors optional) |
+| `shells.tsv` | `id, library_path_id, is_physical, has_cover, title, subtitle, series_number, authors[, series_name]` (authors, each ending with the unit separator (0x1F); series_name optional) |
+| `existing.tsv` | `book_id, library_path_id, file_sub_path, file_name, book_type[, authors]` (book formats of books that are not deleted; authors, each ending with the unit separator (0x1F), optional) |
 | `newfiles.tsv` | `library_path_id, file_sub_path, file_name` (`file_sub_path` is empty for the library root) |
 
 Notes on the columns:
+- The authors are the book's author rows, one stored name each, and each name, the last
+  included, ends with the unit separator (0x1F), which `mariadb -B` writes as it is. A stored
+  name may hold a `;` itself, such as `Arthur C. Clarke;Gentry Lee` or the entity in
+  `P&eacute;ter N&aacute;das`, and the app reads each stored name on its own, so the dry run
+  needs to know where one row ends, also for a book with one author row. `CHAR(31 USING utf8mb4)`
+  keeps the column text: a bare `CHAR(31)` is binary. Older exports joined with `; ` still read:
+  a column without a unit separator in it is split at `;` as before, and a stored name holding a
+  `;` then reads as several rows.
 - Without `series_name` in `shells.tsv`, as in an export made before it was added, a book's series
   has no name unless its title ends in a `(Series, #N)` suffix. The rule for a lone ` (1)` then
   turns down books the rescan would attach, such as `The Testaments (1).epub` for a fileless
@@ -207,7 +229,7 @@ rescan itself are left out by their `added_on`.
 SELECT b.id, b.library_path_id, COALESCE(b.is_physical, 0),
        (b.book_cover_hash IS NOT NULL OR b.audiobook_cover_hash IS NOT NULL),
        m.title, m.subtitle, m.series_number,
-       (SELECT GROUP_CONCAT(a.name ORDER BY am.sort_order SEPARATOR '; ')
+       (SELECT CONCAT(GROUP_CONCAT(a.name ORDER BY am.sort_order SEPARATOR 0x1F), CHAR(31 USING utf8mb4))
           FROM book_metadata_author_mapping am JOIN author a ON a.id = am.author_id
          WHERE am.book_id = b.id),
        m.series_name
@@ -226,7 +248,7 @@ authors.
 
 ```sql
 SELECT bf.book_id, b.library_path_id, bf.file_sub_path, bf.file_name, bf.book_type,
-       (SELECT GROUP_CONCAT(a.name ORDER BY am.sort_order SEPARATOR '; ')
+       (SELECT CONCAT(GROUP_CONCAT(a.name ORDER BY am.sort_order SEPARATOR 0x1F), CHAR(31 USING utf8mb4))
           FROM book_metadata_author_mapping am JOIN author a ON a.id = am.author_id
          WHERE am.book_id = b.id)
 FROM book_file bf

@@ -81,6 +81,14 @@ class RescanDryRunTest {
                 line -> line.weakMatch() == null ? "-" : line.weakMatch(), (a, b) -> a, java.util.LinkedHashMap::new));
     }
 
+    /**
+     * The export text with each ␟ made the unit separator (0x1F) it stands for. A text block drops a unit separator
+     * written as a unicode escape at the end of a line: it is whitespace to Java, and the escape is read first.
+     */
+    private static String us(String text) {
+        return text.replace('␟', '\u001F');
+    }
+
     private static Map<String, String> decisions(Report report) {
         return report.lines().stream().collect(Collectors.toMap(
                 line -> line.file().fileSubPath() + "/" + line.file().fileName(),
@@ -258,6 +266,66 @@ class RescanDryRunTest {
                 1\t1\t0\t1\tThe Testaments\tNULL\t2\tMargaret Atwood\tThe Handmaid's Tale\textra
                 """);
         assertThatThrownBy(this::run).isInstanceOf(IllegalArgumentException.class).hasMessageContaining("not 8 to 9");
+    }
+
+    @Test
+    void readsAuthorsJoinedWithTheUnitSeparatorAsTheRowsTheyWere() throws IOException {
+        // ␟ is the unit separator (0x1F) the export ends each name with. One stored name "Arthur C. Clarke;Gentry Lee"
+        // reaches the matcher as the one name the app reads, and the matcher reads both authors in it; an export
+        // joined with "; " still splits at ';'
+        Files.writeString(dir.resolve("shells.tsv"), us("""
+                id\tlibrary_path_id\tis_physical\thas_cover\ttitle\tsubtitle\tseries_number\tauthors
+                1\t1\t0\t1\tCradle\tNULL\t1\tArthur C. Clarke;Gentry Lee␟
+                2\t1\t0\t1\tThe Martian\tNULL\tNULL\tAndy Weir; Someone Else
+                """));
+        Files.writeString(dir.resolve("existing.tsv"), us("""
+                3\t1\tSF/Rama\tRama Revealed - Gentry Lee.mobi\tMOBI\tArthur C. Clarke;Gentry Lee␟John Doe␟
+                """));
+        Files.writeString(dir.resolve("newfiles.tsv"), """
+                1\tC/Arthur C. Clarke\tCradle by Arthur Charles Clarke.epub
+                1\tW/Weir, Andy\tThe Martian.epub
+                1\tSF/Rama\tRama Revealed.epub
+                """);
+
+        RescanDryRun.Exports exports = RescanDryRun.Exports.read(dir.resolve("shells.tsv"), dir.resolve("existing.tsv"),
+                dir.resolve("newfiles.tsv"));
+
+        assertThat(exports.shells()).extracting(RescanDryRun.Shell::authors).containsExactly(
+                List.of("Arthur C. Clarke;Gentry Lee"), List.of("Andy Weir", "Someone Else"));
+        assertThat(exports.existing().getFirst().authors()).containsExactly("Arthur C. Clarke;Gentry Lee", "John Doe");
+        assertThat(decisions(run())).containsExactly(
+                entry("C/Arthur C. Clarke/Cradle by Arthur Charles Clarke.epub", "attach-shell 1"),
+                entry("W/Weir, Andy/The Martian.epub", "attach-shell 2"),
+                entry("SF/Rama/Rama Revealed.epub", "attach-same-folder 3"));
+    }
+
+    @Test
+    void readsABookWithOneAuthorRowAsThatRow() throws IOException {
+        // The export ends every name with the unit separator, so a book's only row is one name too, even when it holds
+        // a ';' that splits nothing in the app: a garbled "Rachel; Levithan Cohn", or an entity such as "&eacute;"
+        Files.writeString(dir.resolve("shells.tsv"), us("""
+                1\t1\t0\t1\tDash & Lily's Book of Dares\tNULL\t1\tRachel; Levithan Cohn␟\tDash & Lily
+                2\t1\t0\t1\tA Book of Memories\tNULL\tNULL\tP&eacute;ter N&aacute;das␟\tNULL
+                """));
+        Files.writeString(dir.resolve("existing.tsv"), us("""
+                3\t1\tHU/Essays\tFire and Knowledge - Peter Nadas.mobi\tMOBI\tP&eacute;ter N&aacute;das␟
+                """));
+        Files.writeString(dir.resolve("newfiles.tsv"), """
+                1\tC/Rachel Cohn/Dash & Lily\tDash & Lily's Book of Dares.epub
+                1\tN/Peter Nadas\tA Book of Memories.epub
+                1\tHU/Essays\tFire and Knowledge.epub
+                """);
+
+        RescanDryRun.Exports exports = RescanDryRun.Exports.read(dir.resolve("shells.tsv"), dir.resolve("existing.tsv"),
+                dir.resolve("newfiles.tsv"));
+
+        assertThat(exports.shells()).extracting(RescanDryRun.Shell::authors).containsExactly(
+                List.of("Rachel; Levithan Cohn"), List.of("P&eacute;ter N&aacute;das"));
+        assertThat(exports.existing().getFirst().authors()).containsExactly("P&eacute;ter N&aacute;das");
+        assertThat(decisions(run())).containsExactly(
+                entry("C/Rachel Cohn/Dash & Lily/Dash & Lily's Book of Dares.epub", "attach-shell 1"),
+                entry("N/Peter Nadas/A Book of Memories.epub", "attach-shell 2"),
+                entry("HU/Essays/Fire and Knowledge.epub", "attach-same-folder 3"));
     }
 
     @Test
@@ -578,6 +646,33 @@ class RescanDryRunTest {
                 + " is a copy, and yields");
         assertThat(weakMatches(report)).containsExactly(entry("Case Histories (1).epub", "attached by its own weak match"));
         assertThat(report.weakMatches()).containsExactly(entry("attached by its own weak match", 1));
+    }
+
+    @Test
+    void aMatchThatAnotherRecordOfItsBookYieldsToOnlyItsAuthorNamesReadApartAgreeWithIsNoNewAttach() throws IOException {
+        // The dry run: with the row "Douglas Preston;Lincoln Child" read apart, the second record qualified too, and
+        // the file became a new book. It yields to the record the rows as stored find, which the file got before
+        Files.writeString(dir.resolve("shells.tsv"), us("""
+                id\tlibrary_path_id\tis_physical\thas_cover\ttitle\tsubtitle\tseries_number\tauthors\tseries_name
+                178152\t1\t0\t1\tReliquary\tNULL\t2\tDouglas Preston␟\tPendergast
+                210267\t1\t0\t1\tReliquary\tNULL\t2\tDouglas Preston;Lincoln Child␟\tPendergast
+                1\t1\t0\t1\tCradle\tNULL\t1\tArthur C. Clarke;Gentry Lee␟\tNULL
+                """));
+        Files.writeString(dir.resolve("existing.tsv"), "");
+        Files.writeString(dir.resolve("newfiles.tsv"), """
+                1\tP/Douglas Preston\t02. Reliquary - Douglas Preston (1998).epub
+                1\tC/Arthur C. Clarke\tCradle by Arthur Charles Clarke.epub
+                """);
+
+        Report report = run();
+
+        assertThat(decisions(report)).containsExactly(
+                entry("P/Douglas Preston/02. Reliquary - Douglas Preston (1998).epub", "attach-shell 178152"),
+                entry("C/Arthur C. Clarke/Cradle by Arthur Charles Clarke.epub", "attach-shell 1"));
+        assertThat(weakMatches(report)).containsExactly(
+                entry("02. Reliquary - Douglas Preston (1998).epub",
+                        "a match by its name as it reads goes before books found with their stored author names read apart"),
+                entry("Cradle by Arthur Charles Clarke.epub", "attached by its own weak match"));
     }
 
     @Test

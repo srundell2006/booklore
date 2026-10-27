@@ -1,9 +1,12 @@
 package org.booklore.service.library.matching;
 
+import org.apache.commons.text.StringEscapeUtils;
+
 import java.text.Normalizer;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.Collection;
+import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Locale;
 import java.util.Set;
@@ -34,6 +37,8 @@ public record PersonName(String surname, List<String> givenNames) {
      * than author lists do ("Foundation and Empire"), while Calibre joins authors with " & ".
      */
     private static final Pattern MULTI = Pattern.compile("\\s*[;&]\\s*");
+    /** A part in brackets, such as a role ("(Narrator)", "(ed.)"); one never closed runs to the end. */
+    private static final Pattern BRACKETED = Pattern.compile("\\([^)]*\\)?|\\[[^\\]]*]?");
     private static final Pattern MARKS = Pattern.compile("\\p{M}+");
     private static final Pattern APOSTROPHES = Pattern.compile("['‘’`]");
     private static final Pattern NON_LETTER = Pattern.compile("[^\\p{L}\\p{N}]+");
@@ -55,6 +60,78 @@ public record PersonName(String surname, List<String> givenNames) {
             }
         }
         return out;
+    }
+
+    /**
+     * The authors one stored author name stands for, in order and each once. A book's authors are stored one name
+     * each, but some names hold several: "Arthur C. Clarke;Gentry Lee" is Clarke and Lee, where {@link #parse} reads
+     * one person named Lee. HTML entities are read ({@code P&eacute;ter} is Péter), and a part in brackets is left out
+     * ("Lindsey Priestley (Edited by)", "Kenneth (Lester Dent & Evelyn Coulson) Robeson"). A name with a bracket also
+     * stands as written, since an author folder is often named after it: "Alfred Hitchcock (ed.)" is Alfred Hitchcock
+     * and, as {@link #parse} reads it, a person named Ed.
+     * <p>
+     * A name splits at ';' and '&' only when every part is a full name, with a given name or an initial, or no name at
+     * all, an honorific such as "M.D." or "Jr." ("Louann Brizendine; M.D."). Otherwise it is one name, as {@link #parse}
+     * reads it: "Grosset & Dunlap", or "Rachel; Levithan Cohn", a garbled Rachel Cohn and David Levithan that the folder
+     * "Rachel Cohn" agrees with, and "Brian K.; Staples Vaughan" or "E. & M.A. Radford", whose first part is given
+     * names without a surname.
+     */
+    public static List<PersonName> parseAuthor(String stored) {
+        if (stored == null || stored.isBlank()) {
+            return List.of();
+        }
+        String decoded = stored.indexOf('&') >= 0 ? StringEscapeUtils.unescapeHtml4(stored) : stored;
+        String s = BRACKETED.matcher(decoded).replaceAll(" ");
+        Set<PersonName> names = new LinkedHashSet<>(namesIn(s));
+        if (!s.equals(decoded)) {
+            // An author folder is often named as the book has it, bracket included: "Alfred Hitchcock (ed.)"
+            PersonName asWritten = parse(decoded);
+            if (asWritten != null) {
+                names.add(asWritten);
+            }
+        }
+        return List.copyOf(names);
+    }
+
+    /** The names in a stored author name without brackets: its parts when all are full names, else the whole. */
+    private static List<PersonName> namesIn(String s) {
+        List<String> parts = Arrays.stream(MULTI.split(s)).filter(part -> !part.isBlank()).toList();
+        if (parts.isEmpty()) {
+            return List.of();
+        }
+        if (parts.size() > 1) {
+            List<PersonName> names = new ArrayList<>();
+            boolean allFull = true;
+            for (String part : parts) {
+                PersonName name = parse(part);
+                if (name == null) {
+                    // "M.D." of "Louann Brizendine; M.D." is no name at all; "Brian K." of "Brian K.; Staples Vaughan"
+                    // is no full name, as a surname alone is not ("Rachel" of "Rachel; Levithan Cohn")
+                    List<String> words = tokens(part);
+                    allFull &= words.isEmpty() || SUFFIXES.contains(String.join("", words));
+                } else {
+                    allFull &= name.hasGivenName();
+                    names.add(name);
+                }
+            }
+            if (allFull && !names.isEmpty()) {
+                return names;
+            }
+        }
+        PersonName name = parts.size() == 1 ? parse(parts.getFirst()) : parse(s);
+        return name == null ? List.of() : List.of(name);
+    }
+
+    /** The authors stored names stand for, as {@link #parseAuthor} reads each, in order and each once. */
+    public static List<PersonName> parseAuthors(Collection<String> stored) {
+        if (stored == null) {
+            return List.of();
+        }
+        Set<PersonName> names = new LinkedHashSet<>();
+        for (String name : stored) {
+            names.addAll(parseAuthor(name));
+        }
+        return List.copyOf(names);
     }
 
     /** One name, "Last, First M" or "First M. Last"; null when no surname of two or more letters is left. */

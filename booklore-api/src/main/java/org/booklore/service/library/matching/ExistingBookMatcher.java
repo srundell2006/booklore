@@ -14,6 +14,7 @@ import java.util.Map;
 import java.util.Objects;
 import java.util.Set;
 import java.util.TreeSet;
+import java.util.function.Function;
 import java.util.function.Predicate;
 import java.util.stream.Collectors;
 
@@ -66,22 +67,46 @@ import java.util.stream.Collectors;
  * the " (1)" is a copy, and the series number rule decides. A comic's " (1)" is an issue, and " (2)" to " (9)" stay
  * volume numbers.
  * <p>
- * Those two rules, the choice among alike books and a " (1)" read as a copy, only ever add a book to a file that the
- * other rules give none; they never take one away or change it. So a match only they make is weak ({@link
- * Match#weak}), and the books the name reads as without them decide first: a file that reads as one book is that
- * book's, whatever its " (1)" read as a copy finds besides ("Nico (1).epub" is "Nico (Book 1)", next to a "Nico" by the
- * same author), and when it reads as several only the choice among alike ones may pick one of them. Only when the name
- * reads as no book do the books found with its " (1)" read as a copy count, and those the " (1)" guard turned down,
- * but never one that the name as it reads says it is not: "01 - Survival (1).epub" is number 1 of a series, so not
- * the fileless "Survival: Book 1" without a series number, which it would be with its " (1)" read as a copy. A
- * rescan's other files then outweigh a weak match: the files that would be one new book go to the book of their
- * strong matches, so "Killing Floor.epub", weakly one of two alike fileless "Killing Floor"s, goes with "The Killing
- * Floor (1).epub" to the book of "01. Killing Floor - Lee Child (2006).mobi" in their folder; and where strong and
- * weak claims on a fileless book do not agree, the strong ones get it ({@link #resolveShellClaims}). Nor does what
- * only a " (1)" read as a copy finds against a book keep the files from one a strong match gives them: "Good Omens -
- * T. Pratchett (1).pdf" read as a copy is not the fileless "Good Omens" by Neil Gaiman, which the other rules never
- * looked at for it, so it still goes with "Good Omens.epub" to that book. That evidence only keeps files from a book
- * that weak matches alone give them ({@link Decision#refused}, {@link Decision#alsoRefused}).
+ * A book's authors are its stored author names, each read as {@link PersonName#parseAuthor} reads it: one name that
+ * packs several ("Arthur C. Clarke;Gentry Lee") is each of them, an HTML entity is decoded ("P&eacute;ter") and a part
+ * in brackets left out ("Otto Penzler (Editor)"). Read as one person each ({@link ShellCandidate#authorsAsStored}), the
+ * first is a Lee, and "C/Arthur C. Clarke/Cradle.epub" was no file of that "Cradle". A book's title drops an author
+ * part that names one of its authors either way: "Child of a Dead God - John Hendee" by "Barb Hendee; John Hendee" is
+ * also "Child of a Dead God", but only with the names read apart ({@link ShellCandidate#identitiesAsStored}).
+ * <p>
+ * Those three rules, the choice among alike books, a " (1)" read as a copy and the stored author names read apart,
+ * only ever add a book to a file that the other rules give none; they never take one away or change it. So a match
+ * only they make is weak ({@link Match#weak}), and the books the name reads as without them decide first: a file that
+ * reads as one book is that book's, whatever its " (1)" read as a copy finds besides ("Nico (1).epub" is "Nico (Book
+ * 1)", next to a "Nico" by the same author), or another record of the book whose author names only read apart agree
+ * ("02. Reliquary - Douglas Preston (1998).epub" is the "Reliquary" by Douglas Preston, next to one by "Douglas
+ * Preston;Lincoln Child", and "Child of a Dead God.epub" the one by Barb Hendee, next to "Child of a Dead God - John
+ * Hendee"), and when it reads as several only the choice among alike ones may pick one of them. The rules then go in
+ * the order they came: when the name reads as no book by the authors as stored, the book its " (1)" read as a copy
+ * finds by the authors as stored, if that is one book (or one of alike ones); only where that gives none, the books
+ * the name reads as with their author names read apart; and only then the rest, those found with its " (1)" read as a
+ * copy only with the names read apart, and those the " (1)" guard turned down. So "Cradle (1).epub" in "C/Arthur C.
+ * Clarke" is the copy of the "Cradle" by Arthur C. Clarke, as before, not the "Cradle 1" by "Arthur C. Clarke;Gentry
+ * Lee". A match the names read apart make ranks below the weak ones of the other rules ({@link Match#readApart}). None
+ * of them is ever one that the name as it reads says it is not: "01 - Survival (1).epub" is number 1 of a series, so
+ * not the fileless "Survival: Book 1" without a series number, which it would be with its " (1)" read as a copy. Nor
+ * does reading the author names apart turn down a book that the names as stored agree with, nor what the names as
+ * stored say against a book stop counting or count for more: where both readings turn a book down, the names as
+ * stored say why. "Child of a Dead God - J.C. Hendee.pdf" is not by "Barb Hendee; J. C. Hendee" read as one Hendee,
+ * so where a match of its other files by the rules before gives them that book, they claim it only as weakly as the
+ * names read apart do ({@code BookGroupingService}). A rescan's other files then outweigh a weak match: the files that
+ * would be one new book go to the book of their strong matches, so "Killing Floor.epub", weakly one of two alike
+ * fileless "Killing Floor"s, goes with "The Killing Floor (1).epub" to the book of "01. Killing Floor - Lee Child
+ * (2006).mobi" in their folder; and where strong and weak claims on a fileless book do not agree, the strong ones get
+ * it ({@link #resolveShellClaims}), as the weak claims of the other rules do against those of the names read apart.
+ * Nor does what only a " (1)" read as a copy finds against a book keep the files from one a strong match gives them:
+ * "Good Omens - T. Pratchett (1).pdf" read as a copy is not the fileless "Good Omens" by Neil Gaiman, which the other
+ * rules never looked at for it, so it still goes with "Good Omens.epub" to that book. That evidence only keeps files
+ * from a book that weak matches alone give them ({@link Decision#refused}, {@link Decision#alsoRefused}).
+ * <p>
+ * The books with files in the file's folder are read by their authors as stored first too ({@link #matchInFolder}):
+ * only where those find none does a book found with its stored author names read apart count, weakly, and after the
+ * fileless books.
  * <p>
  * A rescan matches every new file against the same fileless books, so {@link #resolveShellClaims} then leaves alone a
  * fileless book claimed from more than one folder, or by two different files of one format. Files that match the same
@@ -116,7 +141,11 @@ public final class ExistingBookMatcher {
          * ({@link Match#weak}) count them: it names another author, year or series number, or is in another library
          * path. A book turned down only for want of evidence (no author in the path) is not among them, nor one that
          * another reading of the name accepts without its " (1)" read as a copy; no reading as a copy accepts one of
-         * them. A file of the same new book must not be attached to these either.
+         * them. A book the name accepts only with its stored author names read apart is among them when those names
+         * as stored say the file is not it, as before: even a weak match's own book. Found only with its " (1)" read
+         * as a copy, such a book is among {@link #alsoRefused} instead. A file of the same new book must not be
+         * attached to these either, unless its own match with the names read apart is that book, which a group then
+         * claims as weakly as that match.
          */
         Set<Long> refused();
 
@@ -132,22 +161,43 @@ public final class ExistingBookMatcher {
 
     /**
      * @param weak        whether only a rule that reads more into a name than its title says gives the file this
-     *                    book: the choice of one of alike fileless books, or a " (1)" read as a copy. A weak match
-     *                    never takes a file from the book the other rules give it, or give the files it would be one
-     *                    book with: a rescan's group of files goes to the book of its strong matches ({@code
+     *                    book: the choice of one of alike fileless books, a " (1)" read as a copy, or the book's
+     *                    stored author names read apart where, each read as one person, they turn the book down, or
+     *                    where only its title read with them apart is the name (its reason then says "(its stored
+     *                    author names read apart)"), and a book of the folder that only they find. A weak match never
+     *                    takes a file from the book the other rules give it, or give the files it would be one book
+     *                    with: a rescan's group of files goes to the book of its strong matches ({@code
      *                    BookGroupingService}), and a fileless book claimed by strong and weak matches that do not
      *                    agree goes to the strong ones ({@link #resolveShellClaims}). The watcher, which takes one
-     *                    file at a time, attaches it as any other match
+     *                    file at a time, attaches it as any other match, a book of the folder only after the fileless
+     *                    books
      * @param refused     for a weak match, the books the file says it is not as the other rules alone would have it,
      *                    for when the match yields to its group's: a {@link NoMatch}'s, or none where those rules find
-     *                    several books, which make the file ambiguous and refuse none. Empty for a strong match
+     *                    several books, which make the file ambiguous and refuse none. It may hold the match's own
+     *                    book, which the names as stored turned down: the file's group then claims it as weakly as a
+     *                    match with the names read apart. Empty for a strong match
      * @param alsoRefused for a weak match, the books {@link Decision#alsoRefused}; empty for a strong match
+     * @param readApart   for a weak match, whether only the stored author names read apart give the file this book,
+     *                    where the weak rules before that reading (the choice among alike books, a " (1)" read as a
+     *                    copy) gave it none. Such a match ranks below those: a rescan's group goes to the book of
+     *                    their weak matches first, and their weak claims on a fileless book outweigh its claims
+     *                    ({@link #resolveShellClaims}), so that reading the names apart only adds a book
      */
-    public record Match(long bookId, Kind kind, String reason, boolean weak, Set<Long> refused, Set<Long> alsoRefused)
-            implements Decision {
+    public record Match(long bookId, Kind kind, String reason, boolean weak, Set<Long> refused, Set<Long> alsoRefused,
+                        boolean readApart) implements Decision {
         public Match {
             refused = Set.copyOf(refused);
             alsoRefused = Set.copyOf(alsoRefused);
+        }
+
+        /** A match by the rules before the stored author names were read apart. */
+        public Match(long bookId, Kind kind, String reason, boolean weak, Set<Long> refused, Set<Long> alsoRefused) {
+            this(bookId, kind, reason, weak, refused, alsoRefused, false);
+        }
+
+        /** How strongly the match gives the file its book: strong (2), weak (1), only with the names read apart (0). */
+        public int rank() {
+            return !weak ? 2 : readApart ? 0 : 1;
         }
 
         /** A strong match: the one book whose title the name reads as. */
@@ -172,9 +222,9 @@ public final class ExistingBookMatcher {
     }
 
     /**
-     * @param refused     none where the name reads as several books, as before the weak rules; where only its " (1)"
-     *                    read as a copy finds several, the books the name says it is not without that reading, as a
-     *                    {@link NoMatch} has them
+     * @param refused     none where the name reads as several books, as before the weak rules; where only a weak
+     *                    rule finds several (its " (1)" read as a copy, or the books' stored author names read apart),
+     *                    the books the name says it is not without the weak rules, as a {@link NoMatch} has them
      * @param alsoRefused {@link Decision#alsoRefused}
      */
     public record Ambiguous(List<Long> bookIds, String reason, Set<Long> refused, Set<Long> alsoRefused) implements Decision {
@@ -190,10 +240,26 @@ public final class ExistingBookMatcher {
 
     // ---- another format, part or copy of a book in the same folder ----
 
+    /**
+     * The book in the file's folder whose files read as its name, by their authors as stored. Only where those find
+     * none do the books' stored author names read apart count ({@link BooksInFolder#readApart}): one book found so is a
+     * weak match ({@link Match#readApart}), which a fileless book the file matches outweighs; several, or none, leave
+     * the file as the names as stored had it, refusing what they refused.
+     */
     public static Decision matchInFolder(FileEvidence file, BooksInFolder books) {
         if (books == null || books.isEmpty()) {
             return new NoMatch("no book has files in the folder");
         }
+        Decision asStored = inFolder(file, books);
+        BooksInFolder readApart = books.readApart();
+        if (readApart != null && asStored instanceof NoMatch noMatch && inFolder(file, readApart) instanceof Match match) {
+            return new Match(match.bookId(), Kind.SAME_FOLDER, match.reason() + AUTHOR_READING, true, noMatch.refused(),
+                    noMatch.alsoRefused(), true);
+        }
+        return asStored;
+    }
+
+    private static Decision inFolder(FileEvidence file, BooksInFolder books) {
         // A book with a file of the same base name shares its sidecar files: they are one book whatever the names say
         Set<Long> matched = new LinkedHashSet<>(books.withBaseName(file.baseNameKey()));
         Set<Long> refused = new LinkedHashSet<>();
@@ -275,65 +341,119 @@ public final class ExistingBookMatcher {
             consider(file, reading.key(), reading.confirmed(), reading.seriesNumber(), index, findings);
         }
         Map<Long, Accepted> accepted = findings.accepted();
-        Map<Long, Rejection> rejected = findings.rejected();
-        // The books the name reads as without its " (1)" read as a copy decide first, as they did before that reading
-        Map<Long, Accepted> byName = new LinkedHashMap<>();
-        accepted.forEach((bookId, a) -> {
-            if (!a.asCopy()) {
-                byName.put(bookId, a);
-            }
-        });
+        // What the file says it is not as the rules before the weak ones have it
+        Map<Long, Rejection> rejected = findings.rejectedAsStored();
+        Map<Long, Accepted> doubted = findings.doubted();
+        // The books the name reads as by their authors as stored decide first, as they did before the weak rules; then
+        // the one its " (1)" read as a copy finds by them, as before the names were read apart; then those it reads as
+        // with their stored author names read apart; then the rest found with its " (1)" read as a copy
+        Map<Long, Accepted> byName = only(accepted, Accepted::strong);
+        Map<Long, Accepted> byAuthorReading = only(accepted, a -> !a.asCopy() && a.byAuthorReading());
+        List<Accepted> onlyAsCopy = new ArrayList<>(only(accepted, Accepted::asCopy).values());
+        onlyAsCopy.addAll(doubted.values());
         if (!byName.isEmpty()) {
-            List<ShellCandidate> onlyAsCopy = new ArrayList<>();
-            accepted.values().stream().filter(Accepted::asCopy).map(Accepted::shell).forEach(onlyAsCopy::add);
-            onlyAsCopy.addAll(findings.doubted().values());
+            String yielding = yieldingByAuthorReading(byAuthorReading.values()) + yieldingAsCopy(onlyAsCopy);
             if (byName.size() == 1) {
                 Accepted only = byName.values().iterator().next();
-                return new Match(only.shell().bookId(), Kind.FILELESS, agreement(only) + yieldingAsCopy(onlyAsCopy));
+                return new Match(only.shell().bookId(), Kind.FILELESS, agreement(only) + yielding);
             }
             // Ambiguous before the weak rules, the file refused none; what it says it is not still counts against a
             // book that only weak matches give its group
             Set<Long> alsoRefused = refused(rejected, Rejection::against);
             Accepted chosen = oneOfAlike(byName.values());
             if (chosen != null) {
-                return new Match(chosen.shell().bookId(), Kind.FILELESS, oneOf(chosen, byName) + yieldingAsCopy(onlyAsCopy),
-                        true, Set.of(), alsoRefused);
+                return new Match(chosen.shell().bookId(), Kind.FILELESS, oneOf(chosen, byName) + yielding,
+                        true, Set.of(), alsoRefused, !alikeAsStored(byName.values()));
             }
             return new Ambiguous(List.copyOf(byName.keySet()), byName.size() + " fileless books qualify: "
-                    + byName.values().stream().map(a -> label(a.shell())).collect(Collectors.joining(", ")),
-                    Set.of(), alsoRefused);
+                    + labels(byName.values()), Set.of(), alsoRefused);
         }
-        // Only the name read as a copy finds a book, if it finds one: whatever it decides is weak, and the file says
-        // it is not the books it said it was not before that reading, as a NoMatch
+        // Only a weak rule finds a book, if one does: whatever it decides is weak, and the file says it is not the
+        // books it said it was not before the weak rules, as a NoMatch. A book its stored author names read apart let
+        // in may be one of them: what those names as stored said against it still counts where its group has a
+        // strong match, and the group then claims the book weakly (BookGroupingService)
         Set<Long> refused = refused(rejected, Rejection::refuses);
         Set<Long> alsoRefused = refused(rejected, Rejection::refusesAsCopy);
-        if (!accepted.isEmpty() && !findings.doubted().isEmpty()) {
+        // The name read as a copy decides next by the authors as stored, as it did before their names were read apart:
+        // the book it gives that way stays the file's, and only where it gives none may the names read apart add one
+        Map<Long, Accepted> asStored = only(accepted, a -> !a.byAuthorReading());
+        findings.copiesAsStored().forEach((bookId, a) -> {
+            // Unless the name as it reads says it is not the book, which kept the copy reading from it then
+            Rejection said = rejected.get(bookId);
+            if (said == null || !said.refuses()) {
+                asStored.putIfAbsent(bookId, a);
+            }
+        });
+        Decision asBefore = null;
+        if (!asStored.isEmpty()) {
+            List<Accepted> readApart = new ArrayList<>(only(accepted, a -> a.byAuthorReading()
+                    && !asStored.containsKey(a.shell().bookId())).values());
+            readApart.addAll(only(doubted, Accepted::byAuthorReading).values());
+            asBefore = amongWeak(asStored, only(doubted, a -> !a.byAuthorReading()), refused, alsoRefused,
+                    yieldingByAuthorReading(readApart), false);
+            if (asBefore instanceof Match) {
+                return asBefore;
+            }
+        }
+        if (!byAuthorReading.isEmpty()) {
+            return amongWeak(byAuthorReading, Map.of(), refused, alsoRefused, yieldingAsCopy(onlyAsCopy), true);
+        }
+        if (asBefore != null) {
+            return asBefore;
+        }
+        if (!accepted.isEmpty()) {
+            return amongWeak(accepted, doubted, refused, alsoRefused, "", true);
+        }
+        if (findings.rejected().isEmpty()) {
+            return new NoMatch("no fileless book has this title");
+        }
+        return new NoMatch(findings.rejected().values().stream().map(Rejection::why).collect(Collectors.joining("; ")),
+                refused, alsoRefused);
+    }
+
+    /**
+     * The weak decision among the books a weak rule finds, none of them strongly: one is the file's book, one of alike
+     * ones too, and several others make it ambiguous; so do the books the " (1)" guard turned down besides.
+     *
+     * @param yielding  what the reason says of the books found by a weaker rule still, which yield
+     * @param readApart whether only the stored author names read apart find these books ({@link Match#readApart})
+     */
+    private static Decision amongWeak(Map<Long, Accepted> accepted, Map<Long, Accepted> doubted, Set<Long> refused,
+                                      Set<Long> alsoRefused, String yielding, boolean readApart) {
+        if (!doubted.isEmpty()) {
             // Read as a copy, the books the " (1)" guard turned down qualify as well: the name does not say which
             List<Long> bookIds = new ArrayList<>(accepted.keySet());
-            bookIds.addAll(findings.doubted().keySet());
-            return new Ambiguous(bookIds, bookIds.size() + " fileless books qualify: "
-                    + accepted.values().stream().map(a -> label(a.shell())).collect(Collectors.joining(", ")) + ", and "
-                    + findings.doubted().values().stream().map(ExistingBookMatcher::label).collect(Collectors.joining(", "))
-                    + " if \" (1)\" is a copy", refused, alsoRefused);
+            bookIds.addAll(doubted.keySet());
+            return new Ambiguous(bookIds, bookIds.size() + " fileless books qualify: " + labels(accepted.values())
+                    + ", and " + labels(doubted.values()) + " if \" (1)\" is a copy", refused, alsoRefused);
         }
         if (accepted.size() == 1) {
             Accepted only = accepted.values().iterator().next();
-            return new Match(only.shell().bookId(), Kind.FILELESS, agreement(only), true, refused, alsoRefused);
+            return new Match(only.shell().bookId(), Kind.FILELESS, agreement(only) + yielding, true, refused, alsoRefused,
+                    readApart);
         }
-        if (accepted.size() > 1) {
-            Accepted chosen = oneOfAlike(accepted.values());
-            if (chosen != null) {
-                return new Match(chosen.shell().bookId(), Kind.FILELESS, oneOf(chosen, accepted), true, refused, alsoRefused);
+        Accepted chosen = oneOfAlike(accepted.values());
+        if (chosen != null) {
+            return new Match(chosen.shell().bookId(), Kind.FILELESS, oneOf(chosen, accepted) + yielding, true, refused,
+                    alsoRefused, readApart || !alikeAsStored(accepted.values()));
+        }
+        return new Ambiguous(List.copyOf(accepted.keySet()), accepted.size() + " fileless books qualify: "
+                + labels(accepted.values()), refused, alsoRefused);
+    }
+
+    /** The books {@code which} says, in the order they were found. */
+    private static Map<Long, Accepted> only(Map<Long, Accepted> found, Predicate<Accepted> which) {
+        Map<Long, Accepted> only = new LinkedHashMap<>();
+        found.forEach((bookId, a) -> {
+            if (which.test(a)) {
+                only.put(bookId, a);
             }
-            return new Ambiguous(List.copyOf(accepted.keySet()), accepted.size() + " fileless books qualify: "
-                    + accepted.values().stream().map(a -> label(a.shell())).collect(Collectors.joining(", ")),
-                    refused, alsoRefused);
-        }
-        if (rejected.isEmpty()) {
-            return new NoMatch("no fileless book has this title");
-        }
-        return new NoMatch(rejected.values().stream().map(Rejection::why).collect(Collectors.joining("; ")), refused,
-                alsoRefused);
+        });
+        return only;
+    }
+
+    private static String labels(Collection<Accepted> books) {
+        return books.stream().map(a -> label(a.shell())).collect(Collectors.joining(", "));
     }
 
     /** The books turned down as {@code which} says. */
@@ -352,12 +472,25 @@ public final class ExistingBookMatcher {
                 .map(id -> "book#" + id).collect(Collectors.joining(", ")) + ")";
     }
 
+    /**
+     * What a match says of the books that qualify as it does but only with their stored author names read apart,
+     * which yield to it.
+     */
+    private static String yieldingByAuthorReading(Collection<Accepted> byAuthorReading) {
+        if (byAuthorReading.isEmpty()) {
+            return "";
+        }
+        return "; " + labels(byAuthorReading)
+                + (byAuthorReading.size() == 1 ? " qualifies only with its" : " qualify only with their")
+                + " stored author names read apart, and " + (byAuthorReading.size() == 1 ? "yields" : "yield");
+    }
+
     /** What a match by the name as it reads says of the books that qualify only with its " (1)" read as a copy. */
-    private static String yieldingAsCopy(List<ShellCandidate> onlyAsCopy) {
+    private static String yieldingAsCopy(List<Accepted> onlyAsCopy) {
         if (onlyAsCopy.isEmpty()) {
             return "";
         }
-        return "; " + onlyAsCopy.stream().map(ExistingBookMatcher::label).collect(Collectors.joining(", "))
+        return "; " + labels(onlyAsCopy)
                 + (onlyAsCopy.size() == 1 ? " qualifies" : " qualify") + " only if \" (1)\" is a copy, and "
                 + (onlyAsCopy.size() == 1 ? "yields" : "yield");
     }
@@ -410,11 +543,38 @@ public final class ExistingBookMatcher {
     private static final String COPY_READING = " (\" (1)\" read as a copy)";
 
     /**
+     * How a reason says that a book qualifies only with its stored author names read apart ({@link
+     * PersonName#parseAuthor}): one that packs several authors read as each of them, an HTML entity decoded, a part in
+     * brackets left out.
+     */
+    private static final String AUTHOR_READING = " (its stored author names read apart)";
+
+    /**
      * A fileless book that qualifies.
      *
-     * @param asCopy whether only the name without its " (1)" reads as the book's title
+     * @param asCopy          whether only the name without its " (1)" reads as the book's title
+     * @param byAuthorReading whether the book qualifies only with its stored author names read apart ({@link
+     *                        ShellCandidate#authors}), not each as one person ({@link ShellCandidate#authorsAsStored})
      */
-    private record Accepted(ShellCandidate shell, boolean asCopy) {
+    private record Accepted(ShellCandidate shell, boolean asCopy, boolean byAuthorReading) {
+
+        /** Whether the rules before the weak ones accept the book: by the name as it reads and its authors as stored. */
+        boolean strong() {
+            return !asCopy && !byAuthorReading;
+        }
+
+        /**
+         * How the book is found, the best first: by the name as it reads and the authors as stored (3), with the
+         * stored author names read apart (2), with the " (1)" read as a copy (1), with both (0). Each yields to the
+         * ones before it.
+         */
+        int strength() {
+            return (asCopy ? 0 : 2) + (byAuthorReading ? 0 : 1);
+        }
+
+        static Accepted stronger(Accepted first, Accepted next) {
+            return next.strength() > first.strength() ? next : first;
+        }
     }
 
     /**
@@ -424,12 +584,36 @@ public final class ExistingBookMatcher {
      * @param rejected why each book that does not qualify was turned down
      * @param doubted  the books that qualify but for the " (1)" guard ({@link #anotherVolumeThanOne}), and qualify by
      *                 no reading: the file may be such a book's copy all the same, so where another book qualifies only
-     *                 with the " (1)" read as a copy too, the name does not say which of them it is
+     *                 with the " (1)" read as a copy too, the name does not say which of them it is. As {@link
+     *                 Accepted}, since one may qualify so only with its stored author names read apart
+     * @param refusedAsStored for the books that qualify, or are doubted, only with their stored author names read
+     *                 apart, what those names each read as one person say against them: the file names another author.
+     *                 The rules before the weak ones turned the book down so, and their evidence still counts
+     * @param copiesAsStored the books found with the " (1)" read as a copy by their authors as stored that {@link
+     *                 #accepted} holds as found by the name with their names read apart, the better reading: before
+     *                 the names were read apart they were found as a copy, which still decides first
      */
-    private record Findings(Map<Long, Accepted> accepted, Map<Long, Rejection> rejected, Map<Long, ShellCandidate> doubted) {
+    private record Findings(Map<Long, Accepted> accepted, Map<Long, Rejection> rejected, Map<Long, Accepted> doubted,
+                            Map<Long, Rejection> refusedAsStored, Map<Long, Accepted> copiesAsStored) {
 
         Findings() {
-            this(new LinkedHashMap<>(), new LinkedHashMap<>(), new LinkedHashMap<>());
+            this(new LinkedHashMap<>(), new LinkedHashMap<>(), new LinkedHashMap<>(), new LinkedHashMap<>(),
+                    new LinkedHashMap<>());
+        }
+
+        /**
+         * Why each book was turned down as the rules before the weak ones have it: {@link #rejected}, and what the
+         * names as stored say against a book that qualifies, or is doubted, only with them read apart.
+         */
+        Map<Long, Rejection> rejectedAsStored() {
+            Map<Long, Rejection> asStored = new LinkedHashMap<>(rejected);
+            refusedAsStored.forEach((bookId, rejection) -> {
+                Accepted a = accepted.get(bookId);
+                if (a == null || a.byAuthorReading()) {
+                    asStored.merge(bookId, rejection, Rejection::weightier);
+                }
+            });
+            return asStored;
         }
     }
 
@@ -444,7 +628,11 @@ public final class ExistingBookMatcher {
             judge(file, reading, evidence, seriesNumber, shell, false, findings);
         }
         if (readsAsACopy(reading)) {
-            Set<Long> foundByNumber = found.stream().map(ShellCandidate::bookId).collect(Collectors.toSet());
+            // Found by number only with its title read with the stored author names apart, a book is still found as a
+            // copy by its titles as stored, as it was before they were read apart
+            Set<Long> foundByNumber = found.stream()
+                    .filter(shell -> shell.identitiesAsStored().contains(reading.identity()))
+                    .map(ShellCandidate::bookId).collect(Collectors.toSet());
             for (ShellCandidate shell : index.lookup(reading.identityWithoutCopy())) {
                 if (!foundByNumber.contains(shell.bookId())) {
                     judge(file, reading, evidence, seriesNumber, shell, true, findings);
@@ -472,7 +660,7 @@ public final class ExistingBookMatcher {
     private static void judge(FileEvidence file, TitleKey reading, Evidence evidence, Integer seriesNumber,
                               ShellCandidate shell, boolean asCopy, Findings findings) {
         Accepted already = findings.accepted().get(shell.bookId());
-        if (already != null && (asCopy || !already.asCopy())) {
+        if (already != null && (already.strong() || asCopy && !already.byAuthorReading())) {
             // Accepted already, by a reading at least as good
             return;
         }
@@ -482,26 +670,72 @@ public final class ExistingBookMatcher {
             // Book 1" has no number), and no reading of its " (1)" as a copy makes it so
             return;
         }
-        Rejection rejection = rejection(file, reading, evidence, seriesNumber, shell);
+        Rejection rejection = rejection(file, reading, evidence, seriesNumber, shell, shell.authors());
+        Rejection asStored = null;
+        boolean byAuthorReading = false;
+        boolean foundAsStored = shell.identitiesAsStored().contains(asCopy ? reading.identityWithoutCopy() : reading.identity());
+        if (!foundAsStored) {
+            // Only its title read with the names apart is the name ("Child of a Dead God - John Hendee" by "Barb
+            // Hendee; John Hendee" read as "Child of a Dead God"): before, the name did not find the book at all, so
+            // whatever the names say, it qualifies only so, and nothing said here is evidence against it
+            byAuthorReading = true;
+            if (rejection != null) {
+                rejection = new Rejection(rejection.why(), false);
+            }
+        } else if (shell.readsAuthorsApart()) {
+            asStored = rejection(file, reading, evidence, seriesNumber, shell, shell.authorsAsStored());
+            if (rejection == null) {
+                // "Arthur C. Clarke;Gentry Lee" read as one Lee did not say the file is the book; read apart it does
+                byAuthorReading = asStored != null;
+            } else if (asStored == null) {
+                // Each stored name read as one person said it is the book: reading them apart never takes that away
+                rejection = null;
+            } else {
+                // Both readings turn it down: what the names as stored say decides, as before they were read apart.
+                // Read apart they neither add evidence against the book nor take away what the names as stored said
+                rejection = asStored;
+            }
+        }
         if (rejection != null && asCopy) {
             rejection = rejection.readAsCopy();
+        }
+        if (rejection == null && byAuthorReading && asStored != null && asStored.against()) {
+            // What the names as stored said against the book still counts where the other rules alone decide
+            Rejection said = new Rejection(label(shell) + " " + asStored.why(), true);
+            findings.refusedAsStored().merge(shell.bookId(), asCopy ? said.readAsCopy() : said, Rejection::weightier);
         }
         if (rejection == null && asCopy && seriesNumber == null && reading.numbers().isEmpty()) {
             // "Saga (1).epub" may as well be volume 1 as a copy of "Saga.epub"; only a leading series number or
             // another number in the name would say which
             rejection = anotherVolumeThanOne(shell, reading);
-            if (rejection != null) {
-                findings.doubted().put(shell.bookId(), shell);
+            if (rejection != null && already == null) {
+                findings.doubted().merge(shell.bookId(), new Accepted(shell, true, byAuthorReading), Accepted::stronger);
             }
         }
         if (rejection == null) {
+            Accepted accepted = new Accepted(shell, asCopy, byAuthorReading);
+            // A book found both by the name with its names read apart and as a copy by them as stored was found the
+            // latter way before they were read apart: keep that, for the copy reading by the names as stored
+            Accepted weaker = already == null ? null : accepted.strength() <= already.strength() ? accepted : already;
+            if (weaker != null && weaker.asCopy() && !weaker.byAuthorReading()) {
+                findings.copiesAsStored().putIfAbsent(shell.bookId(), weaker);
+            }
+            if (already != null && accepted.strength() <= already.strength()) {
+                // Accepted already, by another reading as good
+                return;
+            }
             // A book accepted as a copy before and now by the name as it reads takes its place among the latter in
             // the order they were found, as it would without the copy reading
             findings.accepted().remove(shell.bookId());
-            findings.accepted().put(shell.bookId(), new Accepted(shell, asCopy));
-            findings.rejected().remove(shell.bookId());
+            findings.accepted().put(shell.bookId(), accepted);
+            Rejection before = findings.rejected().remove(shell.bookId());
+            if (before != null && byAuthorReading && before.against()) {
+                // Accepted only with the names read apart, the book is still turned down by what the names as stored
+                // said against it before
+                findings.refusedAsStored().merge(shell.bookId(), before, Rejection::weightier);
+            }
             findings.doubted().remove(shell.bookId());
-        } else if (already == null || rejection.refuses()) {
+        } else if (already == null || already.asCopy() && rejection.refuses()) {
             // What the name as it reads says against a book outweighs its reading as a copy of it, accepted or
             // doubted, as the rules before that reading had it
             if (rejection.refuses()) {
@@ -511,6 +745,20 @@ public final class ExistingBookMatcher {
             Rejection labelled = new Rejection(label(shell) + " " + rejection.why(), rejection.against(), rejection.asCopy());
             // Evidence against the book from one reading outweighs a want of evidence from another
             findings.rejected().merge(shell.bookId(), labelled, Rejection::weightier);
+        } else if (already.byAuthorReading() && foundAsStored) {
+            // Accepted only with the names read apart, the book was not accepted so before they were, or only as a
+            // copy ({@link Findings#copiesAsStored}): what the names as stored say against it here still counts as
+            // it counted then, even if the book ends up the file's weakly
+            Accepted asStoredBefore = findings.copiesAsStored().get(shell.bookId());
+            Rejection earlierAsStored = findings.refusedAsStored().get(shell.bookId());
+            boolean passedOver = asCopy && (asStoredBefore != null || earlierAsStored != null && earlierAsStored.refuses());
+            if (!passedOver && (asStoredBefore == null || rejection.refuses())) {
+                Rejection labelled = new Rejection(label(shell) + " " + rejection.why(), rejection.against(), rejection.asCopy());
+                findings.refusedAsStored().merge(shell.bookId(), labelled, Rejection::weightier);
+                if (rejection.refuses()) {
+                    findings.copiesAsStored().remove(shell.bookId());
+                }
+            }
         }
     }
 
@@ -557,57 +805,80 @@ public final class ExistingBookMatcher {
      * have no authors to tell them by. Series numbers are compared as given: 1.5 and 2.5, or 0.5 and none, are two
      * places in a series, although neither is a whole number. Years in brackets, which no identity holds, are compared
      * too: "Rick Steves Italy (2020)" and "Rick Steves Italy (2023)" are two editions, and "(2020)" and none may be.
+     * Titles and authors are alike as stored, each stored author name read as one person, or with the names read
+     * apart: "J.R.R. Tolkien; Christopher Tolkien" and "J.R.R. Tolkien / Christopher Tolkien" are one Tolkien as
+     * stored, and "Barb Hendee; J. C. Hendee" and the rows "Barb Hendee" and "J.C. Hendee" two Hendees read apart.
      */
     private static Accepted oneOfAlike(Collection<Accepted> qualifying) {
         ShellCandidate first = qualifying.iterator().next().shell();
-        Set<PersonName> authors = Set.copyOf(first.authors());
-        if (authors.isEmpty()) {
-            return null;
-        }
         for (Accepted next : qualifying) {
             ShellCandidate shell = next.shell();
-            if (!shell.identities().equals(first.identities()) || !shell.years().equals(first.years())
-                    || !Objects.equals(shell.seriesNumber(), first.seriesNumber())
-                    || !Objects.equals(shell.seriesPlace(), first.seriesPlace()) || !Set.copyOf(shell.authors()).equals(authors)) {
+            if (!shell.years().equals(first.years()) || !Objects.equals(shell.seriesNumber(), first.seriesNumber())
+                    || !Objects.equals(shell.seriesPlace(), first.seriesPlace())) {
                 return null;
             }
+        }
+        if (!alikeAsStored(qualifying)
+                && !alike(qualifying, ShellCandidate::identities, ShellCandidate::authors)) {
+            return null;
         }
         return qualifying.stream()
                 .min(Comparator.comparing((Accepted a) -> a.shell().physical()).thenComparingLong(a -> a.shell().bookId()))
                 .orElseThrow();
     }
 
-    private static String agreement(Accepted accepted) {
-        return "title and author agree with " + label(accepted.shell()) + (accepted.asCopy() ? COPY_READING : "");
+    /** Whether the books are alike by their titles and authors as stored, as the choice among alike books was before. */
+    private static boolean alikeAsStored(Collection<Accepted> qualifying) {
+        return alike(qualifying, ShellCandidate::identitiesAsStored, ShellCandidate::authorsAsStored);
     }
 
-    /** Why the fileless book is not this file's book, or null when it is. */
+    /** Whether every book has the same titles and the same authors, read so; books without authors are never alike. */
+    private static boolean alike(Collection<Accepted> qualifying, Function<ShellCandidate, Set<String>> identitiesOf,
+                                 Function<ShellCandidate, List<PersonName>> authorsOf) {
+        ShellCandidate first = qualifying.iterator().next().shell();
+        Set<PersonName> authors = Set.copyOf(authorsOf.apply(first));
+        return !authors.isEmpty() && qualifying.stream().map(Accepted::shell).allMatch(shell ->
+                identitiesOf.apply(shell).equals(identitiesOf.apply(first))
+                        && Set.copyOf(authorsOf.apply(shell)).equals(authors));
+    }
+
+    private static String agreement(Accepted accepted) {
+        return "title and author agree with " + label(accepted.shell()) + (accepted.asCopy() ? COPY_READING : "")
+                + (accepted.byAuthorReading() ? AUTHOR_READING : "");
+    }
+
+    /**
+     * Why the fileless book is not this file's book, or null when it is.
+     *
+     * @param authors the book's authors to check the name against: {@link ShellCandidate#authors}, or {@link
+     *                ShellCandidate#authorsAsStored}
+     */
     private static Rejection rejection(FileEvidence file, TitleKey reading, Evidence evidence, Integer seriesNumber,
-                                       ShellCandidate shell) {
+                                       ShellCandidate shell, List<PersonName> authors) {
         if (shell.libraryPathId() != null && !shell.libraryPathId().equals(file.libraryPathId())) {
             return new Rejection("is in another library path", true);
         }
         if (seriesNumber != null && !seriesNumber.equals(shell.seriesNumber())) {
             return new Rejection("is not number " + seriesNumber + " of its series", true);
         }
-        if (shell.authors().isEmpty()) {
+        if (authors.isEmpty()) {
             if (!shell.physical()) {
                 return new Rejection("has no author to check the file against", false);
             }
             // Nothing to confirm an author part of the name against: only a part the folders vouch for may go
             return evidence.confirmed() ? null : new Rejection("has no author that '" + reading.droppedName() + "' could be", false);
         }
-        if (!evidence.claim().isEmpty() && !agreesWithGivenName(evidence.claim(), shell.authors())) {
+        if (!evidence.claim().isEmpty() && !agreesWithGivenName(evidence.claim(), authors)) {
             // Only a part the folders or its initials vouch for says who the file is by
             return new Rejection("is not by '" + reading.droppedName() + "'", evidence.confirmed());
         }
         List<PersonName> names = new ArrayList<>(file.context().folderNames());
         names.addAll(evidence.claim());
         boolean oneWord = !reading.title().contains(" ");
-        if (!agreesWithGivenName(names, shell.authors())) {
+        if (!agreesWithGivenName(names, authors)) {
             return new Rejection("has none of its authors in the path", false);
         }
-        if (oneWord && !agreesWithSameGivenName(names, shell.authors())) {
+        if (oneWord && !agreesWithSameGivenName(names, authors)) {
             return new Rejection("has a one-word title, which needs its author's given name in the path as the book has it", false);
         }
         return null;
@@ -679,26 +950,44 @@ public final class ExistingBookMatcher {
      * @param weak      whether only weak matches ({@link Match#weak}) give the file this book: its own, or those of
      *                  the files it would be one book with when none of them has a strong match. A file that goes with
      *                  a strong match of its group claims the book as strongly, whatever its own match
+     * @param readApart for a weak claim, whether only the stored author names read apart give the file this book
+     *                  ({@link Match#readApart}), or a group the rules before that reading turned down from it: such a
+     *                  claim yields to the weak claims of those rules as well as to strong ones
      */
     public record Claim<F>(F file, String fileName, long bookId, String folderKey, String format, String nameKey,
-                           boolean weak) {
+                           boolean weak, boolean readApart) {
 
         /** A strong claim. */
         public Claim(F file, String fileName, long bookId, String folderKey, String format, String nameKey) {
-            this(file, fileName, bookId, folderKey, format, nameKey, false);
+            this(file, fileName, bookId, folderKey, format, nameKey, false, false);
+        }
+
+        /** A claim by the rules before the stored author names were read apart. */
+        public Claim(F file, String fileName, long bookId, String folderKey, String format, String nameKey, boolean weak) {
+            this(file, fileName, bookId, folderKey, format, nameKey, weak, false);
+        }
+
+        /** Strong (2), weak (1), weak only with the stored author names read apart (0), as {@link Match#rank}. */
+        public int rank() {
+            return !weak ? 2 : readApart ? 0 : 1;
         }
     }
 
     /**
      * @param accepted the files each fileless book gets, by book id
      * @param rejected why each fileless book that gets none was left alone, by book id
-     * @param yielded  for each fileless book that gets the files of its strong claims only, the files of its weak
-     *                 claims, which it does not get, and why; by book id
+     * @param yielded  for each fileless book that gets only the files of the claims that outrank its others (its
+     *                 strong claims, or the claims of the rules before the stored author names were read apart, as
+     *                 {@link #resolveShellClaims} keeps them), the files of its other claims, which it does not get,
+     *                 and why; by book id
      */
     public record ClaimResolution<F>(Map<Long, List<F>> accepted, Map<Long, String> rejected, Map<Long, Yield<F>> yielded) {
     }
 
-    /** The files whose weak claims on a fileless book yield to the strong claims of other files on it, and why. */
+    /**
+     * The files whose claims on a fileless book yield to the claims of other files on it that outrank them ({@link
+     * Claim#rank}), and why.
+     */
     public record Yield<F>(List<F> files, String why) {
         public Yield {
             files = List.copyOf(files);
@@ -718,6 +1007,11 @@ public final class ExistingBookMatcher {
      * "A/Steve Alten/MEG/The MEG.epub" and the weak "A/Steve Alten/MEG (1).epub" claim a fileless "MEG" from two
      * folders, and "The MEG.epub" gets it, as it would without the weak rules. Strong claims that do not agree among
      * themselves leave the book alone, weak ones or not, and so do weak claims without a strong one.
+     * <p>
+     * A weak claim that only the stored author names read apart make ({@link Claim#readApart}) yields to every other
+     * claim, weak ones included: where the claims the rules before that reading make agree among themselves, the book
+     * gets theirs, as it did then, and those other files become new books. Only where none of those claims is left do
+     * such claims on their own get a book, and only when they agree.
      */
     public static <F> ClaimResolution<F> resolveShellClaims(List<Claim<F>> claims) {
         Map<Long, List<Claim<F>>> byBook = new LinkedHashMap<>();
@@ -733,15 +1027,19 @@ public final class ExistingBookMatcher {
                 accepted.put(bookId, files(bookClaims));
                 return;
             }
-            List<Claim<F>> strong = bookClaims.stream().filter(claim -> !claim.weak()).toList();
-            if (!strong.isEmpty() && disagreement(strong) == null) {
-                List<Claim<F>> weak = bookClaims.stream().filter(Claim::weak).toList();
-                accepted.put(bookId, files(strong));
-                yielded.put(bookId, new Yield<>(files(weak), disagreement + "; the weak claims of " + names(weak)
-                        + " yield to the others"));
-            } else {
-                rejected.put(bookId, disagreement);
+            // The claims of the rules before the names were read apart, then the strong ones alone, as before
+            for (int rank = 1; rank <= 2; rank++) {
+                int least = rank;
+                List<Claim<F>> stronger = bookClaims.stream().filter(claim -> claim.rank() >= least).toList();
+                if (!stronger.isEmpty() && disagreement(stronger) == null) {
+                    List<Claim<F>> weak = bookClaims.stream().filter(claim -> claim.rank() < least).toList();
+                    accepted.put(bookId, files(stronger));
+                    yielded.put(bookId, new Yield<>(files(weak), disagreement + "; the weak claims of " + names(weak)
+                            + " yield to the others"));
+                    return;
+                }
             }
+            rejected.put(bookId, disagreement);
         });
         return new ClaimResolution<>(accepted, rejected, yielded);
     }

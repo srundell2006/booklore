@@ -18,10 +18,21 @@ import java.util.regex.Pattern;
  * @param hasCover      whether the book has a cover of its own, ebook or audiobook
  * @param title         the title as the metadata has it, for log lines
  * @param identities    the {@link TitleKey#identity}s the book is found under: its title, its title with its subtitle,
- *                      and the title without a metadata provider's "(Series, #N)" suffix
+ *                      and the title without a metadata provider's "(Series, #N)" suffix; each read with its authors
+ *                      as {@link #authors} has them and as {@link #authorsAsStored} has them, since a title's author
+ *                      part is dropped only when it names one of them ("Child of a Dead God - John Hendee" by "Barb
+ *                      Hendee; John Hendee" is "Child of a Dead God" only with the name read apart)
+ * @param identitiesAsStored the identities its titles read as with its authors as stored, as the matcher read them
+ *                      before it read the names apart: the reading the weak rule yields to. The same set as {@link
+ *                      #identities} when they read alike, which most do
  * @param years         the publication years its titles give in brackets ("Rick Steves Italy (2020)"), as
  *                      {@link TitleKey#years} reads them; no identity holds them, so they alone tell two editions apart
- * @param authors       its authors, parsed
+ * @param authors       its authors, each stored name read as {@link PersonName#parseAuthor} reads it: one name that
+ *                      packs several ("Arthur C. Clarke;Gentry Lee") is each of them
+ * @param authorsAsStored its authors with each stored name read as one person ({@link PersonName#parse}), as the
+ *                      matcher read them before it read them apart: the reading the weak rule yields to ({@link
+ *                      ExistingBookMatcher.Match#weak}). The same list as {@link #authors} when they read alike, which
+ *                      most do
  * @param seriesNumber  its place in its series when that is a whole number: the metadata's series number, else the
  *                      number of a "(Series, #N)" suffix; null otherwise
  * @param seriesPlace   its place in its series as given, fractions included: the metadata's series number, else the
@@ -49,8 +60,10 @@ public record ShellCandidate(long bookId,
                              boolean hasCover,
                              String title,
                              Set<String> identities,
+                             Set<String> identitiesAsStored,
                              Set<Integer> years,
                              List<PersonName> authors,
+                             List<PersonName> authorsAsStored,
                              Integer seriesNumber,
                              Float seriesPlace,
                              String seriesName,
@@ -66,8 +79,12 @@ public record ShellCandidate(long bookId,
 
     public ShellCandidate {
         identities = Set.copyOf(identities);
+        // Most books' titles read alike either way: one set then, not two
+        identitiesAsStored = identitiesAsStored.equals(identities) ? identities : Set.copyOf(identitiesAsStored);
         years = Set.copyOf(years);
         authors = List.copyOf(authors);
+        // Most books' names read alike either way: one list then, not two
+        authorsAsStored = authorsAsStored.equals(authors) ? authors : List.copyOf(authorsAsStored);
         seriesIdentities = Set.copyOf(seriesIdentities);
         volumeNumbers = List.copyOf(volumeNumbers);
     }
@@ -79,9 +96,11 @@ public record ShellCandidate(long bookId,
     public static ShellCandidate of(long bookId, Long libraryPathId, boolean physical, boolean hasCover, String title,
                                     String subtitle, String seriesName, Float seriesNumber, Collection<String> authorNames) {
         List<String> names = authorNames == null ? List.of() : authorNames.stream().filter(Objects::nonNull).toList();
-        List<PersonName> authors = names.stream().map(PersonName::parse).filter(Objects::nonNull).toList();
+        List<PersonName> authors = PersonName.parseAuthors(names);
+        List<PersonName> asStored = names.stream().map(PersonName::parse).filter(Objects::nonNull).toList();
         // A title such as "The Hobbit - J.R.R. Tolkien" reads without the author part only when it is this book's author
         NameContext context = NameContext.NONE.withAuthors(names);
+        NameContext contextAsStored = NameContext.NONE.withPersons(asStored);
 
         String fullTitle = title == null ? "" : title.trim();
         String cleanTitle = fullTitle;
@@ -93,43 +112,73 @@ public record ShellCandidate(long bookId,
             suffixSeries = provider.group(2).trim();
             suffixPlace = Float.parseFloat(provider.group(3));
         }
-
-        List<TitleKey> keys = new ArrayList<>();
-        keys.add(TitleKey.ofTitle(cleanTitle, context));
-        TitleKey withSuffix = TitleKey.ofTitle(fullTitle, context);
-        keys.add(withSuffix);
+        List<String> titles = new ArrayList<>();
+        titles.add(cleanTitle);
+        titles.add(fullTitle);
         if (subtitle != null && !subtitle.isBlank()) {
-            keys.add(TitleKey.ofTitle(cleanTitle + ": " + subtitle.trim(), context));
+            titles.add(cleanTitle + ": " + subtitle.trim());
         }
+
         // The "#2" of "(The Handmaid's Tale, #2)" is the book's place in that series, not a volume its title names,
         // unless the metadata gives it another place
         boolean suffixIsPlace = suffixPlace != null && (seriesNumber == null || seriesNumber.equals(suffixPlace));
+        Set<String> identitiesAsStored = new LinkedHashSet<>();
         Set<String> identities = new LinkedHashSet<>();
         Set<Integer> years = new LinkedHashSet<>();
         Set<String> volumeNumbers = new LinkedHashSet<>();
-        for (TitleKey key : keys) {
-            if (!key.identity().isEmpty()) {
-                identities.add(key.identity());
-                years.addAll(key.years());
-                if (key != withSuffix || !suffixIsPlace) {
-                    volumeNumbers.addAll(key.keywordNumbers());
-                }
+        for (int i = 0; i < titles.size(); i++) {
+            // As stored first, as before the names were read apart, then read apart, which may drop an author part
+            // that the names as stored did not
+            addTitle(TitleKey.ofTitle(titles.get(i), contextAsStored), i == 1 && suffixIsPlace, identitiesAsStored, years,
+                    volumeNumbers);
+            if (!authors.equals(asStored)) {
+                addTitle(TitleKey.ofTitle(titles.get(i), context), i == 1 && suffixIsPlace, identities, years,
+                        volumeNumbers);
             }
         }
+        identities.addAll(identitiesAsStored);
 
         String series = seriesName != null && !seriesName.isBlank() ? seriesName.trim() : suffixSeries;
+        // What its series is called is read with the names as stored, as before: the " (1)" guard it serves never
+        // turns down a book that it did not turn down then
         Set<String> seriesIdentities = new LinkedHashSet<>();
-        addSeriesIdentities(series, context, seriesIdentities);
+        addSeriesIdentities(series, contextAsStored, seriesIdentities);
         if (suffixIsPlace) {
             // The suffix's place is in the suffix's series: "Saga (Saga, #2)" is number 2 of a series "Saga", whatever
             // other series the metadata names
-            addSeriesIdentities(suffixSeries, context, seriesIdentities);
+            addSeriesIdentities(suffixSeries, contextAsStored, seriesIdentities);
         }
 
         Integer number = wholeNumber(seriesNumber);
-        return new ShellCandidate(bookId, libraryPathId, physical, hasCover, fullTitle, identities, years, authors,
-                number != null ? number : wholeNumber(suffixPlace), seriesNumber != null ? seriesNumber : suffixPlace,
-                series, seriesIdentities, List.copyOf(volumeNumbers));
+        return new ShellCandidate(bookId, libraryPathId, physical, hasCover, fullTitle, identities, identitiesAsStored,
+                years, authors, asStored, number != null ? number : wholeNumber(suffixPlace),
+                seriesNumber != null ? seriesNumber : suffixPlace, series, seriesIdentities, List.copyOf(volumeNumbers));
+    }
+
+    /**
+     * Whether its stored author names read apart are other authors than each read as one person: a name packs
+     * several ("Arthur C. Clarke;Gentry Lee"), or holds an HTML entity or a part in brackets.
+     */
+    public boolean readsAuthorsApart() {
+        return authorsAsStored != authors && !authorsAsStored.equals(authors);
+    }
+
+    /**
+     * Adds the identity a title reads as, and the years and volume numbers it gives.
+     *
+     * @param placeSuffix whether the title ends in a "(Series, #N)" suffix that gives the book's place, whose number is
+     *                    no volume its title names
+     */
+    private static void addTitle(TitleKey key, boolean placeSuffix, Set<String> identities, Set<Integer> years,
+                                 Set<String> volumeNumbers) {
+        if (key.identity().isEmpty()) {
+            return;
+        }
+        identities.add(key.identity());
+        years.addAll(key.years());
+        if (!placeSuffix) {
+            volumeNumbers.addAll(key.keywordNumbers());
+        }
     }
 
     /** Adds the identities a series name reads as when read as a title, as {@link #seriesIdentities} has them. */

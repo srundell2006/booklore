@@ -18,6 +18,9 @@ import org.booklore.service.library.matching.ExistingBookMatcher.NoMatch;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.junit.jupiter.params.ParameterizedTest;
+import org.junit.jupiter.params.provider.EnumSource;
+import org.junit.jupiter.params.provider.ValueSource;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
@@ -1687,6 +1690,355 @@ class BookGroupingServiceTest {
         assertThat(attached(result)).containsExactly(Map.entry(20L, List.of(first, plain)));
         assertThat(outcomes.weakMatch("Survival.pdf").bookId()).isEqualTo(10);
         assertThat(outcomes.lines).isEmpty();
+    }
+
+    @Test
+    void rescan_bookPerFolder_aMatchOnlyAnAuthorRowReadApartMakesYieldsToTheStrongMatchOfItsFolder() {
+        // "Cradle.pdf" is the fileless "Cradle" only with its row "Arthur C. Clarke;Gentry Lee" read apart; as before,
+        // it goes with "Cradle 1.epub" of its folder to the book that file strongly matches
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
+        shell(10, "Cradle", "Arthur C. Clarke;Gentry Lee");
+        shell(20, "Cradle 1", "Arthur C. Clarke");
+        LibraryFile first = newFile(lib, path, "C/Arthur C. Clarke/Cradle", "Cradle 1.epub");
+        LibraryFile plain = newFile(lib, path, "C/Arthur C. Clarke/Cradle", "Cradle.pdf");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, first, plain);
+
+        assertThat(attached(result)).containsExactly(Map.entry(20L, List.of(first, plain)));
+        assertThat(outcomes.weakMatch("Cradle.pdf").bookId()).isEqualTo(10);
+        assertThat(outcomes.lines).isEmpty();
+    }
+
+    @Test
+    void rescan_autoDetect_aSecondDownloadOfABookWhoseAuthorRowPacksTwoAuthorsGoesToItWithTheFirst() {
+        // Production: both became a new book. Only the row read apart finds the book for the first, and the " (1)"
+        // read as a copy as well for the second: both are weak, and with no strong match in their group they decide
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shellRows.add(new FilelessBookRow(273322L, null, false, "cover", null, "Full Bloom", null, "Full Series", 5f,
+                "Janet Evanovich; Charlotte Hughes"));
+        LibraryFile plain = newFile(lib, path, "E/Janet Evanovich/Full", "Full Bloom.epub");
+        LibraryFile copy = newFile(lib, path, "E/Janet Evanovich/Full", "Full Bloom (1).epub");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, plain, copy);
+
+        assertThat(attached(result)).containsExactly(Map.entry(273322L, List.of(plain, copy)));
+        assertThat(result.newBookGroups()).isEmpty();
+        outcomes.weakMatch("Full Bloom.epub");
+        outcomes.weakMatch("Full Bloom (1).epub");
+        assertThat(outcomes.lines).isEmpty();
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = LibraryOrganizationMode.class, names = {"AUTO_DETECT", "BOOK_PER_FOLDER"})
+    void rescan_aGroupThatHasItsBookOnlyWithTheRowReadApartClaimsItWeakly(LibraryOrganizationMode mode) {
+        // As stored, "Barb Hendee; J. C. Hendee" is one Hendee, whom the pdf's "J.C. Hendee" is not: before, that
+        // turned its folder's group down, and the book went to the file of the other folder. Read apart the pdf is
+        // the book's, weakly, so its group claims the book only weakly and yields, as before
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(mode, path);
+        shell(10, "Child of a Dead God", "Barb Hendee; J. C. Hendee");
+        LibraryFile alone = newFile(lib, path, "H/Barb Hendee", "Child of a Dead God.epub");
+        LibraryFile epub = newFile(lib, path, "H/Barb Hendee & J.C. Hendee", "Child of a Dead God.epub");
+        LibraryFile pdf = newFile(lib, path, "H/Barb Hendee & J.C. Hendee", "Child of a Dead God - J.C. Hendee.pdf");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, alone, epub, pdf);
+
+        assertThat(attached(result)).containsExactly(Map.entry(10L, List.of(alone)));
+        assertThat(newBooks(result)).containsExactly(List.of("Child of a Dead God.epub",
+                "Child of a Dead God - J.C. Hendee.pdf"));
+        assertThat(outcomes.weakMatch("Child of a Dead God - J.C. Hendee.pdf").refused()).containsExactly(10L);
+        assertThat(outcomes.lines).singleElement().asString().startsWith("yielded 10 [Child of a Dead God.epub,"
+                + " Child of a Dead God - J.C. Hendee.pdf]");
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = LibraryOrganizationMode.class, names = {"AUTO_DETECT", "BOOK_PER_FOLDER"})
+    void rescan_aGroupThatHasItsBookOnlyWithTheRowReadApartGetsItWhenNothingOutweighsIt(LibraryOrganizationMode mode) {
+        // Before, the pdf turned the book down and both files became a new book; now its weak match adds the book
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(mode, path);
+        shell(10, "Child of a Dead God", "Barb Hendee; J. C. Hendee");
+        LibraryFile epub = newFile(lib, path, "H/Barb Hendee & J.C. Hendee", "Child of a Dead God.epub");
+        LibraryFile pdf = newFile(lib, path, "H/Barb Hendee & J.C. Hendee", "Child of a Dead God - J.C. Hendee.pdf");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, epub, pdf);
+
+        assertThat(attached(result)).containsExactly(Map.entry(10L, List.of(epub, pdf)));
+        assertThat(result.newBookGroups()).isEmpty();
+        assertThat(outcomes.lines).isEmpty();
+    }
+
+    @Test
+    void rescan_autoDetect_aTitleThatReadsAsTheNameOnlyWithTheRowReadApartYieldsToTheTitleAsStored() {
+        // "Child of a Dead God - John Hendee" is "Child of a Dead God" only with its row read apart: the second file's
+        // claim is weak, and the first file gets the book, as before
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shell(10, "Child of a Dead God - John Hendee", "Barb Hendee; John Hendee");
+        LibraryFile titled = newFile(lib, path, "H/Barb Hendee", "Child of a Dead God - John Hendee.epub");
+        LibraryFile plain = newFile(lib, path, "H/John Hendee", "Child of a Dead God.epub");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, titled, plain);
+
+        assertThat(attached(result)).containsExactly(Map.entry(10L, List.of(titled)));
+        assertThat(newBooks(result)).containsExactly(List.of("Child of a Dead God.epub"));
+        outcomes.weakMatch("Child of a Dead God.epub");
+        assertThat(outcomes.lines).singleElement().asString().startsWith("yielded 10 [Child of a Dead God.epub]");
+    }
+
+    // ---- what the stored author names read apart add never outweighs what the rules before them give ----
+
+    @ParameterizedTest
+    @EnumSource(value = LibraryOrganizationMode.class, names = {"AUTO_DETECT", "BOOK_PER_FOLDER"})
+    void rescan_aGroupOnlyTheRowReadApartGivesTheBookYieldsToAWeakClaimOfTheRulesBefore(LibraryOrganizationMode mode) {
+        // Before, the pdf turned the first folder's group down, and the second download alone claimed the book, weakly
+        // as a copy, and got it: it still does
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(mode, path);
+        shell(10, "Child of a Dead God", "Barb Hendee; J. C. Hendee");
+        LibraryFile epub = newFile(lib, path, "H/Barb Hendee & J.C. Hendee", "Child of a Dead God.epub");
+        LibraryFile pdf = newFile(lib, path, "H/Barb Hendee & J.C. Hendee", "Child of a Dead God - J.C. Hendee.pdf");
+        LibraryFile copy = newFile(lib, path, "H/Barb Hendee", "Child of a Dead God (1).epub");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, epub, pdf, copy);
+
+        assertThat(attached(result)).containsExactly(Map.entry(10L, List.of(copy)));
+        assertThat(outcomes.lines).singleElement().asString().startsWith("yielded 10 [Child of a Dead God.epub,"
+                + " Child of a Dead God - J.C. Hendee.pdf]");
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = LibraryOrganizationMode.class, names = {"AUTO_DETECT", "BOOK_PER_FOLDER"})
+    void rescan_aMatchOnlyTheRowReadApartMakesYieldsToACopyOfAnotherFolder(LibraryOrganizationMode mode) {
+        // Before, only "Cradle (1).epub" matched, as a copy, and got the book
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(mode, path);
+        shell(10, "Cradle", "Arthur C. Clarke;Gentry Lee");
+        LibraryFile readApart = newFile(lib, path, "C/Arthur C. Clarke", "Cradle.epub");
+        LibraryFile copy = newFile(lib, path, "L/Arthur Lee", "Cradle (1).epub");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, readApart, copy);
+
+        assertThat(attached(result)).containsExactly(Map.entry(10L, List.of(copy)));
+        assertThat(newBooks(result)).containsExactly(List.of("Cradle.epub"));
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = {"Rama Revealed.epub", "Rama Revealed (1).epub"})
+    void rescan_aGroupAFileOfWhichTheNamesAsStoredTurnDownStillYieldsWhenTheyReadApartAcceptIt(String other) {
+        // Before, "Book 1 - Rama Revealed.epub" said it is not the book, which has no number, and the Gentry Lee group
+        // gave way to the Clarke folder's file; read apart, the packed row lets the book in, but the names as stored
+        // still turn it down, so the group still gives way and does not take the book from that file
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
+        shellRows.add(new FilelessBookRow(1L, null, false, "cover", null, "Rama Revealed", "Book 1", null, null,
+                "Arthur C. Clarke;Gentry Lee"));
+        shellRows.add(new FilelessBookRow(1L, null, false, "cover", null, "Rama Revealed", "Book 1", null, null,
+                "Arthur C. Clarke"));
+        LibraryFile numbered = newFile(lib, path, "L/Gentry Lee", "Book 1 - Rama Revealed.epub");
+        LibraryFile pdf = newFile(lib, path, "L/Gentry Lee", "Rama Revealed - Arthur C. Clarke.pdf");
+        LibraryFile clarke = newFile(lib, path, "C/Arthur C. Clarke", other);
+
+        var result = rescan(lib, numbered, pdf, clarke);
+
+        assertThat(attached(result)).containsExactly(Map.entry(1L, List.of(clarke)));
+        assertThat(newBooks(result)).containsExactly(List.of("Book 1 - Rama Revealed.epub",
+                "Rama Revealed - Arthur C. Clarke.pdf"));
+    }
+
+    @Test
+    void rescan_aBookFoundByNumberOnlyWithItsRowReadApartIsStillACopyOfTheRowAsStored() {
+        // Before, the mobi was ambiguous between the two books as copies, and the epub, which is in another library
+        // path than book#2, a copy of book#1, which it got. Read apart, the subtitle's "Lee Child" is the author, so
+        // "Killing Floor (1)" is book#2 by number; it is still a copy of book#2 as stored, which keeps the mobi from
+        // claiming book#1 from a second folder: it gets book#2 only by the reading the names apart add
+        var path1 = pathEntity(1L, "/books1");
+        var path2 = pathEntity(2L, "/books2");
+        var lib = library(LibraryOrganizationMode.AUTO_DETECT, path1, path2);
+        lib.setId(1L);
+        shell(1, "Killing Floor", "Lee Child");
+        shellRows.add(new FilelessBookRow(2L, 1L, true, "cover", null, "Killing Floor", "Book 1 - Lee Child", null, null,
+                "Lee Child; M.D."));
+        LibraryFile mobi = newFile(lib, path1, "C/Lee Child", "Killing Floor (1).mobi");
+        LibraryFile epub = newFile(lib, path2, "C/Lee Child", "Killing Floor (1).epub");
+
+        var result = rescan(lib, mobi, epub);
+
+        assertThat(attached(result)).containsExactly(Map.entry(2L, List.of(mobi)), Map.entry(1L, List.of(epub)));
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = LibraryOrganizationMode.class, names = {"AUTO_DETECT", "BOOK_PER_FOLDER"})
+    void rescan_aMatchOnlyTheRowReadApartMakesNeverSplitsAGroupFromItsWeakBook(LibraryOrganizationMode mode) {
+        // Before, the copy weakly took one of two alike "Cradle 1"s, and the pdf, which matched nothing, followed it
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(mode, path);
+        shell(11, "Cradle 1", "Arthur C. Clarke");
+        shell(12, "Cradle 1", "Arthur C. Clarke");
+        shell(20, "Cradle", "Arthur C. Clarke;Gentry Lee");
+        LibraryFile copy = newFile(lib, path, "C/Arthur C. Clarke", "Cradle (1).epub");
+        LibraryFile pdf = newFile(lib, path, "C/Arthur C. Clarke", "Cradle.pdf");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, copy, pdf);
+
+        assertThat(attached(result)).containsExactly(Map.entry(11L, List.of(copy, pdf)));
+        assertThat(outcomes.weakMatch("Cradle.pdf").bookId()).isEqualTo(20);
+        assertThat(outcomes.lines).isEmpty();
+    }
+
+    @Test
+    void rescan_bookPerFolder_whatTheRowAsStoredSaysAgainstABookStillTurnsAGroupDown() {
+        // As stored, "John Hendee" is not the one Hendee of "Barb Hendee; J. C. Hendee": the pdf turned its group
+        // down, and the file of the other folder got the book. Read apart, only the one-word title wants evidence
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
+        shell(10, "Dhampir", "Barb Hendee; J. C. Hendee");
+        LibraryFile epub = newFile(lib, path, "Hendee/Dhampir", "Dhampir - Barb Hendee.epub");
+        LibraryFile pdf = newFile(lib, path, "Hendee/Dhampir", "Dhampir - John Hendee.pdf");
+        LibraryFile other = newFile(lib, path, "H/Barb Hendee", "Dhampir.epub");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, epub, pdf, other);
+
+        assertThat(attached(result)).containsExactly(Map.entry(10L, List.of(other)));
+        assertThat(outcomes.fileless.get("Dhampir - John Hendee.pdf").refused()).containsExactly(10L);
+        assertThat(outcomes.lines).containsExactly("refused 10 by [Dhampir - John Hendee.pdf]");
+    }
+
+    @ParameterizedTest
+    @EnumSource(value = LibraryOrganizationMode.class, names = {"AUTO_DETECT", "BOOK_PER_FOLDER"})
+    void rescan_theRowReadApartAddsNoRefusalToAGroup(LibraryOrganizationMode mode) {
+        // As stored, "Arthur C. Clarke;Gentry Lee" is a Lee whom "A. Lee" may be; read apart "A. Lee" is neither
+        // author, which takes nothing from the group the epub strongly gives the book
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(mode, path);
+        shell(10, "Cradle", "Arthur C. Clarke;Gentry Lee");
+        LibraryFile epub = newFile(lib, path, "Lee/Cradle", "Cradle - Arthur Lee.epub");
+        LibraryFile pdf = newFile(lib, path, "Lee/Cradle", "Cradle - A. Lee.pdf");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, epub, pdf);
+
+        assertThat(attached(result)).containsExactly(Map.entry(10L, List.of(epub, pdf)));
+        assertThat(outcomes.fileless.get("Cradle - A. Lee.pdf").refused()).isEmpty();
+        assertThat(outcomes.lines).isEmpty();
+    }
+
+    @Test
+    void rescan_autoDetect_aClaimOnlyARoleReadApartMakesYieldsToACopyOfAnotherFolder() {
+        // Before, "Rama II.epub" had no match (no author in its path) and the copy got the book
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shell(1, "Rama II", "Arthur C. Clarke", "Gentry Lee (Illustrator)");
+        LibraryFile readApart = newFile(lib, path, "L/Gentry Lee", "Rama II.epub");
+        LibraryFile copy = newFile(lib, path, "C/Arthur C. Clarke", "Rama II (1).pdf");
+
+        var result = rescan(lib, readApart, copy);
+
+        assertThat(attached(result)).containsExactly(Map.entry(1L, List.of(copy)));
+    }
+
+    @Test
+    void rescan_autoDetect_claimsOnlyTheRowsReadApartMakeStillAddABookWhereTheyAgree() {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shell(1, "Rama II", "Arthur C. Clarke", "Gentry Lee (Illustrator)");
+        LibraryFile copy = newFile(lib, path, "C/Arthur C. Clarke", "Rama II (1).pdf");
+        LibraryFile readApart = newFile(lib, path, "C/Arthur C. Clarke", "Rama II - Gentry Lee.epub");
+
+        var result = rescan(lib, copy, readApart);
+
+        assertThat(attached(result)).containsExactly(Map.entry(1L, List.of(copy, readApart)));
+    }
+
+    @Test
+    void rescan_bookPerFolder_aMatchOnlyTheRowReadApartMakesFollowsTheWeakMatchOfItsGroup() {
+        // Before, the epub matched nothing and followed the copy to "Good Omens"
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.BOOK_PER_FOLDER, path);
+        shell(2, "Good Omens", "Neil Gaiman");
+        shell(3, "Good Omens - Terry Pratchett", "Neil Gaiman & Terry Pratchett");
+        LibraryFile copy = newFile(lib, path, "Neil Gaiman/Good Omens", "Good Omens (1).mobi");
+        LibraryFile readApart = newFile(lib, path, "Neil Gaiman/Good Omens", "Good Omens - Terry Pratchett.epub");
+        Outcomes outcomes = new Outcomes();
+
+        var result = rescan(lib, outcomes, copy, readApart);
+
+        assertThat(attached(result)).containsExactly(Map.entry(2L, List.of(copy, readApart)));
+        assertThat(outcomes.weakMatch("Good Omens - Terry Pratchett.epub").bookId()).isEqualTo(3);
+        assertThat(outcomes.lines).isEmpty();
+    }
+
+    @Test
+    void rescan_autoDetect_anAlikeChoiceOnlyTheRowsReadApartMakeYieldsToOneOfTheRulesBefore() {
+        // As stored, "Lincoln Child (Contributor)" is a person named Contributor: only the epub chose one of the two
+        // alike records before, and it still gets it
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        shell(1, "Reliquary", "Douglas Preston", "Lincoln Child (Contributor)");
+        shell(2, "Reliquary", "Douglas Preston", "Lincoln Child (Contributor)");
+        LibraryFile epub = newFile(lib, path, "P/Douglas Preston", "Reliquary.epub");
+        LibraryFile pdf = newFile(lib, path, "C/Lincoln Child", "Reliquary.pdf");
+
+        var result = rescan(lib, epub, pdf);
+
+        assertThat(attached(result)).containsExactly(Map.entry(1L, List.of(epub)));
+    }
+
+    @Test
+    void rescan_autoDetect_aBookOfTheFolderOnlyTheRowReadApartFindsYieldsToTheFilelessBook() {
+        // As stored, "Steve Alten [Narrator]" is a person named Narrator: the folder's book was not the file's, and
+        // the fileless "MEG" got it; read apart, the folder's book is the file's only weakly
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        bookIn(100, path, "Thrillers", "MEG by Alten, Steve.azw3");
+        authorsOf(100, "Steve Alten [Narrator]");
+        shell(2, "MEG", "Steve Alten");
+        LibraryFile copy = newFile(lib, path, "Thrillers", "MEG - Steve Alten (1).azw3");
+
+        var result = rescan(lib, copy);
+
+        assertThat(attached(result)).containsExactly(Map.entry(2L, List.of(copy)));
+        assertThat(kinds(result)).containsExactly(Map.entry(2L, Kind.FILELESS));
+    }
+
+    @Test
+    void rescan_autoDetect_aBookOfTheFolderOnlyTheRowReadApartFindsYieldsToAFilelessDuplicate() {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        bookIn(5, path, "Books", "Cradle - Douglas Preston.epub");
+        authorsOf(5, "Douglas Preston;Lincoln Child");
+        shell(9, "Cradle", "Lincoln Child");
+        LibraryFile pdf = newFile(lib, path, "Books", "Cradle - Lincoln Child.pdf");
+
+        var result = rescan(lib, pdf);
+
+        assertThat(attached(result)).containsExactly(Map.entry(9L, List.of(pdf)));
+        assertThat(kinds(result)).containsExactly(Map.entry(9L, Kind.FILELESS));
+    }
+
+    @Test
+    void rescan_autoDetect_aBookOfTheFolderOnlyTheRowReadApartFindsIsTheFilesWhereNoFilelessBookIs() {
+        var path = pathEntity(1L, "/books");
+        var lib = rescanLibrary(LibraryOrganizationMode.AUTO_DETECT, path);
+        bookIn(5, path, "Books", "Cradle - Douglas Preston.epub");
+        authorsOf(5, "Douglas Preston;Lincoln Child");
+        LibraryFile pdf = newFile(lib, path, "Books", "Cradle - Lincoln Child.pdf");
+
+        var result = rescan(lib, pdf);
+
+        assertThat(attached(result)).containsExactly(Map.entry(5L, List.of(pdf)));
+        assertThat(kinds(result)).containsExactly(Map.entry(5L, Kind.SAME_FOLDER));
     }
 
     @Test
