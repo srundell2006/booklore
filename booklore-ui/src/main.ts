@@ -12,6 +12,7 @@ import { AppComponent } from './app/app.component';
 import Aura from '@primeuix/themes/aura';
 import { routes } from './app/app.routes';
 import { AuthInterceptorService } from './app/core/security/auth-interceptor.service';
+import { NgswBypassInterceptor } from './app/core/services/ngsw-bypass.interceptor';
 import { AuthService, websocketInitializer } from './app/shared/service/auth.service';
 import { inject, isDevMode, provideAppInitializer, provideZoneChangeDetection } from '@angular/core';
 import { initializeAuthFactory } from './app/core/security/auth-initializer';
@@ -22,6 +23,8 @@ import { provideServiceWorker } from '@angular/service-worker';
 import { provideTransloco } from '@jsverse/transloco';
 import { AVAILABLE_LANGS, TranslocoInlineLoader } from './app/core/config/transloco-loader';
 import { initializeLanguage } from './app/core/config/language-initializer';
+import { AppUpdateService } from './app/core/services/app-update.service';
+import { ForwardAuthSessionService } from './app/core/security/forward-auth-session.service';
 
 bootstrapApplication(AppComponent, {
   providers: [
@@ -37,7 +40,7 @@ bootstrapApplication(AppComponent, {
       const startup = inject(StartupService);
       return startup.load();
     }),
-    provideHttpClient(withInterceptors([AuthInterceptorService])),
+    provideHttpClient(withInterceptors([NgswBypassInterceptor, AuthInterceptorService])),
     provideAppInitializer(initializeAuthFactory()),
     provideRouter(routes),
     DialogService,
@@ -63,6 +66,13 @@ bootstrapApplication(AppComponent, {
       loader: TranslocoInlineLoader,
     }),
     provideAppInitializer(initializeLanguage()),
+    provideAppInitializer(() => {
+      // Both only matter with the service worker, which runs in production builds only
+      if (!isDevMode()) {
+        inject(AppUpdateService).initialize();
+        inject(ForwardAuthSessionService).initialize();
+      }
+    }),
     provideAnimationsAsync(),
     providePrimeNG({
       theme: {

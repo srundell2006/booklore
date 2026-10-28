@@ -131,10 +131,13 @@ public class AdditionalFileService {
 
         try (ZipOutputStream zos = new ZipOutputStream(baos)) {
             // Get all files in the folder, sorted by name
-            List<Path> files = Files.list(folderPath)
-                    .filter(Files::isRegularFile)
-                    .sorted(Comparator.comparing(p -> p.getFileName().toString()))
-                    .toList();
+            List<Path> files;
+            try (var listing = Files.list(folderPath)) {
+                files = listing
+                        .filter(Files::isRegularFile)
+                        .sorted(Comparator.comparing(p -> p.getFileName().toString()))
+                        .toList();
+            }
 
             for (Path audioFile : files) {
                 ZipEntry entry = new ZipEntry(audioFile.getFileName().toString());

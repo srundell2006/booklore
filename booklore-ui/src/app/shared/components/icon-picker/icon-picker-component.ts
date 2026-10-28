@@ -132,6 +132,23 @@ export class IconPickerComponent implements OnInit {
 
   private loadSvgIconsFromCache(): void {
     this.svgIcons = this.iconCache.getAllIconNames();
+    if (this.svgIcons.length > 0 || this.isLoadingSvgIcons) {
+      return;
+    }
+
+    // The preload at sign-in failed or has not finished yet
+    this.isLoadingSvgIcons = true;
+    this.svgIconsError = '';
+    this.iconService.preloadAllIcons().subscribe({
+      next: () => {
+        this.svgIcons = this.iconCache.getAllIconNames();
+        this.isLoadingSvgIcons = false;
+      },
+      error: () => {
+        this.isLoadingSvgIcons = false;
+        this.svgIconsError = this.ERROR_MESSAGES.LOAD_ICONS_ERROR;
+      }
+    });
   }
 
   getSvgContent(iconName: string): SafeHtml | null {

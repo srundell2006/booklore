@@ -2,15 +2,16 @@ import {inject, Injectable} from '@angular/core';
 import {first, Observable, of, throwError} from 'rxjs';
 import {HttpClient, HttpParams} from '@angular/common/http';
 import {catchError, distinctUntilChanged, filter, finalize, map, shareReplay, tap} from 'rxjs/operators';
-import {Book, BookDeletionResponse, BookRecommendation, BookSetting, BookStatusUpdateResponse, BookType, CreatePhysicalBookRequest, PersonalRatingUpdateResponse, ReadStatus} from '../model/book.model';
+import {AdditionalFile, Book, BookDeletionResponse, BookRecommendation, BookSetting, BookStatusUpdateResponse, BookType, CreatePhysicalBookRequest, PersonalRatingUpdateResponse, ReadStatus} from '../model/book.model';
 import {BookState} from '../model/state/book-state.model';
+import {Library} from '../model/library.model';
 import {API_CONFIG} from '../../../core/config/api-config';
 import {MessageService} from 'primeng/api';
 import {ResetProgressType} from '../../../shared/constants/reset-progress-type';
 import {AuthService} from '../../../shared/service/auth.service';
 import {Router} from '@angular/router';
 import {BookStateService} from './book-state.service';
-import {BookSocketService} from './book-socket.service';
+import {BookChange, BookSocketService} from './book-socket.service';
 import {BookPatchService} from './book-patch.service';
 import {TranslocoService} from '@jsverse/transloco';
 
@@ -118,6 +119,27 @@ export class BookService {
     const currentBooks = currentState.books || [];
     const filteredBooks = currentBooks.filter(book => book.libraryId !== libraryId);
     this.bookStateService.updateBookState({...currentState, books: filteredBooks});
+  }
+
+  /**
+   * Brings the books of an edited library up to date without downloading every book again. Two book fields
+   * come from the library: its name, and which file is primary (the first file, by id, of the first type in
+   * the library's format priority). The server reports the other effects of an edit itself: the books under
+   * a removed path arrive as books-remove, and the scan of an added path sends book-add for each new book.
+   */
+  applyLibraryUpdate(previous: Library | undefined, updated: Library): void {
+    const nameChanged = previous?.name !== updated.name;
+    const priorityChanged = (previous?.formatPriority ?? []).join() !== (updated.formatPriority ?? []).join();
+    if (!nameChanged && !priorityChanged) return;
+
+    const currentState = this.bookStateService.getCurrentBookState();
+    if (!currentState.books) return;
+    const updatedBooks = currentState.books.map(book => {
+      if (book.libraryId !== updated.id) return book;
+      const patched = nameChanged ? {...book, libraryName: updated.name} : book;
+      return priorityChanged ? withPrimaryFileByPriority(patched, updated.formatPriority ?? []) : patched;
+    });
+    this.bookStateService.updateBookState({...currentState, books: updatedBooks});
   }
 
   removeBooksFromShelf(shelfId: number): void {
@@ -391,6 +413,10 @@ export class BookService {
 
   /*------------------ Websocket Handlers ------------------*/
 
+  handleBookChanges(changes: BookChange[]): void {
+    this.bookSocketService.applyBookChanges(changes);
+  }
+
   handleNewlyCreatedBook(book: Book): void {
     this.bookSocketService.handleNewlyCreatedBook(book);
   }
@@ -410,4 +436,16 @@ export class BookService {
   handleMultipleBookCoverPatches(patches: { id: number; coverUpdatedOn: string }[]): void {
     this.bookSocketService.handleMultipleBookCoverPatches(patches);
   }
+}
+
+/** The book with its primary file chosen as the server chooses it (BookMapperV2.getPrimaryBookFile). */
+export function withPrimaryFileByPriority(book: Book, formatPriority: BookType[]): Book {
+  const files: AdditionalFile[] = [...(book.primaryFile ? [book.primaryFile] : []), ...(book.alternativeFormats ?? [])]
+    .sort((a, b) => a.id - b.id);
+  if (files.length < 2) return book;
+
+  const preferredType = formatPriority.find(type => files.some(file => file.bookType === type));
+  const primary = files.find(file => file.bookType === preferredType) ?? files[0];
+  if (primary.id === book.primaryFile?.id) return book;
+  return {...book, primaryFile: primary, alternativeFormats: files.filter(file => file !== primary)};
 }

@@ -77,6 +77,21 @@ public class AuthorMetadataService {
         return summaries;
     }
 
+    /**
+     * The size of {@link #getAllAuthors()} for the current user, counted in SQL: every author for an
+     * admin, otherwise the authors of at least one book in the user's libraries.
+     */
+    public long countAuthors() {
+        BookLoreUser user = authenticationService.getAuthenticatedUser();
+        if (user.getPermissions().isAdmin()) {
+            return authorRepository.count();
+        }
+        Set<Long> libraryIds = user.getAssignedLibraries().stream()
+                .map(Library::getId)
+                .collect(Collectors.toSet());
+        return libraryIds.isEmpty() ? 0 : authorRepository.countByLibraryIds(libraryIds);
+    }
+
     public List<AuthorSearchResult> searchAuthorMetadata(String name, String region) {
         return authorParserMap.values().stream()
                 .flatMap(provider -> {

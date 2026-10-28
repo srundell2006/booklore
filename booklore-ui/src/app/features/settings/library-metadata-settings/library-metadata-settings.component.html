@@ -51,7 +51,7 @@
                 <p-accordion-header>
                   <div class="accordion-header-content">
                     <div class="library-info">
-                      <i [class]="'pi pi-' + library.icon" class="library-icon"></i>
+                      <app-icon-display [icon]="libraryIcon(library)" size="22px" class="library-icon"></app-icon-display>
                       <span class="library-name">{{ library.name }}</span>
                       <span class="dot-separator">•</span>
                       @if (hasLibraryOverride(library.id!)) {

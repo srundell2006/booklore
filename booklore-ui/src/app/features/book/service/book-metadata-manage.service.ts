@@ -106,6 +106,9 @@ export class BookMetadataManageService {
     const payload = {metadataType, targetValues, valuesToMerge};
     return this.http.post(`${this.url}/metadata/manage/consolidate`, payload).pipe(
       tap(() => {
+        // Not patched here: the server matches the values in the database's collation (case and accents
+        // folded), renames a target that exists in another case on every book that has it, and tells the
+        // client about none of the changed books, so only a reload is sure to show what it did
         this.bookService.refreshBooks();
       })
     );
@@ -115,6 +118,7 @@ export class BookMetadataManageService {
     const payload = {metadataType, valuesToDelete};
     return this.http.post(`${this.url}/metadata/manage/delete`, payload).pipe(
       tap(() => {
+        // Reloaded for the same reason as a merge
         this.bookService.refreshBooks();
       })
     );

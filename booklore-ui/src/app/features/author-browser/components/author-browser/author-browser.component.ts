@@ -172,6 +172,9 @@ export class AuthorBrowserComponent implements OnInit, OnDestroy {
       this.sortDirection$.next(dirParam === 'asc' || dirParam === 'desc' ? dirParam : DEFAULT_SORT_DIRECTIONS[sortParam]);
     }
 
+    // The sidebar only loads the author count, so the list is fetched here. The route is reused (CustomReuseStrategy), so this runs on the first visit only
+    this.subscriptions.push(this.authorService.getAllAuthors().subscribe());
+
     this.subscriptions.push(
       this.authorService.allAuthors$.pipe(
         filter((authors): authors is AuthorSummary[] => authors !== null)

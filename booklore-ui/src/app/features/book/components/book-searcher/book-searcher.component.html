@@ -7,7 +7,7 @@
       pInputText
       [(ngModel)]="searchQuery"
       (input)="onSearchInputChange()"
-      (focus)="isSearchFocused = true"
+      (focus)="onSearchFocus()"
       (keydown)="onKeydown($event)"
       [placeholder]="t('placeholder')"
       class="search-input"

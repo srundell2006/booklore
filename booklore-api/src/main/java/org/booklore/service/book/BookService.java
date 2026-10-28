@@ -27,6 +27,7 @@ import jakarta.servlet.http.HttpServletRequest;
 import jakarta.servlet.http.HttpServletResponse;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.core.NestedExceptionUtils;
 import org.springframework.core.io.ClassPathResource;
 import org.springframework.core.io.FileSystemResource;
 import org.springframework.core.io.Resource;
@@ -45,6 +46,7 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.util.*;
+import java.util.concurrent.TimeUnit;
 import java.util.stream.Collectors;
 import org.booklore.model.enums.AuditAction;
 import org.booklore.service.audit.AuditService;
@@ -107,23 +109,37 @@ public class BookService {
 
         log.debug("Streaming {} books for user {} (admin={})", bookIds.size(), userId, isAdmin);
 
+        long started = System.nanoTime();
         int written = 0;
-        try (SequenceWriter writer = objectMapper.writer().writeValuesAsArray(out)) {
-            for (int offset = 0; offset < bookIds.size(); offset += STREAM_CHUNK_SIZE) {
-                Set<Long> chunk = new LinkedHashSet<>(
-                        bookIds.subList(offset, Math.min(offset + STREAM_CHUNK_SIZE, bookIds.size())));
+        int chunks = 0;
+        try {
+            try (SequenceWriter writer = objectMapper.writer().writeValuesAsArray(out)) {
+                for (int offset = 0; offset < bookIds.size(); offset += STREAM_CHUNK_SIZE) {
+                    Set<Long> chunk = new LinkedHashSet<>(
+                            bookIds.subList(offset, Math.min(offset + STREAM_CHUNK_SIZE, bookIds.size())));
 
-                List<Book> books = bookQueryService.getListViewChunk(chunk, includeDescription, userId, !isAdmin);
-                enrichChunkWithProgress(books, userId, includeDescription);
+                    List<Book> books = bookQueryService.getListViewChunk(chunk, includeDescription, userId, !isAdmin);
+                    enrichChunkWithProgress(books, userId, includeDescription);
 
-                for (Book book : books) {
-                    writer.write(book);
-                    written++;
+                    for (Book book : books) {
+                        writer.write(book);
+                        written++;
+                    }
+                    out.flush();
+                    chunks++;
                 }
-                out.flush();
             }
+        } catch (IOException | RuntimeException e) {
+            log.warn("Book stream for user {} ended early after {} of {} books in {} chunks, {} ms: {}",
+                    userId, written, bookIds.size(), chunks, elapsedMs(started),
+                    NestedExceptionUtils.getMostSpecificCause(e).toString());
+            throw e;
         }
-        log.debug("Streamed {} books for user {}", written, userId);
+        log.info("Streamed {} books in {} chunks for user {} in {} ms", written, chunks, userId, elapsedMs(started));
+    }
+
+    private static long elapsedMs(long startedNanos) {
+        return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
     }
 
     private void enrichChunkWithProgress(List<Book> books, Long userId, boolean includeDescription) {

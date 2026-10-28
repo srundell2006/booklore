@@ -151,7 +151,7 @@ export class MainDashboardComponent implements OnInit {
     );
   }
 
-  private getMagicShelfBooks(shelfId: number, maxItems?: number, sortBy?: string): Observable<Book[]> {
+  private getMagicShelfBooks(shelfId: number, maxItems?: number, sortOption?: SortOption): Observable<Book[]> {
     return this.magicShelfService.getShelf(shelfId).pipe(
       switchMap((shelf) => {
         if (!shelf) return this.bookService.bookState$.pipe(map(() => []));
@@ -171,7 +171,9 @@ export class MainDashboardComponent implements OnInit {
               this.ruleEvaluatorService.evaluateGroup(book, group, allBooks)
             );
 
-            return maxItems ? filteredBooks.slice(0, maxItems) : filteredBooks;
+            // Sorted before it is cut, so that the row shows the first books of the whole shelf in that order
+            const sortedBooks = sortOption ? this.sortService.applySort(filteredBooks, sortOption) : filteredBooks;
+            return maxItems ? sortedBooks.slice(0, maxItems) : sortedBooks;
           })
         );
       })
@@ -196,14 +198,10 @@ export class MainDashboardComponent implements OnInit {
           books$ = this.getRandomBooks(config.maxItems || DEFAULT_MAX_ITEMS);
           break;
         case ScrollerType.MAGIC_SHELF:
-          books$ = this.getMagicShelfBooks(config.magicShelfId!, config.maxItems).pipe(
-            map(books => {
-              if (config.sortField && config.sortDirection) {
-                const sortOption = this.createSortOption(config.sortField, config.sortDirection);
-                return this.sortService.applySort(books, sortOption);
-              }
-              return books;
-            })
+          books$ = this.getMagicShelfBooks(
+            config.magicShelfId!,
+            config.maxItems,
+            config.sortField && config.sortDirection ? this.createSortOption(config.sortField, config.sortDirection) : undefined
           );
           break;
         default:

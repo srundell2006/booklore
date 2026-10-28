@@ -5,6 +5,7 @@ import org.booklore.exception.APIException;
 import org.booklore.model.dto.AuthorDetails;
 import org.booklore.model.dto.AuthorSearchResult;
 import org.booklore.model.dto.BookLoreUser;
+import org.booklore.model.dto.Library;
 import org.booklore.model.dto.request.AuthorMatchRequest;
 import org.booklore.model.entity.AuthorEntity;
 import org.booklore.model.enums.AuditAction;
@@ -20,10 +21,12 @@ import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
 
+import java.util.Arrays;
 import java.util.Collections;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
 
 import static org.assertj.core.api.Assertions.assertThat;
 import static org.assertj.core.api.Assertions.assertThatThrownBy;
@@ -255,5 +258,42 @@ class AuthorMetadataServiceTest {
         service.matchAuthor(1L, request);
 
         verify(fileService, never()).createAuthorThumbnailFromUrl(anyLong(), anyString());
+    }
+
+    @Test
+    void countAuthors_adminCountsEveryAuthor() {
+        when(authorRepository.count()).thenReturn(75_604L);
+
+        assertThat(service.countAuthors()).isEqualTo(75_604L);
+        verify(authorRepository, never()).countByLibraryIds(any());
+        verify(authorRepository, never()).findAllWithBookCount();
+    }
+
+    @Test
+    void countAuthors_userCountsOnlyTheirLibraries() {
+        when(authenticationService.getAuthenticatedUser()).thenReturn(userWithLibraries(3L, 7L));
+        when(authorRepository.countByLibraryIds(Set.of(3L, 7L))).thenReturn(12L);
+
+        assertThat(service.countAuthors()).isEqualTo(12L);
+        verify(authorRepository, never()).count();
+        verify(authorRepository, never()).findAllWithBookCountByLibraryIds(any());
+    }
+
+    @Test
+    void countAuthors_userWithoutLibrariesHasNone() {
+        when(authenticationService.getAuthenticatedUser()).thenReturn(userWithLibraries());
+
+        assertThat(service.countAuthors()).isZero();
+        verifyNoInteractions(authorRepository);
+    }
+
+    private static BookLoreUser userWithLibraries(Long... libraryIds) {
+        BookLoreUser.UserPermissions permissions = new BookLoreUser.UserPermissions();
+        permissions.setAdmin(false);
+        return BookLoreUser.builder()
+                .id(2L)
+                .permissions(permissions)
+                .assignedLibraries(Arrays.stream(libraryIds).map(id -> Library.builder().id(id).build()).toList())
+                .build();
     }
 }

@@ -1,8 +1,8 @@
 import {HttpErrorResponse, HttpEvent, HttpHandlerFn, HttpInterceptorFn, HttpRequest} from '@angular/common/http';
 import {inject} from '@angular/core';
 import {Router} from '@angular/router';
-import {catchError, filter, switchMap, take} from 'rxjs/operators';
-import {BehaviorSubject, Observable, throwError} from 'rxjs';
+import {catchError, finalize, map, shareReplay, switchMap, take} from 'rxjs/operators';
+import {Observable, throwError} from 'rxjs';
 import {AuthService} from '../../shared/service/auth.service';
 import {API_CONFIG} from '../config/api-config';
 
@@ -17,7 +17,8 @@ export const AuthInterceptorService: HttpInterceptorFn = (req, next: HttpHandler
 
   return next(authReq).pipe(
     catchError((error: HttpErrorResponse) => {
-      if (error.status === 401) {
+      // A 401 from the refresh call itself would otherwise wait on its own result
+      if (error.status === 401 && !req.url.endsWith('/api/v1/auth/refresh')) {
         return handle401Error(authService, authReq, next, router);
       }
       return throwError(() => error);
@@ -25,36 +26,31 @@ export const AuthInterceptorService: HttpInterceptorFn = (req, next: HttpHandler
   );
 };
 
-let isRefreshing = false;
-const refreshTokenSubject = new BehaviorSubject<string | null>(null);
+// The refresh in progress, shared by every request that got a 401 meanwhile. It runs to its end even
+// when the request that started it is cancelled, and when it fails each waiting request fails with it.
+let refreshInProgress$: Observable<string> | null = null;
 
 function handle401Error(authService: AuthService, request: HttpRequest<unknown>, next: HttpHandlerFn, router: Router): Observable<HttpEvent<unknown>> {
-  if (!isRefreshing) {
-    isRefreshing = true;
-    refreshTokenSubject.next(null);
-
-    return authService.internalRefreshToken().pipe(
-      switchMap(response => {
-        isRefreshing = false;
+  if (!refreshInProgress$) {
+    refreshInProgress$ = authService.internalRefreshToken().pipe(
+      map(response => {
         const { accessToken, refreshToken } = response;
-        if (accessToken && refreshToken) {
-          authService.saveInternalTokens(accessToken, refreshToken);
-          refreshTokenSubject.next(accessToken);
+        if (!accessToken || !refreshToken) {
+          throw new Error('Token refresh returned no tokens');
         }
-        return next(request.clone({
-          setHeaders: { Authorization: `Bearer ${accessToken}` }
-        }));
+        authService.saveInternalTokens(accessToken, refreshToken);
+        return accessToken;
       }),
       catchError(err => {
-        isRefreshing = false;
         forceLogout(authService, router);
         return throwError(() => err);
-      })
+      }),
+      finalize(() => refreshInProgress$ = null),
+      shareReplay({ bufferSize: 1, refCount: false })
     );
   }
 
-  return refreshTokenSubject.pipe(
-    filter(token => token !== null),
+  return refreshInProgress$.pipe(
     take(1),
     switchMap(token =>
       next(request.clone({

@@ -32,6 +32,15 @@
 } @else {
   <p-confirmDialog />
   <p-toast></p-toast>
+  <p-toast [key]="appUpdateToastKey" position="bottom-right">
+    <ng-template #message let-message>
+      <div class="app-update-toast">
+        <span class="app-update-summary">{{ message.summary }}</span>
+        <span>{{ message.detail }}</span>
+        <p-button [label]="t('updateReload')" icon="pi pi-refresh" size="small" (onClick)="reload()"></p-button>
+      </div>
+    </ng-template>
+  </p-toast>
   <router-outlet></router-outlet>
 }
 </ng-container>

@@ -17,11 +17,14 @@ import {AppSettingsService} from '../../../shared/service/app-settings.service';
 import {ExternalDocLinkComponent} from '../../../shared/components/external-doc-link/external-doc-link.component';
 import {MetadataAdvancedFetchOptionsComponent} from '../../metadata/component/metadata-options-dialog/metadata-advanced-fetch-options/metadata-advanced-fetch-options.component';
 import {SidecarService} from '../../metadata/service/sidecar.service';
+import {IconDisplayComponent} from '../../../shared/components/icon-display/icon-display.component';
+import {IconSelection} from '../../../shared/service/icon-picker.service';
+import {entityIcon} from '../../../shared/util/entity-icon.util';
 
 @Component({
   selector: 'app-library-metadata-settings-component',
   standalone: true,
-  imports: [CommonModule, FormsModule, MetadataAdvancedFetchOptionsComponent, AccordionModule, ExternalDocLinkComponent, Button, Tooltip, TranslocoDirective],
+  imports: [CommonModule, FormsModule, MetadataAdvancedFetchOptionsComponent, AccordionModule, ExternalDocLinkComponent, Button, Tooltip, TranslocoDirective, IconDisplayComponent],
   templateUrl: './library-metadata-settings.component.html',
   styleUrls: ['./library-metadata-settings.component.scss']
 })
@@ -97,6 +100,10 @@ export class LibraryMetadataSettingsComponent implements OnInit {
 
   trackByLibrary(index: number, library: Library): number | undefined {
     return library.id;
+  }
+
+  libraryIcon(library: Library): IconSelection {
+    return entityIcon(library.icon, library.iconType, 'library');
   }
 
   private saveDefaultMetadataOptions(options: MetadataRefreshOptions) {
