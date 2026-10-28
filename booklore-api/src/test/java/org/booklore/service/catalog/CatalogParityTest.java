@@ -11,7 +11,6 @@ import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
 import org.springframework.beans.factory.annotation.Autowired;
 import org.springframework.core.io.ClassPathResource;
-import org.springframework.jdbc.core.JdbcTemplate;
 import org.springframework.test.context.transaction.BeforeTransaction;
 import tools.jackson.databind.JsonNode;
 
@@ -43,8 +42,6 @@ class CatalogParityTest extends CatalogDatabaseTest {
     private MagicShelfCountCompiler compiler;
     @Autowired
     private MagicShelfCountService countService;
-    @Autowired
-    private JdbcTemplate jdbcTemplate;
 
     private JsonNode fixture;
     private final Map<Long, Long> fixtureIdByBookId = new HashMap<>();

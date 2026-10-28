@@ -25,7 +25,7 @@ function previewFor(pattern: string, primaryFile: Partial<BookFile>, metadata: P
     providers: [
       {provide: DynamicDialogConfig, useValue: {data: {bookIds: [book.id]}}},
       {provide: DynamicDialogRef, useValue: {close: vi.fn()}},
-      {provide: BookService, useValue: {getBooksByIdsFromState: vi.fn(() => [book])}},
+      {provide: BookService, useValue: {getBooksByIds: vi.fn(() => of([book]))}},
       {provide: LibraryService, useValue: {libraryState$: of({loaded: true, libraries: [library]}), getLibrariesFromState: vi.fn(() => [library])}},
       {provide: FileOperationsService, useValue: {}},
       {provide: MessageService, useValue: {add: vi.fn()}},

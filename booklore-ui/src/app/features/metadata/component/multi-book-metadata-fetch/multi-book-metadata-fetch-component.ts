@@ -37,7 +37,10 @@ export class MultiBookMetadataFetchComponent implements OnInit, OnDestroy {
     this.bookIds = this.dynamicDialogConfig.data.bookIds;
     this.metadataRefreshType = this.dynamicDialogConfig.data.metadataRefreshType;
 
-    this.booksToShow = this.bookService.getBooksByIdsFromState(this.bookIds);
+    // Opened from a dashboard card, the books may not be in a loaded list
+    this.bookService.getBooksByIds(this.bookIds)
+      .pipe(takeUntil(this.destroy$))
+      .subscribe(books => this.booksToShow = books);
 
     this.appSettingsService.appSettings$
       .pipe(takeUntil(this.destroy$))

@@ -227,4 +227,16 @@ describe('BookService.readBook without the list', () => {
     expect(router.navigate).toHaveBeenCalledWith(['/cbx-reader/book/8'], undefined);
     http.expectNone(req => req.url === BOOKS_URL);
   });
+
+  it('should fetch by id the books a dialog needs when the list is not loaded, leaving out one not found', () => {
+    let books: Book[] | undefined;
+    service.getBooksByIds([7, 8]).subscribe(result => books = result);
+
+    http.expectOne(req => req.url === `${BOOKS_URL}/7`).flush(book(7));
+    http.expectOne(req => req.url === `${BOOKS_URL}/8`).flush(null, {status: 404, statusText: 'Not Found'});
+
+    expect(books?.map(b => b.id)).toEqual([7]);
+    http.expectNone(req => req.url === BOOKS_URL);
+    expect(TestBed.inject(BookStateService).getCurrentBookState()).toEqual({books: null, loaded: false, error: null});
+  });
 });

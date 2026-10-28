@@ -169,7 +169,7 @@ public class MagicShelfCountCompiler {
         if (filterJson == null) {
             return new Unsupported(List.of("group:root"));
         }
-        if (filterJson.startsWith("﻿")) {
+        if (filterJson.startsWith("\uFEFF")) {
             return new Invalid();
         }
         JsonNode root;

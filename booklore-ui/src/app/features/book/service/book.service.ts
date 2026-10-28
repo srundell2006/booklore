@@ -1,5 +1,5 @@
 import {inject, Injectable} from '@angular/core';
-import {first, Observable, of, Subject, throwError} from 'rxjs';
+import {first, forkJoin, Observable, of, Subject, throwError} from 'rxjs';
 import {HttpClient, HttpParams} from '@angular/common/http';
 import {catchError, distinctUntilChanged, filter, finalize, map, shareReplay, tap} from 'rxjs/operators';
 import {AdditionalFile, Book, BookDeletionResponse, BookRecommendation, BookSetting, BookStatusUpdateResponse, BookType, CreatePhysicalBookRequest, PersonalRatingUpdateResponse, ReadStatus} from '../model/book.model';
@@ -154,6 +154,23 @@ export class BookService {
 
     const idSet = new Set(bookIds.map(id => +id));
     return currentState.books.filter(book => idSet.has(+book.id));
+  }
+
+  /**
+   * The books from the list, or from the server one by one when the list does not hold them all: a card on the
+   * dashboard and the detail page open dialogs before the list is loaded. A book the server cannot find is left out.
+   */
+  getBooksByIds(bookIds: number[]): Observable<Book[]> {
+    const held = this.getBooksByIdsFromState(bookIds);
+    const heldIds = new Set(held.map(book => +book.id));
+    const missing = [...new Set(bookIds.map(id => +id))].filter(id => !heldIds.has(id));
+    if (missing.length === 0) return of(held);
+
+    return forkJoin(missing.map(id => this.getBookByIdFromAPI(id, false).pipe(
+      catchError(() => of(null))
+    ))).pipe(
+      map(fetched => [...held, ...fetched.filter((book): book is Book => !!book)])
+    );
   }
 
   getBookByIdFromAPI(bookId: number, withDescription: boolean): Observable<Book> {

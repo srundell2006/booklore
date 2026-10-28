@@ -17,9 +17,9 @@ import java.util.regex.Pattern;
 final class JsSemantics {
 
     /** {@code String.prototype.trim} removes these: WhiteSpace and LineTerminator. */
-    static final String WHITESPACE = "\t\n\u000B\f\r   "
-            + "           "
-            + "    　﻿";
+    static final String WHITESPACE = "\t\n\u000B\f\r \u00A0\u1680"
+            + "\u2000\u2001\u2002\u2003\u2004\u2005\u2006\u2007\u2008\u2009\u200A"
+            + "\u2028\u2029\u202F\u205F\u3000\uFEFF";
 
     /** {@code new Date(ms)} is Invalid Date outside this range (TimeClip). */
     private static final double MAX_TIME_MS = 8.64e15;

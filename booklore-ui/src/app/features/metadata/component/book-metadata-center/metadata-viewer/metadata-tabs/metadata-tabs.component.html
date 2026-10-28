@@ -74,7 +74,7 @@
                 <i class="pi pi-book"></i> {{ t('ebookCover') }}
               </div>
               <p-image
-                [src]="urlHelper.getCoverUrl(book.id, book.metadata?.coverUpdatedOn)"
+                [src]="urlHelper.getCoverUrl(book.id, book.metadata?.coverUpdatedOn, book)"
                 [alt]="t('ebookCover')"
                 width="200"
                 appendTo="body"
@@ -86,7 +86,7 @@
                 <i class="pi pi-headphones"></i> {{ t('audiobookCover') }}
               </div>
               <p-image
-                [src]="urlHelper.getAudiobookCoverUrl(book.id, book.metadata?.audiobookCoverUpdatedOn)"
+                [src]="urlHelper.getAudiobookCoverUrl(book.id, book.metadata?.audiobookCoverUpdatedOn, book)"
                 [alt]="t('audiobookCover')"
                 width="200"
                 appendTo="body"

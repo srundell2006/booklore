@@ -1340,8 +1340,8 @@ export class MetadataViewerComponent implements OnInit, OnChanges, AfterViewChec
   getBookCoverUrl(book: Book): string {
     const isAudiobook = book.primaryFile?.bookType === 'AUDIOBOOK';
     return isAudiobook
-      ? this.urlHelper.getAudiobookCoverUrl(book.id, book.metadata?.audiobookCoverUpdatedOn)
-      : this.urlHelper.getCoverUrl(book.id, book.metadata?.coverUpdatedOn);
+      ? this.urlHelper.getAudiobookCoverUrl(book.id, book.metadata?.audiobookCoverUpdatedOn, book)
+      : this.urlHelper.getCoverUrl(book.id, book.metadata?.coverUpdatedOn, book);
   }
 
   // Comic metadata helpers

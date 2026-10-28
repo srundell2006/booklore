@@ -48,9 +48,9 @@ describe('BookMetadataCenterComponent without the book list', () => {
     })) as typeof window.matchMedia;
     // The tab list measures itself; jsdom has no ResizeObserver
     vi.stubGlobal('ResizeObserver', class {
-      observe(): void {}
-      unobserve(): void {}
-      disconnect(): void {}
+      observe = vi.fn();
+      unobserve = vi.fn();
+      disconnect = vi.fn();
     });
 
     TestBed.configureTestingModule({
