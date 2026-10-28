@@ -7,6 +7,7 @@ export const NGSW_BYPASS = 'ngsw-bypass';
 
 const LAST_SIGN_IN_REDIRECT_KEY = 'forwardAuthSignInRedirectAt';
 const MIN_SIGN_IN_REDIRECT_INTERVAL_MS = 10 * 60 * 1000;
+const OIDC_CALLBACK_PATH = '/oauth2-callback';
 
 export interface ForwardAuthCheckContext {
   fetch: (input: string, init: RequestInit) => Promise<Response>;
@@ -76,6 +77,11 @@ export class ForwardAuthSessionService {
   initialize(): void {
     if (new URLSearchParams(window.location.search).has(NGSW_BYPASS)) {
       this.removeBypassParamAfterFirstNavigation();
+    }
+
+    // Booklore's own sign-in return: its code and PKCE state are single-use, so this page must not be loaded twice
+    if (window.location.pathname === OIDC_CALLBACK_PATH) {
+      return;
     }
 
     reSignInIfProxySessionEnded({

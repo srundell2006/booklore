@@ -171,9 +171,10 @@ export class MainDashboardComponent implements OnInit {
               this.ruleEvaluatorService.evaluateGroup(book, group, allBooks)
             );
 
-            // Sorted before it is cut, so that the row shows the first books of the whole shelf in that order
-            const sortedBooks = sortOption ? this.sortService.applySort(filteredBooks, sortOption) : filteredBooks;
-            return maxItems ? sortedBooks.slice(0, maxItems) : sortedBooks;
+            // The first books of the whole shelf in that order; a shelf can hold most of the library, so
+            // only the row is sorted
+            if (maxItems) return this.sortService.firstSorted(filteredBooks, sortOption ?? null, maxItems);
+            return sortOption ? this.sortService.applySort(filteredBooks, sortOption) : filteredBooks;
           })
         );
       })

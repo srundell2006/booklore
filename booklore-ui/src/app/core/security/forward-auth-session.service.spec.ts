@@ -1,5 +1,13 @@
-import {beforeEach, describe, expect, it, vi} from 'vitest';
-import {ForwardAuthCheckContext, reSignInIfProxySessionEnded, withNgswBypass} from './forward-auth-session.service';
+import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
+import {TestBed} from '@angular/core/testing';
+import {Router} from '@angular/router';
+import {NEVER} from 'rxjs';
+import {
+  ForwardAuthCheckContext,
+  ForwardAuthSessionService,
+  reSignInIfProxySessionEnded,
+  withNgswBypass
+} from './forward-auth-session.service';
 
 const TEN_MINUTES = 10 * 60 * 1000;
 
@@ -108,5 +116,38 @@ describe('withNgswBypass', () => {
 
   it('should not add the parameter twice', () => {
     expect(withNgswBypass('https://books.example.org/?ngsw-bypass=true')).toBe('https://books.example.org/?ngsw-bypass=true');
+  });
+});
+
+describe('ForwardAuthSessionService', () => {
+  let fetchMock: ReturnType<typeof vi.fn>;
+  let service: ForwardAuthSessionService;
+
+  beforeEach(() => {
+    fetchMock = vi.fn().mockResolvedValue({type: 'basic'});
+    vi.stubGlobal('fetch', fetchMock);
+    TestBed.configureTestingModule({providers: [{provide: Router, useValue: {events: NEVER}}]});
+    service = TestBed.inject(ForwardAuthSessionService);
+  });
+
+  afterEach(() => {
+    vi.unstubAllGlobals();
+    window.history.replaceState(null, '', '/');
+  });
+
+  it('should not check on the return from Booklore\'s own sign-in, whose code works only once', () => {
+    window.history.replaceState(null, '', '/oauth2-callback?code=abc&state=xyz');
+
+    service.initialize();
+
+    expect(fetchMock).not.toHaveBeenCalled();
+  });
+
+  it('should check on any other page', () => {
+    window.history.replaceState(null, '', '/library/3/books');
+
+    service.initialize();
+
+    expect(fetchMock).toHaveBeenCalledWith('/index.html', expect.objectContaining({redirect: 'manual'}));
   });
 });
