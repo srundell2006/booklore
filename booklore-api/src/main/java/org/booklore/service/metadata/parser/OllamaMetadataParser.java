@@ -281,6 +281,9 @@ public class OllamaMetadataParser implements BookParser {
         requestBody.put("stream", false);
         // Ollama JSON mode: plain string "json", not OpenAI's {"type":"json_object"}
         requestBody.put("format", "json");
+        // Reasoning models (qwen3, deepseek-r1) otherwise write a long hidden chain of thought before
+        // the answer; Ollama ignores the switch for models that do not think
+        requestBody.put("think", false);
 
         ArrayNode messages = objectMapper.createArrayNode();
         ObjectNode message = objectMapper.createObjectNode();
