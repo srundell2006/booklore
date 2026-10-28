@@ -327,6 +327,9 @@ public class EpubTextIdentifyService {
         body.put("model",  ollamaModel);
         body.put("stream", false);
         body.put("format", "json");
+        // Reasoning models (qwen3, deepseek-r1) otherwise write a long hidden chain of thought before
+        // the answer; Ollama ignores the switch for models that do not think
+        body.put("think", false);
 
         ArrayNode messages = objectMapper.createArrayNode();
         ObjectNode msg = objectMapper.createObjectNode();
