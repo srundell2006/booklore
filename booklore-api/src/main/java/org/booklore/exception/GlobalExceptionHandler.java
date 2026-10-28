@@ -1,5 +1,6 @@
 package org.booklore.exception;
 
+import jakarta.servlet.http.HttpServletResponse;
 import jakarta.validation.ConstraintViolationException;
 import lombok.extern.slf4j.Slf4j;
 import org.apache.catalina.connector.ClientAbortException;
@@ -14,7 +15,9 @@ import org.springframework.web.bind.annotation.RestControllerAdvice;
 import org.springframework.web.context.request.async.AsyncRequestNotUsableException;
 import org.springframework.web.servlet.resource.NoResourceFoundException;
 
+import java.io.IOException;
 import java.util.List;
+import java.util.Locale;
 import java.util.stream.Collectors;
 
 @Slf4j
@@ -76,13 +79,60 @@ public class GlobalExceptionHandler {
         return new ResponseEntity<>(errorResponse, HttpStatus.NOT_FOUND);
     }
 
-    @ExceptionHandler(AsyncRequestNotUsableException.class)
-    public void handleAsyncRequestNotUsableException(AsyncRequestNotUsableException ex) {
-        if (ex.getCause() instanceof ClientAbortException) {
-            log.info("Request was canceled by client: {}", ex.getMessage());
-        } else {
-            log.error("Unexpected error occurred during async request handling: ", ex);
+    /**
+     * The client went away mid-response. Nothing can reach it, and writing an error body would fail
+     * anyway once a file's Content-Type is set, so answer with nothing.
+     */
+    @ExceptionHandler({ClientAbortException.class, AsyncRequestNotUsableException.class})
+    public void handleClientGone(Exception ex) {
+        logClientGone(ex);
+    }
+
+    @ExceptionHandler(IOException.class)
+    public ResponseEntity<ErrorResponse> handleIOException(IOException ex, HttpServletResponse response) {
+        if (!isClientGone(ex, true)) {
+            return handleGenericException(ex);
         }
+        logClientGone(ex);
+        // The match may rest on the message alone; if the error was not the client's, the status still says so.
+        if (!response.isCommitted()) {
+            response.setStatus(HttpStatus.INTERNAL_SERVER_ERROR.value());
+        }
+        return null;
+    }
+
+    /**
+     * Whether {@code ex} or one of its causes says the client disconnected. Message matching
+     * ("Broken pipe", "Connection reset") is only used for an IOException thrown as such: wrapped in
+     * anything else, the same words more likely come from an outbound call.
+     */
+    static boolean isClientGone(Throwable ex, boolean matchMessages) {
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (t instanceof ClientAbortException || t instanceof AsyncRequestNotUsableException) {
+                return true;
+            }
+            if (matchMessages && t instanceof IOException && t.getMessage() != null) {
+                String message = t.getMessage().toLowerCase(Locale.ROOT);
+                if (message.contains("broken pipe") || message.contains("connection reset")) {
+                    return true;
+                }
+            }
+        }
+        return false;
+    }
+
+    private static void logClientGone(Throwable ex) {
+        log.debug("Client went away: {}", describeCauses(ex));
+    }
+
+    private static String describeCauses(Throwable ex) {
+        StringBuilder sb = new StringBuilder();
+        for (Throwable t = ex; t != null; t = t.getCause()) {
+            if (!sb.isEmpty()) sb.append(" <- ");
+            sb.append(t.getClass().getSimpleName());
+            if (t.getMessage() != null) sb.append(": ").append(t.getMessage());
+        }
+        return sb.toString();
     }
 
     @ExceptionHandler(InterruptedException.class)
@@ -116,6 +166,11 @@ public class GlobalExceptionHandler {
 
     @ExceptionHandler(Exception.class)
     public ResponseEntity<ErrorResponse> handleGenericException(Exception ex) {
+        if (isClientGone(ex, false)) {
+            // e.g. Jackson's unchecked wrapper of a ClientAbortException from a streamed response
+            logClientGone(ex);
+            return null;
+        }
         log.error("Unhandled exception: {}", ex.getMessage(), ex);
         ErrorResponse errorResponse = new ErrorResponse(HttpStatus.INTERNAL_SERVER_ERROR.value(), "An unexpected error occurred.");
         return new ResponseEntity<>(errorResponse, HttpStatus.INTERNAL_SERVER_ERROR);

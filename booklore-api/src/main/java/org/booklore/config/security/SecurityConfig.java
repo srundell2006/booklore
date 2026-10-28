@@ -234,6 +234,7 @@ public class SecurityConfig {
                         .referrerPolicy(referrer -> referrer.policy(
                                 ReferrerPolicyHeaderWriter.ReferrerPolicy.STRICT_ORIGIN_WHEN_CROSS_ORIGIN))
                         .contentTypeOptions(contentType -> {})
+                        .cacheControl(HeadersConfigurer.CacheControlConfig::disable) // WebMvcConfig sets caching per file
                 )
                 .authorizeHttpRequests(auth -> auth.anyRequest().permitAll());
         return http.build();

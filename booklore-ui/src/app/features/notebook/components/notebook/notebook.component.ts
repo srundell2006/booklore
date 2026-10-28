@@ -215,7 +215,7 @@ export class NotebookComponent implements OnInit, OnDestroy {
 
   getTypeIcon(type: string): string {
     switch (type) {
-      case 'HIGHLIGHT': return 'pi pi-highlighter';
+      case 'HIGHLIGHT': return 'pi pi-pencil';
       case 'NOTE': return 'pi pi-file-edit';
       case 'BOOKMARK': return 'pi pi-bookmark';
       default: return 'pi pi-circle';

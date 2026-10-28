@@ -114,6 +114,36 @@ export class SortService {
     return this.applyMultiSort(books, [selectedSort]);
   }
 
+  /**
+   * The same books as `applySort(books, selectedSort).slice(0, count)`, without sorting the rest: one pass
+   * keeps the first `count` so far, and reads each book's sort value once. For a short row taken from a
+   * large shelf.
+   */
+  firstSorted(books: Book[], selectedSort: SortOption | null, count: number): Book[] {
+    if (count <= 0) return [];
+    if (!selectedSort) return books.slice(0, count);
+
+    const extractor = this.fieldExtractors[selectedSort.field];
+    if (!extractor) {
+      console.warn(`[SortService] No extractor for field: ${selectedSort.field}`);
+      return books.slice(0, count);
+    }
+
+    const sign = selectedSort.direction === SortDirection.ASCENDING ? 1 : -1;
+    const kept: { book: Book; value: unknown }[] = [];
+    for (const book of books) {
+      const value = extractor(book);
+      if (kept.length === count && sign * this.compareValues(value, kept[count - 1].value) >= 0) continue;
+
+      // After every kept book that sorts the same, where the stable sort would put it
+      let i = kept.length;
+      while (i > 0 && sign * this.compareValues(value, kept[i - 1].value) < 0) i--;
+      kept.splice(i, 0, {book, value});
+      if (kept.length > count) kept.pop();
+    }
+    return kept.map(entry => entry.book);
+  }
+
   applyMultiSort(books: Book[], sortCriteria: SortOption[]): Book[] {
     if (!sortCriteria || sortCriteria.length === 0) return books;
 

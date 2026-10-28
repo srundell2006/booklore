@@ -415,7 +415,7 @@ export class BookCardComponent implements OnInit, OnChanges, OnDestroy {
         if (!alreadySingleM4b) {
           items.push({
             label: 'Merge to M4B',
-            icon: 'pi pi-compress',
+            icon: 'pi pi-arrow-down-left-and-arrow-up-right-to-center',
             command: () => {
               this.confirmationService.confirm({
                 message: `Merge "${this.book.metadata?.title}" into a single .m4b? `

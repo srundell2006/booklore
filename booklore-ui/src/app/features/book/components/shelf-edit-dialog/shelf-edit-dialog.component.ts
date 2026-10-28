@@ -9,6 +9,7 @@ import {Shelf} from '../../model/shelf.model';
 import {MessageService} from 'primeng/api';
 import {IconPickerService, IconSelection} from '../../../../shared/service/icon-picker.service';
 import {IconDisplayComponent} from '../../../../shared/components/icon-display/icon-display.component';
+import {primeIconClass} from '../../../../shared/util/entity-icon.util';
 import {CheckboxModule} from 'primeng/checkbox';
 import {UserService} from '../../../settings/user-management/user.service';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
@@ -52,7 +53,7 @@ export class ShelfEditDialogComponent implements OnInit {
       this.isPublic = this.shelf.publicShelf ?? false;
       if (this.shelf.iconType && this.shelf.icon) {
         if (this.shelf.iconType === 'PRIME_NG') {
-          this.selectedIcon = {type: 'PRIME_NG', value: `pi pi-${this.shelf.icon}`};
+          this.selectedIcon = {type: 'PRIME_NG', value: primeIconClass(this.shelf.icon)};
         } else {
           this.selectedIcon = {type: 'CUSTOM_SVG', value: this.shelf.icon};
         }

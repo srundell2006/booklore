@@ -24,6 +24,7 @@ import reactor.core.publisher.Flux;
 import org.springframework.web.multipart.MultipartFile;
 
 import java.util.List;
+import java.util.Map;
 
 @Tag(name = "Authors", description = "Endpoints for retrieving authors related to books")
 @RequestMapping("/api/v1/authors")
@@ -39,6 +40,13 @@ public class AuthorController {
     @GetMapping
     public ResponseEntity<List<AuthorSummary>> getAllAuthors() {
         return ResponseEntity.ok(authorMetadataService.getAllAuthors());
+    }
+
+    @Operation(summary = "Count authors", description = "Count the authors the list of all authors would return.")
+    @ApiResponse(responseCode = "200", description = "Author count returned successfully")
+    @GetMapping("/count")
+    public ResponseEntity<Map<String, Long>> countAuthors() {
+        return ResponseEntity.ok(Map.of("count", authorMetadataService.countAuthors()));
     }
 
     @Operation(summary = "Find author by name", description = "Find an author by exact name (case-insensitive).")

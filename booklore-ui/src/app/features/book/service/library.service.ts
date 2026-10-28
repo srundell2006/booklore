@@ -102,9 +102,10 @@ export class LibraryService {
     return this.http.put<Library>(`${this.url}/${id}`, lib).pipe(
       map(updated => {
         const curr = this.libraryStateSubject.value;
+        const previous = curr.libraries?.find(l => l.id === updated.id);
         const list = curr.libraries?.map(l => (l.id === updated.id ? updated : l)) || [updated];
         this.libraryStateSubject.next({...curr, libraries: this.sortLibraries(list)});
-        this.bookService.refreshBooks();
+        this.bookService.applyLibraryUpdate(previous, updated);
         return updated;
       })
     );

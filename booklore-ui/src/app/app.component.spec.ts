@@ -2,7 +2,7 @@ import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {ComponentFixture, TestBed} from '@angular/core/testing';
 import {AppComponent} from './app.component';
 import {AuthInitializationService} from './core/security/auth-initialization-service';
-import {BehaviorSubject, of} from 'rxjs';
+import {BehaviorSubject, of, Subject} from 'rxjs';
 import {RxStompService} from './shared/websocket/rx-stomp.service';
 import {BookService} from './features/book/service/book.service';
 import {NotificationEventService} from './shared/websocket/notification-event.service';
@@ -107,5 +107,106 @@ describe('AppComponent offline detection', () => {
     await vi.waitFor(() => {
       expect(component.offline).toBe(true);
     });
+  });
+});
+
+describe('AppComponent book websocket batching', () => {
+  let component: AppComponent;
+  let topics: Map<string, Subject<{ body: string }>>;
+  let bookService: { handleBookChanges: ReturnType<typeof vi.fn> };
+  let libraryService: { largeLibraryLoading$: BehaviorSubject<{ isLoading: boolean; expectedCount: number }>; setLargeLibraryLoading: ReturnType<typeof vi.fn> };
+  let libraryLoadingService: { showBookLoadingProgress: ReturnType<typeof vi.fn>; hide: ReturnType<typeof vi.fn> };
+
+  const send = (topic: string, payload: unknown) => topics.get(topic)!.next({body: JSON.stringify(payload)});
+  const book = (id: number) => ({id, metadata: {title: `Book ${id}`}});
+
+  beforeEach(() => {
+    vi.useFakeTimers();
+    topics = new Map();
+    bookService = {handleBookChanges: vi.fn()};
+    libraryService = {
+      largeLibraryLoading$: new BehaviorSubject<{ isLoading: boolean; expectedCount: number }>({isLoading: false, expectedCount: 0}),
+      setLargeLibraryLoading: vi.fn(),
+    };
+    libraryLoadingService = {showBookLoadingProgress: vi.fn(), hide: vi.fn()};
+
+    TestBed.configureTestingModule({
+      imports: [TranslocoTestingModule.forRoot({langs: {}})],
+      providers: [
+        {provide: AuthInitializationService, useValue: {initialized$: of(true)}},
+        {
+          provide: RxStompService, useValue: {
+            watch: vi.fn((topic: string) => {
+              if (!topics.has(topic)) topics.set(topic, new Subject());
+              return topics.get(topic)!.asObservable();
+            })
+          }
+        },
+        {provide: BookService, useValue: bookService},
+        {provide: NotificationEventService, useValue: {}},
+        {provide: AppConfigService, useValue: {}},
+        {provide: MetadataProgressService, useValue: {}},
+        {provide: BookdropFileService, useValue: {}},
+        {provide: TaskService, useValue: {}},
+        {provide: LibraryService, useValue: libraryService},
+        {provide: LibraryHealthService, useValue: {initialize: vi.fn()}},
+        {provide: LibraryLoadingService, useValue: libraryLoadingService},
+      ]
+    });
+
+    component = TestBed.createComponent(AppComponent).componentInstance;
+    component.ngOnInit();
+  });
+
+  afterEach(() => {
+    component.ngOnDestroy();
+    vi.useRealTimers();
+    vi.restoreAllMocks();
+  });
+
+  it('should apply the books of a scan as one batch after a second', () => {
+    for (let id = 1; id <= 50; id++) {
+      send('/user/queue/book-add', book(id));
+    }
+    expect(bookService.handleBookChanges).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1000);
+
+    expect(bookService.handleBookChanges).toHaveBeenCalledTimes(1);
+    const changes = bookService.handleBookChanges.mock.calls[0][0];
+    expect(changes).toHaveLength(50);
+    expect(changes[0]).toEqual({kind: 'created', book: book(1)});
+  });
+
+  it('should keep adds, updates, cover patches and removals in arrival order in one batch', () => {
+    send('/user/queue/book-add', book(1));
+    send('/user/queue/book-metadata-update', book(1));
+    send('/user/queue/books-cover-update', [{id: 1, coverUpdatedOn: 'now'}]);
+    send('/user/queue/book-update', book(2));
+    send('/user/queue/book-metadata-batch-update', [book(3)]);
+    send('/user/queue/books-remove', [2]);
+
+    vi.advanceTimersByTime(1000);
+
+    expect(bookService.handleBookChanges).toHaveBeenCalledTimes(1);
+    expect(bookService.handleBookChanges.mock.calls[0][0].map((c: { kind: string }) => c.kind))
+      .toEqual(['created', 'updated', 'coverUpdated', 'updated', 'updated', 'removed']);
+  });
+
+  it('should count the progress of a large import for every book as it arrives', () => {
+    libraryService.largeLibraryLoading$.next({isLoading: true, expectedCount: 3});
+
+    send('/user/queue/book-add', book(1));
+    send('/user/queue/book-add', book(2));
+    expect(libraryLoadingService.showBookLoadingProgress).toHaveBeenLastCalledWith('Book 2', 2, 3);
+    expect(libraryService.setLargeLibraryLoading).not.toHaveBeenCalled();
+
+    send('/user/queue/book-add', book(3));
+    expect(libraryLoadingService.showBookLoadingProgress).toHaveBeenCalledTimes(3);
+    expect(libraryService.setLargeLibraryLoading).toHaveBeenCalledWith(false, 0);
+    expect(bookService.handleBookChanges).not.toHaveBeenCalled();
+
+    vi.advanceTimersByTime(1000);
+    expect(bookService.handleBookChanges.mock.calls[0][0]).toHaveLength(3);
   });
 });

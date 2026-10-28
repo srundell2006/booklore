@@ -12,25 +12,34 @@ import {AppConfigService} from './shared/service/app-config.service';
 import {MetadataBatchProgressNotification} from './shared/model/metadata-batch-progress.model';
 import {MetadataProgressService} from './shared/service/metadata-progress.service';
 import {BookdropFileNotification, BookdropFileService} from './features/bookdrop/service/bookdrop-file.service';
-import {Subscription} from 'rxjs';
+import {merge, Subscription} from 'rxjs';
 import {TaskProgressPayload, TaskService} from './features/settings/task-management/task.service';
 import {LibraryService} from './features/book/service/library.service';
 import {LibraryHealthService} from './features/book/service/library-health.service';
 import {LibraryLoadingService} from './features/library-creator/library-loading.service';
-import {scan, withLatestFrom} from 'rxjs/operators';
+import {map, scan, withLatestFrom} from 'rxjs/operators';
 import {AuthService} from './shared/service/auth.service';
+import {Book} from './features/book/model/book.model';
+import {BookChange} from './features/book/service/book-socket.service';
+import {batchArrivals} from './shared/websocket/batch-arrivals';
+import {Button} from 'primeng/button';
+import {APP_UPDATE_TOAST_KEY} from './core/services/app-update.service';
+
+const BOOK_CHANGE_BATCH_WINDOW_MS = 1000;
+const BOOK_CHANGE_BATCH_MAX = 1000;
 
 @Component({
   selector: 'app-root',
   templateUrl: './app.component.html',
   styleUrl: './app.component.scss',
   standalone: true,
-  imports: [ConfirmDialog, Toast, RouterOutlet, TranslocoDirective, TranslocoPipe]
+  imports: [ConfirmDialog, Toast, RouterOutlet, TranslocoDirective, TranslocoPipe, Button]
 })
 export class AppComponent implements OnInit, OnDestroy {
 
   loading = true;
   offline = false;
+  readonly appUpdateToastKey = APP_UPDATE_TOAST_KEY;
   private subscriptions: Subscription[] = [];
   private subscriptionsInitialized = false;
 
@@ -82,51 +91,46 @@ export class AppComponent implements OnInit, OnDestroy {
   }
 
   private setupWebSocketSubscriptions(): void {
-    this.subscriptions.push(
-      this.rxStompService.watch('/user/queue/book-add').pipe(
-        withLatestFrom(this.libraryService.largeLibraryLoading$),
-        scan((acc, [msg, loadingState]) => {
-          const book = JSON.parse(msg.body);
-          if (loadingState.isLoading) {
-            const newCount = acc.count + 1;
-            this.libraryLoadingService.showBookLoadingProgress(book.metadata?.title || 'Unknown Book', newCount, loadingState.expectedCount);
-            this.bookService.handleNewlyCreatedBook(book);
-            if (newCount >= loadingState.expectedCount) {
-              this.libraryService.setLargeLibraryLoading(false, 0);
-              return {count: 0};
-            }
-            return {count: newCount};
-          } else {
-            this.bookService.handleNewlyCreatedBook(book);
-            return {count: 0};
+    const added$ = this.rxStompService.watch('/user/queue/book-add').pipe(
+      map(msg => JSON.parse(msg.body) as Book),
+      withLatestFrom(this.libraryService.largeLibraryLoading$),
+      // The progress of a large import still counts every book as it arrives
+      scan((acc, [book, loadingState]) => {
+        if (loadingState.isLoading) {
+          const newCount = acc.count + 1;
+          this.libraryLoadingService.showBookLoadingProgress(book.metadata?.title || 'Unknown Book', newCount, loadingState.expectedCount);
+          if (newCount >= loadingState.expectedCount) {
+            this.libraryService.setLargeLibraryLoading(false, 0);
+            return {count: 0, book};
           }
-        }, {count: 0})
-      ).subscribe()
+          return {count: newCount, book};
+        }
+        return {count: 0, book};
+      }, {count: 0, book: null as Book | null}),
+      map(({book}): BookChange => ({kind: 'created', book: book!}))
     );
-    this.subscriptions.push(
-      this.rxStompService.watch('/user/queue/book-update').subscribe(msg =>
-        this.bookService.handleBookUpdate(JSON.parse(msg.body))
-      )
+    const updated$ = merge(
+      this.rxStompService.watch('/user/queue/book-update'),
+      this.rxStompService.watch('/user/queue/book-metadata-update')
+    ).pipe(
+      map((msg): BookChange => ({kind: 'updated', books: [JSON.parse(msg.body) as Book]}))
     );
-    this.subscriptions.push(
-      this.rxStompService.watch('/user/queue/books-cover-update').subscribe(msg =>
-        this.bookService.handleMultipleBookCoverPatches(JSON.parse(msg.body))
-      )
+    const batchUpdated$ = this.rxStompService.watch('/user/queue/book-metadata-batch-update').pipe(
+      map((msg): BookChange => ({kind: 'updated', books: JSON.parse(msg.body) as Book[]}))
     );
-    this.subscriptions.push(
-      this.rxStompService.watch('/user/queue/books-remove').subscribe(msg =>
-        this.bookService.handleRemovedBookIds(JSON.parse(msg.body))
-      )
+    const coverUpdated$ = this.rxStompService.watch('/user/queue/books-cover-update').pipe(
+      map((msg): BookChange => ({kind: 'coverUpdated', patches: JSON.parse(msg.body)}))
     );
-    this.subscriptions.push(
-      this.rxStompService.watch('/user/queue/book-metadata-update').subscribe(msg =>
-        this.bookService.handleBookUpdate(JSON.parse(msg.body))
-      )
+    const removed$ = this.rxStompService.watch('/user/queue/books-remove').pipe(
+      map((msg): BookChange => ({kind: 'removed', ids: JSON.parse(msg.body) as number[]}))
     );
+
+    // A scan sends one message per book, and each applied alone would copy the whole list and recompute
+    // everything that reads it. All changes to the list share one batch so they still apply in arrival order.
     this.subscriptions.push(
-      this.rxStompService.watch('/user/queue/book-metadata-batch-update').subscribe(msg =>
-        this.bookService.handleMultipleBookUpdates(JSON.parse(msg.body))
-      )
+      merge(added$, updated$, batchUpdated$, coverUpdated$, removed$).pipe(
+        batchArrivals(BOOK_CHANGE_BATCH_WINDOW_MS, BOOK_CHANGE_BATCH_MAX)
+      ).subscribe(changes => this.bookService.handleBookChanges(changes))
     );
     this.subscriptions.push(
       this.rxStompService.watch('/user/queue/book-metadata-batch-progress').subscribe(msg =>

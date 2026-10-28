@@ -13,12 +13,15 @@ import {Tooltip} from 'primeng/tooltip';
 import {ExternalDocLinkComponent} from '../../../shared/components/external-doc-link/external-doc-link.component';
 import {TranslocoDirective, TranslocoPipe, TranslocoService} from '@jsverse/transloco';
 import {replacePlaceholders} from '../../../shared/util/pattern-resolver';
+import {IconDisplayComponent} from '../../../shared/components/icon-display/icon-display.component';
+import {IconSelection} from '../../../shared/service/icon-picker.service';
+import {entityIcon} from '../../../shared/util/entity-icon.util';
 
 @Component({
   selector: 'app-file-naming-pattern',
   templateUrl: './file-naming-pattern.component.html',
   standalone: true,
-  imports: [FormsModule, Button, InputText, Tooltip, ExternalDocLinkComponent, TranslocoDirective, TranslocoPipe],
+  imports: [FormsModule, Button, InputText, Tooltip, ExternalDocLinkComponent, TranslocoDirective, TranslocoPipe, IconDisplayComponent],
   styleUrls: ['./file-naming-pattern.component.scss'],
 })
 export class FileNamingPatternComponent implements OnInit {
@@ -80,6 +83,10 @@ export class FileNamingPatternComponent implements OnInit {
     }
     path = this.appendExtensionIfMissing(path);
     return path.startsWith('/') ? path : `/${path}`;
+  }
+
+  libraryIcon(library: Library): IconSelection {
+    return entityIcon(library.icon, library.iconType, 'library');
   }
 
   generateDefaultPreview(): string {

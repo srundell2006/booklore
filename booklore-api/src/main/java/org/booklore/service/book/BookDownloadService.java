@@ -193,10 +193,13 @@ public class BookDownloadService {
                 // Handle folder-based audiobooks - add all files from the folder
                 if (bookFile.isFolderBased() && Files.isDirectory(filePath)) {
                     String folderPrefix = bookFile.getFileName() + "/";
-                    List<Path> audioFiles = Files.list(filePath)
-                            .filter(Files::isRegularFile)
-                            .sorted(Comparator.comparing(p -> p.getFileName().toString()))
-                            .toList();
+                    List<Path> audioFiles;
+                    try (var listing = Files.list(filePath)) {
+                        audioFiles = listing
+                                .filter(Files::isRegularFile)
+                                .sorted(Comparator.comparing(p -> p.getFileName().toString()))
+                                .toList();
+                    }
 
                     for (Path audioFile : audioFiles) {
                         String entryName = folderPrefix + audioFile.getFileName().toString();
@@ -322,10 +325,13 @@ public class BookDownloadService {
 
         try (ZipOutputStream zos = new ZipOutputStream(baos)) {
             // Get all files in the folder, sorted by name
-            List<Path> files = Files.list(folderPath)
-                    .filter(Files::isRegularFile)
-                    .sorted(Comparator.comparing(p -> p.getFileName().toString()))
-                    .toList();
+            List<Path> files;
+            try (var listing = Files.list(folderPath)) {
+                files = listing
+                        .filter(Files::isRegularFile)
+                        .sorted(Comparator.comparing(p -> p.getFileName().toString()))
+                        .toList();
+            }
 
             for (Path audioFile : files) {
                 ZipEntry entry = new ZipEntry(audioFile.getFileName().toString());

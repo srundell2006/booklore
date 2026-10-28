@@ -17,6 +17,7 @@ import {LoadingService} from '../../../../core/services/loading.service';
 import {UserService} from '../../../settings/user-management/user.service';
 import {IconDisplayComponent} from '../../../../shared/components/icon-display/icon-display.component';
 import {IconSelection} from '../../../../shared/service/icon-picker.service';
+import {entityIcon} from '../../../../shared/util/entity-icon.util';
 import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 import {InputText} from 'primeng/inputtext';
 import {IconField} from 'primeng/iconfield';
@@ -143,11 +144,7 @@ export class ShelfAssignerComponent implements OnInit {
   }
 
   getShelfIcon(shelf: Shelf): IconSelection {
-    if (shelf.iconType === 'CUSTOM_SVG') {
-      return {type: 'CUSTOM_SVG', value: shelf.icon ?? ""};
-    } else {
-      return {type: 'PRIME_NG', value: `pi pi-${shelf.icon}`};
-    }
+    return entityIcon(shelf.icon, shelf.iconType, 'shelf');
   }
 
   filterShelves(shelves: Shelf[]): Shelf[] {

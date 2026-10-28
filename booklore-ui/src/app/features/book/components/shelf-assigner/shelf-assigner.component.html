@@ -58,18 +58,13 @@
                 />
               </div>
               <label [for]="'shelf-' + shelf.id" class="shelf-label">
-                @if (shelf.icon) {
-                  <div class="shelf-icon-wrapper">
-                    <app-icon-display
-                      [icon]="getShelfIcon(shelf)"
-                      size="20px"
-                      iconClass="shelf-icon"
-                    />
-                  </div>
-                } @else {
-                    <div class="shelf-icon-wrapper-empty">
-                  </div>
-                }
+                <div class="shelf-icon-wrapper">
+                  <app-icon-display
+                    [icon]="getShelfIcon(shelf)"
+                    size="20px"
+                    iconClass="shelf-icon"
+                  />
+                </div>
                 <span class="shelf-name">{{ shelf.name }}</span>
               </label>
             </div>

@@ -22,6 +22,8 @@ import {Slider} from 'primeng/slider';
 import {FormsModule} from '@angular/forms';
 import {Popover} from 'primeng/popover';
 import {LocalStorageService} from '../../../service/local-storage.service';
+import {IconSelection} from '../../../service/icon-picker.service';
+import {entityIcon} from '../../../util/entity-icon.util';
 
 @Component({
   selector: 'app-menu',
@@ -69,7 +71,7 @@ export class AppMenuComponent implements OnInit {
       this.versionInfo = data;
     });
 
-    this.authorService.getAllAuthors().subscribe();
+    this.authorService.getAuthorCount().subscribe();
 
     this.userService.userState$.pipe(
       filter(userState => !!userState?.user && userState.loaded))
@@ -118,7 +120,7 @@ export class AppMenuComponent implements OnInit {
               type: 'Authors',
               icon: 'pi pi-fw pi-users',
               routerLink: ['/authors'],
-              bookCount$: this.authorService.allAuthors$.pipe(map(authors => authors?.length ?? 0)),
+              bookCount$: this.authorService.authorCount$.pipe(map(count => count ?? 0)),
             },
             {
               label: this.t.translate('layout.menu.notebook'),
@@ -154,8 +156,7 @@ export class AppMenuComponent implements OnInit {
               menu: this.libraryShelfMenuService.initializeLibraryMenuItems(library),
               label: library.name,
               type: 'Library',
-              icon: library.icon || undefined,
-              iconType: (library.iconType || undefined) as 'PRIME_NG' | 'CUSTOM_SVG' | undefined,
+              ...this.menuIcon(entityIcon(library.icon, library.iconType, 'library')),
               routerLink: [`/library/${library.id}/books`],
               bookCount$: this.libraryService.getBookCount(library.id ?? 0),
               unhealthy$: this.libraryHealthService.isUnhealthy$(library.id ?? 0),
@@ -178,8 +179,7 @@ export class AppMenuComponent implements OnInit {
             items: sortedShelves.map((shelf) => ({
               label: shelf.name,
               type: 'magicShelfItem',
-              icon: shelf.icon || undefined,
-              iconType: (shelf.iconType || undefined) as 'PRIME_NG' | 'CUSTOM_SVG' | undefined,
+              ...this.menuIcon(entityIcon(shelf.icon, shelf.iconType, 'magicShelf')),
               menu: this.libraryShelfMenuService.initializeMagicShelfMenuItems(shelf),
               routerLink: [`/magic-shelf/${shelf.id}/books`],
               bookCount$: this.magicShelfService.getBookCount(shelf.id ?? 0),
@@ -204,8 +204,7 @@ export class AppMenuComponent implements OnInit {
           menu: this.libraryShelfMenuService.initializeShelfMenuItems(shelf),
           label: shelf.name,
           type: 'Shelf',
-          icon: shelf.icon || undefined,
-          iconType: (shelf.iconType || undefined) as 'PRIME_NG' | 'CUSTOM_SVG' | undefined,
+          ...this.menuIcon(entityIcon(shelf.icon, shelf.iconType, 'shelf')),
           routerLink: [`/shelf/${shelf.id}/books`],
           bookCount$: this.shelfService.getBookCount(shelf.id ?? 0),
         }));
@@ -224,8 +223,7 @@ export class AppMenuComponent implements OnInit {
           items.push({
             label: koboShelf.name,
             type: 'Shelf',
-            icon: koboShelf.icon || undefined,
-            iconType: (koboShelf.iconType || undefined) as 'PRIME_NG' | 'CUSTOM_SVG' | undefined,
+            ...this.menuIcon(entityIcon(koboShelf.icon, koboShelf.iconType, 'shelf')),
             routerLink: [`/shelf/${koboShelf.id}/books`],
             bookCount$: this.shelfService.getBookCount(koboShelf.id ?? 0),
           });
@@ -276,6 +274,10 @@ export class AppMenuComponent implements OnInit {
 
       return order === 'asc' ? comparison : -comparison;
     });
+  }
+
+  private menuIcon(icon: IconSelection): { icon: string; iconType: IconSelection['type'] } {
+    return {icon: icon.value, iconType: icon.type};
   }
 
   private validateSortField(field: string): 'name' | 'id' {

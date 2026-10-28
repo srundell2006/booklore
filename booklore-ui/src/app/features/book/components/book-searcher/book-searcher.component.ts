@@ -1,4 +1,4 @@
-import {Component, ElementRef, HostListener, inject, OnDestroy, OnInit} from '@angular/core';
+import {Component, ElementRef, HostListener, inject, OnDestroy} from '@angular/core';
 import {BehaviorSubject, of, Subscription} from 'rxjs';
 import {catchError, debounceTime, distinctUntilChanged, switchMap, tap} from 'rxjs/operators';
 import {Book} from '../../model/book.model';
@@ -32,13 +32,13 @@ import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
   styleUrls: ['./book-searcher.component.scss'],
   standalone: true
 })
-export class BookSearcherComponent implements OnInit, OnDestroy {
+export class BookSearcherComponent implements OnDestroy {
   searchQuery: string = '';
   books: Book[] = [];
   isLoading = false;
   activeIndex = -1;
   #searchSubject = new BehaviorSubject<string>('');
-  #subscription!: Subscription;
+  #subscription: Subscription | null = null;
   isSearchFocused = false;
 
   private bookService = inject(BookService);
@@ -51,7 +51,18 @@ export class BookSearcherComponent implements OnInit, OnDestroy {
     this.#searchSubject.pipe(debounceTime(200), distinctUntilChanged())
   );
 
-  ngOnInit(): void {
+  onSearchFocus(): void {
+    this.isSearchFocused = true;
+    this.startSearching();
+  }
+
+  /**
+   * The first subscriber to the book state starts the download of every book, so the search subscribes
+   * only once the user is about to search, not on every page that shows the top bar.
+   */
+  private startSearching(): void {
+    if (this.#subscription) return;
+
     this.#subscription = this.bookService.bookState$.pipe(
       tap(() => {
         if (this.searchQuery.trim().length >= 2) {
@@ -62,9 +73,10 @@ export class BookSearcherComponent implements OnInit, OnDestroy {
       catchError(() => of({books: [], loaded: true, error: null}))
     ).subscribe({
       next: (filteredState) => {
-        this.isLoading = false;
-        this.activeIndex = -1;
         const term = this.searchQuery.trim();
+        // While the books are still downloading, a search shows the placeholders rather than no results
+        this.isLoading = !filteredState.loaded && term.length >= 2;
+        this.activeIndex = -1;
         this.books = term.length >= 2
           ? (filteredState.books || []).slice(0, 50)
           : [];
@@ -92,6 +104,9 @@ export class BookSearcherComponent implements OnInit, OnDestroy {
 
   onSearchInputChange(): void {
     this.#searchSubject.next(this.searchQuery.trim());
+    if (this.searchQuery.trim().length >= 2) {
+      this.startSearching();
+    }
   }
 
   onBookClick(book: Book): void {

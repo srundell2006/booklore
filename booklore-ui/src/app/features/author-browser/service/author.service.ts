@@ -21,9 +21,22 @@ export class AuthorService {
   private allAuthorsSubject = new BehaviorSubject<AuthorSummary[] | null>(null);
   allAuthors$ = this.allAuthorsSubject.asObservable();
 
+  private authorCountSubject = new BehaviorSubject<number | null>(null);
+  authorCount$ = this.authorCountSubject.asObservable();
+
   getAllAuthors(): Observable<AuthorSummary[]> {
     return this.http.get<AuthorSummary[]>(this.baseUrl).pipe(
-      tap(authors => this.allAuthorsSubject.next(authors))
+      tap(authors => {
+        this.allAuthorsSubject.next(authors);
+        this.authorCountSubject.next(authors.length);
+      })
+    );
+  }
+
+  getAuthorCount(): Observable<number> {
+    return this.http.get<{ count: number }>(`${this.baseUrl}/count`).pipe(
+      map(response => response.count),
+      tap(count => this.authorCountSubject.next(count))
     );
   }
 
@@ -85,7 +98,9 @@ export class AuthorService {
   }
 
   deleteAuthors(authorIds: number[]): Observable<void> {
-    return this.http.delete<void>(this.baseUrl, {body: authorIds});
+    return this.http.delete<void>(this.baseUrl, {body: authorIds}).pipe(
+      tap(() => this.getAuthorCount().subscribe())
+    );
   }
 
   searchAuthorPhotos(authorId: number, query: string): Observable<AuthorPhotoResult[]> {
