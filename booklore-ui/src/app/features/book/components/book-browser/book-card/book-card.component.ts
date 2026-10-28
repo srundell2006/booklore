@@ -174,8 +174,8 @@ export class BookCardComponent implements OnInit, OnChanges, OnDestroy {
       : this.book.metadata?.title;
     this._isAudiobook = this.book.primaryFile?.bookType === 'AUDIOBOOK' && !this.forceEbookMode;
     this._coverImageUrl = this._isAudiobook
-      ? this.urlHelper.getAudiobookThumbnailUrl(this.book.id, this.book.metadata?.audiobookCoverUpdatedOn)
-      : this.urlHelper.getThumbnailUrl(this.book.id, this.book.metadata?.coverUpdatedOn);
+      ? this.urlHelper.getAudiobookThumbnailUrl(this.book.id, this.book.metadata?.audiobookCoverUpdatedOn, this.book)
+      : this.urlHelper.getThumbnailUrl(this.book.id, this.book.metadata?.coverUpdatedOn, this.book);
 
     this._readStatusIcon = this.readStatusHelper.getReadStatusIcon(this.book.readStatus);
     this._readStatusClass = this.readStatusHelper.getReadStatusClass(this.book.readStatus);
@@ -286,11 +286,11 @@ export class BookCardComponent implements OnInit, OnChanges, OnDestroy {
     if (this.forceEbookMode && book.primaryFile?.bookType === 'AUDIOBOOK') {
       const ebookType = this.getEbookType(book);
       if (ebookType) {
-        this.bookService.readBook(book.id, undefined, ebookType);
+        this.bookService.readBook(book, undefined, ebookType);
         return;
       }
     }
-    this.bookService.readBook(book.id);
+    this.bookService.readBook(book);
   }
 
   private getEbookType(book: Book): BookType | undefined {

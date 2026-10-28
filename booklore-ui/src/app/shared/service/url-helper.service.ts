@@ -25,9 +25,9 @@ export class UrlHelperService {
     return token ? `${url}${url.includes('?') ? '&' : '?'}token=${token}` : url;
   }
 
-  getThumbnailUrl(bookId: number, coverUpdatedOn?: string): string {
+  getThumbnailUrl(bookId: number, coverUpdatedOn?: string, bookInHand?: Book): string {
     if (!coverUpdatedOn) {
-      const book = this.bookService.getBookByIdFromState(bookId);
+      const book = bookInHand ?? this.bookService.getBookByIdFromState(bookId);
       if (book && book.metadata) {
         const coverGenerator = new CoverGeneratorComponent();
         coverGenerator.title = book.metadata.title || '';
@@ -50,9 +50,9 @@ export class UrlHelperService {
     return this.appendToken(url);
   }
 
-  getCoverUrl(bookId: number, coverUpdatedOn?: string): string {
+  getCoverUrl(bookId: number, coverUpdatedOn?: string, bookInHand?: Book): string {
     if (!coverUpdatedOn) {
-      const book = this.bookService.getBookByIdFromState(bookId);
+      const book = bookInHand ?? this.bookService.getBookByIdFromState(bookId);
       if (book && book.metadata) {
         const coverGenerator = new CoverGeneratorComponent();
         coverGenerator.title = book.metadata.title || '';
@@ -72,9 +72,9 @@ export class UrlHelperService {
     return this.appendToken(url);
   }
 
-  getAudiobookCoverUrl(bookId: number, audiobookCoverUpdatedOn?: string): string {
+  getAudiobookCoverUrl(bookId: number, audiobookCoverUpdatedOn?: string, bookInHand?: Book): string {
     if (!audiobookCoverUpdatedOn) {
-      const book = this.bookService.getBookByIdFromState(bookId);
+      const book = bookInHand ?? this.bookService.getBookByIdFromState(bookId);
       if (book && book.metadata) {
         const coverGenerator = new CoverGeneratorComponent();
         coverGenerator.title = book.metadata.title || '';
@@ -90,9 +90,9 @@ export class UrlHelperService {
     return this.appendToken(url);
   }
 
-  getAudiobookThumbnailUrl(bookId: number, audiobookCoverUpdatedOn?: string): string {
+  getAudiobookThumbnailUrl(bookId: number, audiobookCoverUpdatedOn?: string, bookInHand?: Book): string {
     if (!audiobookCoverUpdatedOn) {
-      const book = this.bookService.getBookByIdFromState(bookId);
+      const book = bookInHand ?? this.bookService.getBookByIdFromState(bookId);
       if (book && book.metadata) {
         const coverGenerator = new CoverGeneratorComponent();
         coverGenerator.title = book.metadata.title || '';

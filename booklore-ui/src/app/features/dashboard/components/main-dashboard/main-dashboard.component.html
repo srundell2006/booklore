@@ -1,6 +1,6 @@
 <ng-container *transloco="let t; prefix: 'dashboard.main'">
   <div class="dashboard-container">
-    @if ((bookState$ | async)?.loaded === false) {
+    @if ((libraryState$ | async)?.loaded === false) {
       <div class="loading-state">
         <p-progressSpinner
           class="spinner center-spinner"
@@ -11,7 +11,7 @@
         </p-progressSpinner>
       </div>
     }
-    @if ((bookState$ | async)?.loaded === true) {
+    @if ((libraryState$ | async)?.loaded === true) {
       <div class="dashboard">
         <div class="dashboard-inner">
           @if (isLibrariesEmpty$ | async) {
@@ -59,7 +59,7 @@
                     [title]="scroller.title"
                     [isMagicShelf]="scroller.type === ScrollerType.MAGIC_SHELF"
                     [useSquareCovers]="scroller.type === ScrollerType.LAST_LISTENED"
-                    [books]="getBooksForScroller(scroller) | async">
+                    [rowState]="getRowState(scroller) | async">
                   </app-dashboard-scroller>
                 }
               }

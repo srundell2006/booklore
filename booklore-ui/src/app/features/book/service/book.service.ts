@@ -1,5 +1,5 @@
 import {inject, Injectable} from '@angular/core';
-import {first, Observable, of, throwError} from 'rxjs';
+import {first, Observable, of, Subject, throwError} from 'rxjs';
 import {HttpClient, HttpParams} from '@angular/common/http';
 import {catchError, distinctUntilChanged, filter, finalize, map, shareReplay, tap} from 'rxjs/operators';
 import {AdditionalFile, Book, BookDeletionResponse, BookRecommendation, BookSetting, BookStatusUpdateResponse, BookType, CreatePhysicalBookRequest, PersonalRatingUpdateResponse, ReadStatus} from '../model/book.model';
@@ -33,21 +33,21 @@ export class BookService {
 
   private loading$: Observable<Book[]> | null = null;
 
+  private readonly bookChangesSubject = new Subject<BookChange[]>();
+  /** Every batch of websocket changes to books, whether or not the list is loaded. */
+  readonly bookChanges$: Observable<BookChange[]> = this.bookChangesSubject.asObservable();
+
   constructor() {
     this.authService.token$.pipe(
       distinctUntilChanged()
     ).subscribe(token => {
       if (token === null) {
-        this.bookStateService.resetBookState();
+        this.bookStateService.reset();
         this.loading$ = null;
       } else {
         const current = this.bookStateService.getCurrentBookState();
         if (current.loaded && !current.books) {
-          this.bookStateService.updateBookState({
-            books: null,
-            loaded: false,
-            error: null,
-          });
+          this.bookStateService.markUnloaded();
           this.loading$ = null;
         }
       }
@@ -56,9 +56,14 @@ export class BookService {
 
   /*------------------ State Management ------------------*/
 
+  /**
+   * The full book list. The first subscriber starts its download, which is large, so the pages shown before
+   * a grid (the dashboard, the sidebar, the detail page) read the counts and rows from the server instead.
+   */
   bookState$ = this.bookStateService.bookState$.pipe(
     tap(state => {
       if (!state.loaded && !state.error && !this.loading$) {
+        this.bookStateService.markFetching();
         this.loading$ = this.fetchBooks().pipe(
           shareReplay(1),
           finalize(() => (this.loading$ = null))
@@ -75,50 +80,40 @@ export class BookService {
   private fetchBooks(): Observable<Book[]> {
     return this.http.get<Book[]>(this.url).pipe(
       map(bookList => {
-        this.bookStateService.updateBookState({
-          books: bookList,
-          loaded: true,
-          error: null,
-        });
+        // A change made while the list downloaded may be missing from it
+        const refresh = this.bookStateService.takeRefreshRequest();
+        this.bookStateService.setLoaded(bookList);
+        if (refresh) this.refreshBooks();
         return bookList;
       }),
       catchError(error => {
-        const curr = this.bookStateService.getCurrentBookState();
-        this.bookStateService.updateBookState({
-          books: curr.books,
-          loaded: true,
-          error: error.message,
-        });
+        this.bookStateService.setError(error.message);
         throw error;
       })
     );
   }
 
+  /**
+   * Downloads the list again, when one is held. While the first download runs, one more follows it; with no
+   * list there is nothing to bring up to date, since the next page that needs the list downloads it fresh.
+   */
   refreshBooks(): void {
+    if (!this.bookStateService.isLoaded()) {
+      this.bookStateService.requestRefresh();
+      return;
+    }
+
     this.http.get<Book[]>(this.url).pipe(
-      tap(bookList => {
-        this.bookStateService.updateBookState({
-          books: bookList,
-          loaded: true,
-          error: null,
-        });
-      }),
+      tap(bookList => this.bookStateService.setLoaded(bookList)),
       catchError(error => {
-        this.bookStateService.updateBookState({
-          books: null,
-          loaded: true,
-          error: error.message,
-        });
+        this.bookStateService.setError(error.message);
         return of(null);
       })
     ).subscribe();
   }
 
   removeBooksByLibraryId(libraryId: number): void {
-    const currentState = this.bookStateService.getCurrentBookState();
-    const currentBooks = currentState.books || [];
-    const filteredBooks = currentBooks.filter(book => book.libraryId !== libraryId);
-    this.bookStateService.updateBookState({...currentState, books: filteredBooks});
+    this.bookStateService.patchBooks(books => books.filter(book => book.libraryId !== libraryId));
   }
 
   /**
@@ -132,24 +127,18 @@ export class BookService {
     const priorityChanged = (previous?.formatPriority ?? []).join() !== (updated.formatPriority ?? []).join();
     if (!nameChanged && !priorityChanged) return;
 
-    const currentState = this.bookStateService.getCurrentBookState();
-    if (!currentState.books) return;
-    const updatedBooks = currentState.books.map(book => {
+    this.bookStateService.patchBooks(books => books.map(book => {
       if (book.libraryId !== updated.id) return book;
       const patched = nameChanged ? {...book, libraryName: updated.name} : book;
       return priorityChanged ? withPrimaryFileByPriority(patched, updated.formatPriority ?? []) : patched;
-    });
-    this.bookStateService.updateBookState({...currentState, books: updatedBooks});
+    }));
   }
 
   removeBooksFromShelf(shelfId: number): void {
-    const currentState = this.bookStateService.getCurrentBookState();
-    const currentBooks = currentState.books || [];
-    const updatedBooks = currentBooks.map(book => ({
+    this.bookStateService.patchBooks(books => books.map(book => ({
       ...book,
       shelves: book.shelves?.filter(shelf => shelf.id !== shelfId),
-    }));
-    this.bookStateService.updateBookState({...currentState, books: updatedBooks});
+    })));
   }
 
   /*------------------ Book Retrieval ------------------*/
@@ -207,16 +196,8 @@ export class BookService {
 
     return this.http.delete<BookDeletionResponse>(this.url, {params}).pipe(
       tap(response => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        const remainingBooks = (currentState.books || []).filter(
-          book => !ids.has(book.id)
-        );
-
-        this.bookStateService.updateBookState({
-          books: remainingBooks,
-          loaded: true,
-          error: null,
-        });
+        // Removed from a loaded list only; with no list loaded, this leaves the state unloaded
+        this.bookStateService.removeBooks(ids);
 
         if (response.failedFileDeletions?.length > 0) {
           this.messageService.add({
@@ -246,8 +227,7 @@ export class BookService {
   updateBookShelves(bookIds: Set<number | undefined>, shelvesToAssign: Set<number | null | undefined>, shelvesToUnassign: Set<number | null | undefined>): Observable<Book[]> {
     return this.bookPatchService.updateBookShelves(bookIds, shelvesToAssign, shelvesToUnassign).pipe(
       catchError(error => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        this.bookStateService.updateBookState({...currentState, error: error.message});
+        this.bookStateService.setChangeError(error.message);
         throw error;
       })
     );
@@ -256,12 +236,7 @@ export class BookService {
   createPhysicalBook(request: CreatePhysicalBookRequest): Observable<Book> {
     return this.http.post<Book>(`${this.url}/physical`, request).pipe(
       tap(newBook => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        const updatedBooks = [...(currentState.books || []), newBook];
-        this.bookStateService.updateBookState({
-          ...currentState,
-          books: updatedBooks
-        });
+        this.bookStateService.patchBooks(books => [...books, newBook]);
         this.messageService.add({
           severity: 'success',
           summary: this.t.translate('book.bookService.toast.physicalBookCreatedSummary'),
@@ -281,20 +256,16 @@ export class BookService {
 
   togglePhysicalFlag(bookId: number, physical: boolean): Observable<Book> {
     return this.http.patch<Book>(`${this.url}/${bookId}/physical`, null, {params: {physical}}).pipe(
-      tap(updatedBook => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        const updatedBooks = (currentState.books || []).map(b => b.id === bookId ? {...b, isPhysical: physical} : b);
-        this.bookStateService.updateBookState({...currentState, books: updatedBooks});
+      tap(() => {
+        this.bookStateService.patchBooks(books => books.map(b => b.id === bookId ? {...b, isPhysical: physical} : b));
       })
     );
   }
 
   toggleComicFlag(bookId: number, comic: boolean): Observable<Book> {
     return this.http.patch<Book>(`${this.url}/${bookId}/comic`, null, {params: {comic}}).pipe(
-      tap(updatedBook => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        const updatedBooks = (currentState.books || []).map(b => b.id === bookId ? {...b, isComic: comic} : b);
-        this.bookStateService.updateBookState({...currentState, books: updatedBooks});
+      tap(() => {
+        this.bookStateService.patchBooks(books => books.map(b => b.id === bookId ? {...b, isComic: comic} : b));
       })
     );
   }
@@ -309,16 +280,27 @@ export class BookService {
 
   /*------------------ Reading & Viewer Settings ------------------*/
 
-  readBook(bookId: number, reader?: 'epub-streaming', explicitBookType?: BookType): void {
-    const book = this.bookStateService
-      .getCurrentBookState()
-      .books?.find(b => b.id === bookId);
-
-    if (!book) {
-      console.error('Book not found');
+  /**
+   * Opens the reader for a book. Pass the book when it is at hand: the list may not be loaded, and then a book
+   * given by id is fetched first.
+   */
+  readBook(bookOrId: Book | number, reader?: 'epub-streaming', explicitBookType?: BookType): void {
+    if (typeof bookOrId !== 'number') {
+      this.openReader(bookOrId, reader, explicitBookType);
       return;
     }
+    const fromState = this.getBookByIdFromState(bookOrId);
+    if (fromState) {
+      this.openReader(fromState, reader, explicitBookType);
+      return;
+    }
+    this.getBookByIdFromAPI(bookOrId, false).subscribe({
+      next: book => this.openReader(book, reader, explicitBookType),
+      error: () => console.error('Book not found')
+    });
+  }
 
+  private openReader(book: Book, reader?: 'epub-streaming', explicitBookType?: BookType): void {
     const bookType: BookType | undefined = explicitBookType ?? book.primaryFile?.bookType;
     const isAlternativeFormat = explicitBookType && explicitBookType !== book.primaryFile?.bookType;
 
@@ -415,6 +397,7 @@ export class BookService {
 
   handleBookChanges(changes: BookChange[]): void {
     this.bookSocketService.applyBookChanges(changes);
+    if (changes.length > 0) this.bookChangesSubject.next(changes);
   }
 
   handleNewlyCreatedBook(book: Book): void {

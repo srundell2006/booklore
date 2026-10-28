@@ -7,16 +7,29 @@
       }
     </h2>
 
-    @if (!books || books.length === 0) {
+    @if (isLoading) {
+      <div class="dashboard-scroller-infinite">
+        @for (card of skeletonCards; track card) {
+          <div class="dashboard-scroller-card" [ngClass]="{'square-card': useSquareCovers}">
+            <p-skeleton width="100%" [height]="useSquareCovers ? '160px' : '100%'" borderRadius="8px"></p-skeleton>
+          </div>
+        }
+      </div>
+    } @else if (rowState?.status === 'error' && books.length === 0) {
+      <div class="dashboard-scroller-error">
+        <div class="error-icon">
+          <i class="pi pi-exclamation-triangle"></i>
+        </div>
+        <p>{{ t('loadError') }}</p>
+      </div>
+    } @else if (books.length === 0) {
       <div class="dashboard-scroller-no-books">
         <div class="empty-state-icon">
           <i class="pi pi-book"></i>
         </div>
         <p>{{ t('noBooksFound') }}</p>
       </div>
-    }
-
-    @if (books) {
+    } @else {
       <div class="dashboard-scroller-infinite"
         infiniteScroll
         [infiniteScrollDistance]="2"
@@ -34,15 +47,6 @@
             ></app-book-card>
           </div>
         }
-      </div>
-    }
-
-    @if (books === null) {
-      <div class="dashboard-scroller-error">
-        <div class="error-icon">
-          <i class="pi pi-exclamation-triangle"></i>
-        </div>
-        <p>{{ t('loadError') }}</p>
       </div>
     }
   </div>

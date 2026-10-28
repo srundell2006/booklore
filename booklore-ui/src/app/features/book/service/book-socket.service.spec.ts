@@ -1,4 +1,4 @@
-import {beforeEach, describe, expect, it, vi} from 'vitest';
+import {beforeEach, describe, expect, it} from 'vitest';
 import {TestBed} from '@angular/core/testing';
 import {BookSocketService} from './book-socket.service';
 import {BookStateService} from './book-state.service';
@@ -16,13 +16,20 @@ describe('BookSocketService.applyBookChanges', () => {
     TestBed.configureTestingModule({providers: [BookSocketService, BookStateService]});
     service = TestBed.inject(BookSocketService);
     state = TestBed.inject(BookStateService);
-    state.updateBookState({books: [book(1, 'One'), book(2, 'Two')], loaded: true, error: null});
+    state.setLoaded([book(1, 'One'), book(2, 'Two')]);
   });
 
   const titles = () => state.getCurrentBookState().books?.map(b => `${b.id}:${b.metadata?.title}`);
 
+  // Each subscriber of the state is woken once per update
+  function countUpdates(): { count: number } {
+    const updates = {count: -1};
+    state.bookState$.subscribe(() => updates.count++);
+    return updates;
+  }
+
   it('should apply a whole batch with one state update', () => {
-    const updates = vi.spyOn(state, 'updateBookState');
+    const updates = countUpdates();
 
     service.applyBookChanges([
       {kind: 'created', book: book(3, 'Three')},
@@ -30,7 +37,7 @@ describe('BookSocketService.applyBookChanges', () => {
       {kind: 'updated', books: [book(1, 'One, revised')]},
     ]);
 
-    expect(updates).toHaveBeenCalledTimes(1);
+    expect(updates.count).toBe(1);
     expect(titles()).toEqual(['1:One, revised', '2:Two', '3:Three', '4:Four']);
   });
 
@@ -71,10 +78,10 @@ describe('BookSocketService.applyBookChanges', () => {
   });
 
   it('should leave the state alone for an empty batch', () => {
-    const updates = vi.spyOn(state, 'updateBookState');
+    const updates = countUpdates();
 
     service.applyBookChanges([]);
 
-    expect(updates).not.toHaveBeenCalled();
+    expect(updates.count).toBe(0);
   });
 });

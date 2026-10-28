@@ -1,7 +1,7 @@
 import {inject, Injectable} from '@angular/core';
 import {HttpClient} from '@angular/common/http';
 import {BehaviorSubject, combineLatest, Observable, of} from 'rxjs';
-import {tap, catchError, map, shareReplay, finalize} from 'rxjs/operators';
+import {tap, catchError, map, shareReplay, finalize, switchMap} from 'rxjs/operators';
 
 import {Shelf} from '../model/shelf.model';
 import {ShelfState} from '../model/state/shelf-state.model';
@@ -9,6 +9,7 @@ import {BookService} from './book.service';
 import {API_CONFIG} from '../../../core/config/api-config';
 import {Book} from '../model/book.model';
 import {UserService} from '../../settings/user-management/user.service';
+import {CatalogCountsService} from './catalog-counts.service';
 
 @Injectable({providedIn: 'root'})
 export class ShelfService {
@@ -16,6 +17,7 @@ export class ShelfService {
   private http = inject(HttpClient);
   private bookService = inject(BookService);
   private userService = inject(UserService);
+  private catalogCountsService = inject(CatalogCountsService);
 
   private shelfStateSubject = new BehaviorSubject<ShelfState>({
     shelves: null,
@@ -103,7 +105,27 @@ export class ShelfService {
     return this.shelfStateSubject.value.shelves ?? [];
   }
 
-  getBookCount(shelfId: number): Observable<number> {
+  /**
+   * The server counts the viewer's own shelves; another user's public shelf keeps the count GET /shelves
+   * gives it. Null while the count loads.
+   */
+  getBookCount(shelfId: number): Observable<number | null> {
+    return this.catalogCountsService.mode$.pipe(
+      switchMap(mode => mode === 'legacy'
+        ? this.getBookCountFromList(shelfId)
+        : combineLatest([this.shelfState$, this.catalogCountsService.counts$]).pipe(
+          map(([shelfState, counts]) => {
+            const shelf = shelfState.shelves?.find(s => s.id === shelfId);
+            if (!shelf) return 0;
+            if (!counts) return null;
+            return shelfId in counts.shelves ? counts.shelves[shelfId] : (shelf.bookCount || 0);
+          })
+        )
+      )
+    );
+  }
+
+  private getBookCountFromList(shelfId: number): Observable<number> {
     return combineLatest([
       this.shelfState$,
       this.userService.userState$,
@@ -128,10 +150,14 @@ export class ShelfService {
     return this.http.get<Book[]>(`${this.url}/${shelfId}/books`);
   }
 
-  getUnshelvedBookCount(): Observable<number> {
-    return this.bookService.bookState$.pipe(
-      map(state =>
-        (state.books || []).filter(b => !b.shelves || b.shelves.length === 0).length
+  /** Null while the count loads. */
+  getUnshelvedBookCount(): Observable<number | null> {
+    return this.catalogCountsService.view$(
+      counts => counts.unshelved,
+      () => this.bookService.bookState$.pipe(
+        map(state =>
+          (state.books || []).filter(b => !b.shelves || b.shelves.length === 0).length
+        )
       )
     );
   }

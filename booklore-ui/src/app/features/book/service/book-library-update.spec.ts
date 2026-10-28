@@ -66,14 +66,10 @@ describe('BookService.applyLibraryUpdate', () => {
     });
     service = TestBed.inject(BookService);
     state = TestBed.inject(BookStateService);
-    state.updateBookState({
-      books: [
-        book(1, 1, [file(10, 'EPUB'), file(11, 'PDF')]),
-        book(2, 2, [file(20, 'EPUB'), file(21, 'PDF')]),
-      ],
-      loaded: true,
-      error: null,
-    });
+    state.setLoaded([
+      book(1, 1, [file(10, 'EPUB'), file(11, 'PDF')]),
+      book(2, 2, [file(20, 'EPUB'), file(21, 'PDF')]),
+    ]);
   });
 
   const books = () => state.getCurrentBookState().books!;

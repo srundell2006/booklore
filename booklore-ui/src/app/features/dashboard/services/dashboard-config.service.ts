@@ -2,7 +2,7 @@ import {Injectable} from '@angular/core';
 import {BehaviorSubject, Observable} from 'rxjs';
 import {DashboardConfig, DEFAULT_DASHBOARD_CONFIG, ScrollerType} from '../models/dashboard-config.model';
 import {UserService} from '../../settings/user-management/user.service';
-import {filter, take} from 'rxjs/operators';
+import {filter, switchMap, take} from 'rxjs/operators';
 import {MagicShelfService} from '../../magic-shelf/service/magic-shelf.service';
 
 @Injectable({
@@ -13,7 +13,19 @@ export class DashboardConfigService {
 
   public config$: Observable<DashboardConfig> = this.configSubject.asObservable();
 
+  /**
+   * The config once the user's saved one is known, so that the rows of the default config are not fetched
+   * for a user who replaced it.
+   */
+  public ready$: Observable<DashboardConfig>;
+
   constructor(private userService: UserService, private magicShelfService: MagicShelfService) {
+    this.ready$ = this.userService.userState$.pipe(
+      filter(userState => userState.loaded),
+      take(1),
+      switchMap(() => this.config$)
+    );
+
     this.userService.userState$
       .pipe(
         filter(userState => !!userState?.user && userState.loaded),

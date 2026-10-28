@@ -5,14 +5,14 @@ import {MenuModule} from 'primeng/menu';
 import {LibraryService} from '../../../../features/book/service/library.service';
 import {LibraryHealthService} from '../../../../features/book/service/library-health.service';
 import {combineLatest, Observable, of} from 'rxjs';
-import {filter, map} from 'rxjs/operators';
+import {filter, map, shareReplay} from 'rxjs/operators';
 import {ShelfService} from '../../../../features/book/service/shelf.service';
 import {BookService} from '../../../../features/book/service/book.service';
 import {LibraryShelfMenuService} from '../../../../features/book/service/library-shelf-menu.service';
 import {AppVersion, VersionService} from '../../../service/version.service';
 import {DynamicDialogRef} from 'primeng/dynamicdialog';
 import {UserService} from '../../../../features/settings/user-management/user.service';
-import {MagicShelfService, MagicShelfState} from '../../../../features/magic-shelf/service/magic-shelf.service';
+import {MagicShelfCountView, MagicShelfService, MagicShelfState} from '../../../../features/magic-shelf/service/magic-shelf.service';
 import {SeriesDataService} from '../../../../features/series-browser/service/series-data.service';
 import {AuthorService} from '../../../../features/author-browser/service/author.service';
 import {MenuItem} from 'primeng/api';
@@ -24,6 +24,7 @@ import {Popover} from 'primeng/popover';
 import {LocalStorageService} from '../../../service/local-storage.service';
 import {IconSelection} from '../../../service/icon-picker.service';
 import {entityIcon} from '../../../util/entity-icon.util';
+import {CatalogCountsService} from '../../../../features/book/service/catalog-counts.service';
 
 @Component({
   selector: 'app-menu',
@@ -52,6 +53,7 @@ export class AppMenuComponent implements OnInit {
   private magicShelfService = inject(MagicShelfService);
   private seriesDataService = inject(SeriesDataService);
   private authorService = inject(AuthorService);
+  private catalogCountsService = inject(CatalogCountsService);
   private t = inject(TranslocoService);
   private localStorageService = inject(LocalStorageService);
 
@@ -91,8 +93,9 @@ export class AppMenuComponent implements OnInit {
         this.initMenus();
       });
 
-    this.homeMenu$ = combineLatest([this.bookService.bookState$, this.t.langChanges$]).pipe(
-      map(([bookState]) => [
+    // The counts come from the server, so the menu does not download the book list (except in legacy mode)
+    this.homeMenu$ = this.t.langChanges$.pipe(
+      map(() => [
         {
           label: this.t.translate('layout.menu.home'),
           items: [
@@ -106,14 +109,20 @@ export class AppMenuComponent implements OnInit {
               type: 'All Books',
               icon: 'pi pi-fw pi-book',
               routerLink: ['/all-books'],
-              bookCount$: of(bookState.books ? bookState.books.length : 0),
+              bookCount$: this.catalogCountsService.view$(
+                counts => counts.allBooks,
+                () => this.bookService.bookState$.pipe(map(bookState => bookState.books ? bookState.books.length : 0))
+              ),
             },
             {
               label: this.t.translate('layout.menu.series'),
               type: 'Series',
               icon: 'pi pi-fw pi-objects-column',
               routerLink: ['/series'],
-              bookCount$: this.seriesDataService.allSeries$.pipe(map(series => series.length)),
+              bookCount$: this.catalogCountsService.view$(
+                counts => counts.series,
+                () => this.seriesDataService.allSeries$.pipe(map(series => series.length))
+              ),
             },
             {
               label: this.t.translate('layout.menu.authors'),
@@ -176,14 +185,20 @@ export class AppMenuComponent implements OnInit {
             type: 'magicShelf',
             hasDropDown: true,
             hasCreate: true,
-            items: sortedShelves.map((shelf) => ({
-              label: shelf.name,
-              type: 'magicShelfItem',
-              ...this.menuIcon(entityIcon(shelf.icon, shelf.iconType, 'magicShelf')),
-              menu: this.libraryShelfMenuService.initializeMagicShelfMenuItems(shelf),
-              routerLink: [`/magic-shelf/${shelf.id}/books`],
-              bookCount$: this.magicShelfService.getBookCount(shelf.id ?? 0),
-            })),
+            items: sortedShelves.map((shelf) => {
+              const countView$ = this.magicShelfService.getBookCountView(shelf.id ?? 0).pipe(
+                shareReplay({bufferSize: 1, refCount: true})
+              );
+              return {
+                label: shelf.name,
+                type: 'magicShelfItem',
+                ...this.menuIcon(entityIcon(shelf.icon, shelf.iconType, 'magicShelf')),
+                menu: this.libraryShelfMenuService.initializeMagicShelfMenuItems(shelf),
+                routerLink: [`/magic-shelf/${shelf.id}/books`],
+                bookCount$: countView$.pipe(map(view => view.count)),
+                countHint$: countView$.pipe(map(view => this.countHint(view))),
+              };
+            }),
           },
         ];
       })
@@ -241,6 +256,17 @@ export class AppMenuComponent implements OnInit {
         ];
       })
     );
+  }
+
+  /** Why a magic shelf shows no count: the server could not count it, and the book list is not loaded. */
+  private countHint(view: MagicShelfCountView): string | null {
+    const unavailable = view.unavailable;
+    if (!unavailable) return null;
+    if (unavailable.status === 'UNSUPPORTED') {
+      const reasons = (unavailable.reasons ?? []).join(', ');
+      return this.t.translate('layout.menu.countUnsupported', {reasons});
+    }
+    return this.t.translate('layout.menu.countError');
   }
 
   openChangelogDialog() {

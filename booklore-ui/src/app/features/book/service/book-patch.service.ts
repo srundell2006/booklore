@@ -62,15 +62,8 @@ export class BookPatchService {
     };
     return this.http.post<Book[]>(`${this.url}/shelves`, requestPayload).pipe(
       tap(updatedBooks => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        const currentBooks = currentState.books || [];
-        updatedBooks.forEach(updatedBook => {
-          const index = currentBooks.findIndex(b => b.id === updatedBook.id);
-          if (index !== -1) {
-            currentBooks[index] = updatedBook;
-          }
-        });
-        this.bookStateService.updateBookState({...currentState, books: [...currentBooks]});
+        const updatedById = new Map(updatedBooks.map(book => [book.id, book]));
+        this.bookStateService.patchBooks(books => books.map(book => updatedById.get(book.id) ?? book));
       })
     );
   }
@@ -136,19 +129,12 @@ export class BookPatchService {
     };
     return this.http.post<void>(`${this.url}/progress`, body).pipe(
       tap(() => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        if (currentState.books) {
-          const updatedBooks = currentState.books.map(book => {
-            if (book.id === bookId) {
-              return {...book, dateFinished: dateFinished || undefined};
-            }
-            return book;
-          });
-          this.bookStateService.updateBookState({
-            ...currentState,
-            books: updatedBooks
-          });
-        }
+        this.bookStateService.patchBooks(books => books.map(book => {
+          if (book.id === bookId) {
+            return {...book, dateFinished: dateFinished || undefined};
+          }
+          return book;
+        }));
       })
     );
   }
@@ -159,8 +145,7 @@ export class BookPatchService {
 
     return this.http.post<BookStatusUpdateResponse[]>(`${this.url}/reset-progress`, ids, {params}).pipe(
       tap(responses => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        const updatedBooks = (currentState.books || []).map(book => {
+        this.bookStateService.patchBooks(books => books.map(book => {
           const response = responses.find(r => r.bookId === book.id);
           if (response) {
             const progressReset: Partial<Book> =
@@ -176,8 +161,7 @@ export class BookPatchService {
             };
           }
           return book;
-        });
-        this.bookStateService.updateBookState({...currentState, books: updatedBooks});
+        }));
       })
     );
   }
@@ -191,8 +175,7 @@ export class BookPatchService {
 
     return this.http.post<BookStatusUpdateResponse[]>(`${this.url}/status`, requestBody).pipe(
       tap(responses => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        const updatedBooks = (currentState.books || []).map(book => {
+        this.bookStateService.patchBooks(books => books.map(book => {
           const response = responses.find(r => r.bookId === book.id);
           if (response) {
             return {
@@ -203,8 +186,7 @@ export class BookPatchService {
             };
           }
           return book;
-        });
-        this.bookStateService.updateBookState({...currentState, books: updatedBooks});
+        }));
       })
     );
   }
@@ -213,20 +195,7 @@ export class BookPatchService {
     const ids = Array.isArray(bookIds) ? bookIds : [bookIds];
 
     return this.http.post<PersonalRatingUpdateResponse[]>(`${this.url}/reset-personal-rating`, ids).pipe(
-      tap(responses => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        const updatedBooks = (currentState.books || []).map(book => {
-          const response = responses.find(r => r.bookId === book.id);
-          if (response) {
-            return {
-              ...book,
-              personalRating: response.personalRating
-            };
-          }
-          return book;
-        });
-        this.bookStateService.updateBookState({...currentState, books: updatedBooks});
-      })
+      tap(responses => this.applyPersonalRatings(responses))
     );
   }
 
@@ -234,29 +203,28 @@ export class BookPatchService {
     const ids = Array.isArray(bookIds) ? bookIds : [bookIds];
 
     return this.http.put<PersonalRatingUpdateResponse[]>(`${this.url}/personal-rating`, {ids, rating}).pipe(
-      tap(responses => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        const updatedBooks = (currentState.books || []).map(book => {
-          const response = responses.find(r => r.bookId === book.id);
-          if (response) {
-            return {
-              ...book,
-              personalRating: response.personalRating
-            };
-          }
-          return book;
-        });
-        this.bookStateService.updateBookState({...currentState, books: updatedBooks});
-      })
+      tap(responses => this.applyPersonalRatings(responses))
     );
+  }
+
+  private applyPersonalRatings(responses: PersonalRatingUpdateResponse[]): void {
+    this.bookStateService.patchBooks(books => books.map(book => {
+      const response = responses.find(r => r.bookId === book.id);
+      if (response) {
+        return {
+          ...book,
+          personalRating: response.personalRating
+        };
+      }
+      return book;
+    }));
   }
 
   updateLastReadTime(bookId: number): void {
     const timestamp = new Date().toISOString();
-    const currentState = this.bookStateService.getCurrentBookState();
-    const updatedBooks = (currentState.books || []).map(book =>
+    // Only a guess at what the server stores once progress is saved, so not worth a refresh of the list
+    this.bookStateService.applyChangeById(books => books.map(book =>
       book.id === bookId ? {...book, lastReadTime: timestamp} : book
-    );
-    this.bookStateService.updateBookState({...currentState, books: updatedBooks});
+    ));
   }
 }

@@ -82,8 +82,10 @@
           [text]="true"
           [outlined]="false"
           [rounded]="true"
-          [label]="hovered ? '' : (item.bookCount$ | async)?.toString() || ''"
+          [label]="hovered ? '' : countLabel(item.bookCount$ | async, item.countHint$ | async)"
           [icon]="hovered ? 'pi pi-ellipsis-v' : ''"
+          [pTooltip]="(item.countHint$ | async) ?? undefined"
+          tooltipPosition="right"
           class="entity-menu-button"
         ></p-button>
       }

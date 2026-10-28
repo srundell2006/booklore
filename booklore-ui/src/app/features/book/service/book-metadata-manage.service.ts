@@ -47,12 +47,10 @@ export class BookMetadataManageService {
     };
     return this.http.put<BookMetadata[]>(`${this.url}/metadata/toggle-all-lock`, requestBody).pipe(
       tap((updatedMetadataList) => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        const updatedBooks = (currentState.books || []).map(book => {
+        this.bookStateService.patchBooks(books => books.map(book => {
           const updatedMetadata = updatedMetadataList.find(meta => meta.bookId === book.id);
           return updatedMetadata ? {...book, metadata: updatedMetadata} : book;
-        });
-        this.bookStateService.updateBookState({...currentState, books: updatedBooks});
+        }));
       }),
       map(() => void 0),
       catchError((error) => {
@@ -71,8 +69,7 @@ export class BookMetadataManageService {
 
     return this.http.put<void>(`${this.url}/metadata/toggle-field-locks`, requestBody).pipe(
       tap(() => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        const updatedBooks = (currentState.books || []).map(book => {
+        this.bookStateService.patchBooks(books => books.map(book => {
           if (!bookIdSet.has(book.id)) return book;
           const updatedMetadata = {...book.metadata};
           for (const [field, action] of Object.entries(fieldActions)) {
@@ -84,12 +81,8 @@ export class BookMetadataManageService {
           return {
             ...book,
             metadata: updatedMetadata
-          };
-        });
-        this.bookStateService.updateBookState({
-          ...currentState,
-          books: updatedBooks as Book[]
-        });
+          } as Book;
+        }));
       }),
       catchError(error => {
         this.messageService.add({

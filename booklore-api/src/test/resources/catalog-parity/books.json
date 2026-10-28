@@ -1,0 +1,1994 @@
+{
+  "about": ["Shared parity fixture for the magic-shelf count compiler (MagicShelfCountCompiler) and the UI BookRuleEvaluatorService.", "\"books\" is exactly the list-view stream a viewer who sees both libraries receives: Jackson NON_NULL, so a null value is an absent key (never write an explicit null: the UI reads Number(null) as 0 but Number(undefined) as NaN).", "Each book carries a \"fixture\" object that is not part of the DTO: it holds what the backend needs to rebuild the entities. The UI spec strips it before evaluating.", "fixture.files are the book_file rows in id order (ids only fix the order). primaryFile, alternativeFormats and supplementaryFiles are derived from them with library formatPriority the way BookMapperV2.getPrimaryBookFile does.", "fixture.progress is the viewer's user_book_progress row (null = none; readStatus null and \"UNSET\" both serialize as \"UNSET\"); fixture.otherUserProgress is another user's row that must not affect the viewer.", "fixture.isPhysical / fixture.isComic null exist only on H2 (the production columns are NOT NULL DEFAULT FALSE).", "\"deletedBooks\" are inserted with deleted = TRUE; the stream never shows them and no case expects them.", "Tag, category and mood names that differ only by case or trailing space are distinct rows (exact-name lookup).", "Book ids, file ids and library ids are fixture ids: map them to the generated ids, and insert files in the listed order.", "metadata.authors [] (book 12), tags [] (book 12) and categories [] (book 13) are explicit on purpose: the list-view DTO strips empty collections, and the evaluator reads [] and an absent list alike.", "cases.json entries: {name, production?, filterJson (exactly as stored), now (UTC), expect: [ids ascending] | \"UNSUPPORTED\" | \"INVALID\", required?, reason?, collationSensitive?}.", "required: true means the server must answer OK with exactly these ids; false means it may answer UNSUPPORTED instead, but any count it gives must be these ids. reason is the expected UNSUPPORTED reason (informational).", "collationSensitive: an accent-insensitive or PAD SPACE collation (MariaDB) can give other ids; H2 compares exactly and must match. Every array expect was computed by the real BookRuleEvaluatorService, and does not depend on the time zone."],
+  "libraries": [
+    {
+      "id": 1,
+      "name": "Books",
+      "formatPriority": ["EPUB", "PDF", "CBX", "AUDIOBOOK"]
+    },
+    {
+      "id": 3,
+      "name": "Comics",
+      "formatPriority": ["CBX", "PDF"]
+    }
+  ],
+  "books": [
+    {
+      "id": 1,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1010,
+        "bookId": 1,
+        "fileName": "tale.epub",
+        "filePath": "/fixture/books/tale.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-10-28T11:59:59Z",
+      "metadata": {
+        "bookId": 1,
+        "title": "A Tale of Two Cities",
+        "authors": ["Charles Dickens"],
+        "isbn13": "9780141439600",
+        "isbn10": "0141439602",
+        "goodreadsRating": 3.75,
+        "goodreadsReviewCount": 1500,
+        "amazonRating": 4.25,
+        "amazonReviewCount": 87,
+        "publisher": "Penguin Classics",
+        "language": "en",
+        "pageCount": 489,
+        "categories": ["Fiction", "Classics"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 80,
+      "readStatus": "READ",
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1010,
+            "fileName": "tale.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": {
+          "readStatus": "READ"
+        },
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 2,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1020,
+        "bookId": 2,
+        "fileName": "lowercase.pdf",
+        "filePath": "/fixture/books/lowercase.pdf",
+        "folderBased": false,
+        "bookType": "PDF",
+        "fileSizeKb": 1024,
+        "extension": "pdf"
+      },
+      "addedOn": "2026-10-25T12:00:00Z",
+      "metadata": {
+        "bookId": 2,
+        "title": "a lowercase start",
+        "authors": ["Unknown"],
+        "isbn13": "",
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 49.99,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1020,
+            "fileName": "lowercase.pdf",
+            "bookType": "PDF",
+            "extension": "pdf",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": {
+          "readStatus": "READ"
+        }
+      }
+    },
+    {
+      "id": 3,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1030,
+        "bookId": 3,
+        "fileName": "about-time.cbz",
+        "filePath": "/fixture/comics/about-time.cbz",
+        "folderBased": false,
+        "bookType": "CBX",
+        "fileSizeKb": 1024,
+        "extension": "cbz"
+      },
+      "addedOn": "2026-10-25T11:59:59Z",
+      "metadata": {
+        "bookId": 3,
+        "title": "About Time",
+        "authors": ["UNKNOWN"],
+        "tags": ["File Not Found"],
+        "goodreadsRating": 4.25,
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 50,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": true,
+      "fixture": {
+        "files": [
+          {
+            "id": 1030,
+            "fileName": "about-time.cbz",
+            "bookType": "CBX",
+            "extension": "cbz",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": true,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 4,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1040,
+        "bookId": 4,
+        "fileName": "angeles.epub",
+        "filePath": "/fixture/books/angeles.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-10-25T11:59:59Z",
+      "metadata": {
+        "bookId": 4,
+        "title": "Ángeles y demonios",
+        "authors": ["Dan Brown"],
+        "language": "es",
+        "publisher": "Pénguin Random House",
+        "moods": ["mysterious"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 50.5,
+      "readStatus": "READING",
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1040,
+            "fileName": "angeles.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": {
+          "readStatus": "READING"
+        },
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 5,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1050,
+        "bookId": 5,
+        "fileName": "leading.m4b",
+        "filePath": "/fixture/books/leading.m4b",
+        "folderBased": false,
+        "bookType": "AUDIOBOOK",
+        "fileSizeKb": 1024,
+        "extension": "m4b"
+      },
+      "addedOn": "2026-10-20T00:00:00Z",
+      "metadata": {
+        "bookId": 5,
+        "title": " A leading space",
+        "authors": ["unknown "],
+        "narrator": "Scott Brick",
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 9.5,
+      "readStatus": "UNSET",
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1050,
+            "fileName": "leading.m4b",
+            "bookType": "AUDIOBOOK",
+            "extension": "m4b",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": {
+          "readStatus": null
+        },
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 6,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1061,
+        "bookId": 6,
+        "fileName": "child-love.epub",
+        "filePath": "/fixture/books/child-love.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-10-14T12:00:00Z",
+      "metadata": {
+        "bookId": 6,
+        "title": "Child Love",
+        "authors": ["Tom Clancy"],
+        "isbn13": "9780000000006",
+        "seriesName": "Jack Ryan",
+        "titleChangedByAutoFetch": true
+      },
+      "metadataMatchScore": 10,
+      "readStatus": "PAUSED",
+      "shelves": [],
+      "alternativeFormats": [
+        {
+          "id": 1060,
+          "bookId": 6,
+          "fileName": "child-love.pdf",
+          "filePath": "/fixture/books/child-love.pdf",
+          "folderBased": false,
+          "bookType": "PDF",
+          "fileSizeKb": 1024,
+          "extension": "pdf"
+        }
+      ],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1060,
+            "fileName": "child-love.pdf",
+            "bookType": "PDF",
+            "extension": "pdf",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          },
+          {
+            "id": 1061,
+            "fileName": "child-love.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": {
+          "readStatus": "PAUSED"
+        },
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 7,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1071,
+        "bookId": 7,
+        "fileName": "child-love-2.cbr",
+        "filePath": "/fixture/comics/child-love-2.cbr",
+        "folderBased": false,
+        "bookType": "CBX",
+        "fileSizeKb": 1024,
+        "extension": "cbr"
+      },
+      "addedOn": "2026-10-28T12:00:00Z",
+      "metadata": {
+        "bookId": 7,
+        "title": "CHILD LOVE",
+        "authors": ["tom clancy", "Someone Else"],
+        "tags": ["File Not Found", "Comics"],
+        "titleChangedByAutoFetch": true
+      },
+      "metadataMatchScore": 10.5,
+      "shelves": [],
+      "alternativeFormats": [
+        {
+          "id": 1070,
+          "bookId": 7,
+          "fileName": "child-love-2.epub",
+          "filePath": "/fixture/comics/child-love-2.epub",
+          "folderBased": false,
+          "bookType": "EPUB",
+          "fileSizeKb": 1024,
+          "extension": "epub"
+        }
+      ],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1070,
+            "fileName": "child-love-2.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          },
+          {
+            "id": 1071,
+            "fileName": "child-love-2.cbr",
+            "bookType": "CBX",
+            "extension": "cbr",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 8,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1080,
+        "bookId": 8,
+        "fileName": "child-love-3.pdf",
+        "filePath": "/fixture/books/child-love-3.pdf",
+        "folderBased": false,
+        "bookType": "PDF",
+        "fileSizeKb": 1024,
+        "extension": "pdf"
+      },
+      "addedOn": "2026-10-14T11:59:59Z",
+      "metadata": {
+        "bookId": 8,
+        "title": "Child Love ",
+        "authors": ["Tom  Clancy"],
+        "tags": ["file not found "],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 39.5,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1080,
+            "fileName": "child-love-3.pdf",
+            "bookType": "PDF",
+            "extension": "pdf",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 9,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1090,
+        "bookId": 9,
+        "fileName": "child-loeve.epub",
+        "filePath": "/fixture/books/child-loeve.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-10-29T08:00:00Z",
+      "metadata": {
+        "bookId": 9,
+        "title": "Child Löve",
+        "authors": ["Tom Clancý"],
+        "tags": ["FILE NOT FOUND", "Fantasy"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 40,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1090,
+            "fileName": "child-loeve.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 10,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1100,
+        "bookId": 10,
+        "fileName": "child-lovers.epub",
+        "filePath": "/fixture/books/child-lovers.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-09-01T00:00:00Z",
+      "metadata": {
+        "bookId": 10,
+        "title": "Child Lovers",
+        "authors": ["Unknown Author"],
+        "titleChangedByAutoFetch": true
+      },
+      "metadataMatchScore": 40.5,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1100,
+            "fileName": "child-lovers.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 11,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "shelves": [],
+      "isPhysical": true,
+      "isComic": false,
+      "fixture": {
+        "files": [],
+        "hasMetadata": false,
+        "isPhysical": true,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 12,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "addedOn": "2026-10-28T11:59:59Z",
+      "metadata": {
+        "bookId": 12,
+        "title": "",
+        "authors": [],
+        "isbn13": "   ",
+        "isbn10": "\t\n",
+        "tags": [],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 0,
+      "shelves": [],
+      "supplementaryFiles": [
+        {
+          "id": 1120,
+          "bookId": 12,
+          "fileName": "notes.pdf",
+          "filePath": "/fixture/comics/notes.pdf",
+          "folderBased": false,
+          "bookType": "PDF",
+          "fileSizeKb": 1024,
+          "extension": "pdf"
+        }
+      ],
+      "isPhysical": false,
+      "isComic": true,
+      "fixture": {
+        "files": [
+          {
+            "id": 1120,
+            "fileName": "notes.pdf",
+            "bookType": "PDF",
+            "extension": "pdf",
+            "isBookFormat": false,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": true,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 13,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1130,
+        "bookId": 13,
+        "fileName": "blank.epub",
+        "filePath": "/fixture/books/blank.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-10-20T00:00:00Z",
+      "metadata": {
+        "bookId": 13,
+        "title": "   ",
+        "isbn13": "9781234567897",
+        "isbn10": "",
+        "goodreadsRating": 0,
+        "categories": [],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 59.5,
+      "readStatus": "UNSET",
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1130,
+            "fileName": "blank.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": {
+          "readStatus": "UNSET"
+        },
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 14,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1140,
+        "bookId": 14,
+        "fileName": "red-october.epub",
+        "filePath": "/fixture/books/red-october.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-10-14T12:00:00Z",
+      "metadata": {
+        "bookId": 14,
+        "title": "The Hunt for Red October",
+        "authors": ["Tom Clancy"],
+        "seriesName": "Jack Ryan",
+        "publisher": "Naval Institute Press",
+        "isbn10": "0870212850",
+        "narrator": "Scott Brick",
+        "pageCount": 387,
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 60,
+      "readStatus": "READ",
+      "shelves": [],
+      "alternativeFormats": [
+        {
+          "id": 1141,
+          "bookId": 14,
+          "fileName": "red-october.m4b",
+          "filePath": "/fixture/books/red-october.m4b",
+          "folderBased": false,
+          "bookType": "AUDIOBOOK",
+          "fileSizeKb": 1024,
+          "extension": "m4b"
+        }
+      ],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1140,
+            "fileName": "red-october.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          },
+          {
+            "id": 1141,
+            "fileName": "red-october.m4b",
+            "bookType": "AUDIOBOOK",
+            "extension": "m4b",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": {
+          "readStatus": "READ"
+        },
+        "otherUserProgress": {
+          "readStatus": "WONT_READ"
+        }
+      }
+    },
+    {
+      "id": 15,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1150,
+        "bookId": 15,
+        "fileName": "patriot-games.mp3",
+        "filePath": "/fixture/comics/patriot-games.mp3",
+        "folderBased": false,
+        "bookType": "AUDIOBOOK",
+        "fileSizeKb": 1024,
+        "extension": "mp3"
+      },
+      "addedOn": "2026-10-25T12:00:00Z",
+      "metadata": {
+        "bookId": 15,
+        "title": "Patriot Games",
+        "authors": ["TOM CLANCY"],
+        "isbn10": "0399132414",
+        "seriesName": "jack ryan",
+        "narrator": "SCOTT BRICK",
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 60.5,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1150,
+            "fileName": "patriot-games.mp3",
+            "bookType": "AUDIOBOOK",
+            "extension": "mp3",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 16,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1160,
+        "bookId": 16,
+        "fileName": "pleasures.cb7",
+        "filePath": "/fixture/comics/pleasures.cb7",
+        "folderBased": false,
+        "bookType": "CBX",
+        "fileSizeKb": 1024,
+        "extension": "cb7"
+      },
+      "addedOn": "2026-10-28T12:00:00Z",
+      "metadata": {
+        "bookId": 16,
+        "title": "Unknown Pleasures",
+        "authors": ["unknown", "Tom Clancy"],
+        "goodreadsRating": 2.5,
+        "amazonRating": 4.5,
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 69.5,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": true,
+      "fixture": {
+        "files": [
+          {
+            "id": 1160,
+            "fileName": "pleasures.cb7",
+            "bookType": "CBX",
+            "extension": "cb7",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": true,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 17,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1170,
+        "bookId": 17,
+        "fileName": "clear-present.pdf",
+        "filePath": "/fixture/books/clear-present.pdf",
+        "folderBased": false,
+        "bookType": "PDF",
+        "fileSizeKb": 1024,
+        "extension": "pdf"
+      },
+      "addedOn": "2026-09-01T00:00:00Z",
+      "metadata": {
+        "bookId": 17,
+        "title": "Clear and Present Danger",
+        "authors": ["Tom Clancy"],
+        "goodreadsRating": 4,
+        "seriesName": " Jack Ryan",
+        "pageCount": 688,
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 70,
+      "readStatus": "RE_READING",
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1170,
+            "fileName": "clear-present.pdf",
+            "bookType": "PDF",
+            "extension": "pdf",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": {
+          "readStatus": "RE_READING"
+        },
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 18,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1180,
+        "bookId": 18,
+        "fileName": "debt-of-honor.azw3",
+        "filePath": "/fixture/books/debt-of-honor.azw3",
+        "folderBased": false,
+        "bookType": "AZW3",
+        "fileSizeKb": 1024,
+        "extension": "azw3"
+      },
+      "addedOn": "2024-02-29T00:00:00Z",
+      "metadata": {
+        "bookId": 18,
+        "title": "Debt of Honor",
+        "authors": ["Tom Clancy"],
+        "isbn13": "9780399139543",
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 70.5,
+      "readStatus": "WONT_READ",
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1180,
+            "fileName": "debt-of-honor.azw3",
+            "bookType": "AZW3",
+            "extension": "azw3",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": {
+          "readStatus": "WONT_READ"
+        },
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 19,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1190,
+        "bookId": 19,
+        "fileName": "executive-orders.epub",
+        "filePath": "/fixture/books/executive-orders.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-10-25T11:59:59Z",
+      "metadata": {
+        "bookId": 19,
+        "title": "Executive Orders",
+        "authors": ["Tom Clancy"],
+        "categories": ["thriller"],
+        "titleChangedByAutoFetch": true
+      },
+      "metadataMatchScore": 79.5,
+      "readStatus": "ABANDONED",
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1190,
+            "fileName": "executive-orders.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": {
+          "readStatus": "ABANDONED"
+        },
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 20,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1201,
+        "bookId": 20,
+        "fileName": "rainbow-six.cbz",
+        "filePath": "/fixture/comics/rainbow-six.cbz",
+        "folderBased": false,
+        "bookType": "CBX",
+        "fileSizeKb": 1024,
+        "extension": "cbz"
+      },
+      "addedOn": "2026-10-25T12:00:00Z",
+      "metadata": {
+        "bookId": 20,
+        "title": "Rainbow Six",
+        "authors": ["Tom Clancy"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 80.5,
+      "readStatus": "PARTIALLY_READ",
+      "shelves": [],
+      "alternativeFormats": [
+        {
+          "id": 1200,
+          "bookId": 20,
+          "fileName": "rainbow-six.epub",
+          "filePath": "/fixture/comics/rainbow-six.epub",
+          "folderBased": false,
+          "bookType": "EPUB",
+          "fileSizeKb": 1024,
+          "extension": "epub"
+        }
+      ],
+      "isPhysical": false,
+      "isComic": true,
+      "fixture": {
+        "files": [
+          {
+            "id": 1200,
+            "fileName": "rainbow-six.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          },
+          {
+            "id": 1201,
+            "fileName": "rainbow-six.cbz",
+            "bookType": "CBX",
+            "extension": "cbz",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": true,
+        "progress": {
+          "readStatus": "PARTIALLY_READ"
+        },
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 21,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1210,
+        "bookId": 21,
+        "fileName": "red-storm.epub",
+        "filePath": "/fixture/books/red-storm.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-10-14T11:59:59Z",
+      "metadata": {
+        "bookId": 21,
+        "title": "Red Storm Rising",
+        "authors": ["Tom Clancy", "Larry Bond"],
+        "categories": ["Fiction", "Thriller", "War"],
+        "moods": ["Tense", "dark"],
+        "tags": ["Favorites"],
+        "pageCount": 652,
+        "goodreadsRating": 4.5,
+        "hardcoverRating": 4,
+        "hardcoverReviewCount": 0,
+        "language": "en-US",
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 100,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1210,
+            "fileName": "red-storm.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 22,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1220,
+        "bookId": 22,
+        "fileName": "bear-dragon.cbz",
+        "filePath": "/fixture/comics/bear-dragon.cbz",
+        "folderBased": false,
+        "bookType": "CBX",
+        "fileSizeKb": 1024,
+        "extension": "cbz"
+      },
+      "addedOn": "2026-10-28T11:59:59Z",
+      "metadata": {
+        "bookId": 22,
+        "title": "Bear and the Dragon",
+        "authors": ["Tom Clancy"],
+        "titleChangedByAutoFetch": false
+      },
+      "readStatus": "UNREAD",
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": true,
+      "fixture": {
+        "files": [
+          {
+            "id": 1220,
+            "fileName": "bear-dragon.cbz",
+            "bookType": "CBX",
+            "extension": "cbz",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": true,
+        "progress": {
+          "readStatus": "UNREAD"
+        },
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 23,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1230,
+        "bookId": 23,
+        "fileName": "anthology-1.epub",
+        "filePath": "/fixture/books/anthology-1.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-10-20T00:00:00Z",
+      "metadata": {
+        "bookId": 23,
+        "title": "Anthology",
+        "authors": ["Various"],
+        "publisher": "PENGUIN BOOKS",
+        "language": "EN",
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 20,
+      "shelves": [],
+      "alternativeFormats": [
+        {
+          "id": 1231,
+          "bookId": 23,
+          "fileName": "anthology-2.epub",
+          "filePath": "/fixture/books/anthology-2.epub",
+          "folderBased": false,
+          "bookType": "EPUB",
+          "fileSizeKb": 1024,
+          "extension": "epub"
+        }
+      ],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1230,
+            "fileName": "anthology-1.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          },
+          {
+            "id": 1231,
+            "fileName": "anthology-2.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 24,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1240,
+        "bookId": 24,
+        "fileName": "watchmen.cbz",
+        "filePath": "/fixture/books/watchmen.cbz",
+        "folderBased": false,
+        "bookType": "CBX",
+        "fileSizeKb": 1024,
+        "extension": "cbz"
+      },
+      "addedOn": "2026-10-14T12:00:00Z",
+      "metadata": {
+        "bookId": 24,
+        "title": "Watchmen",
+        "authors": ["Alan Moore", "Dave Gibbons"],
+        "categories": ["Comics"],
+        "tags": ["graphic novel"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 30,
+      "shelves": [],
+      "fixture": {
+        "files": [
+          {
+            "id": 1240,
+            "fileName": "watchmen.cbz",
+            "bookType": "CBX",
+            "extension": "cbz",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": null,
+        "isComic": null,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 25,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1250,
+        "bookId": 25,
+        "fileName": "audio-text.epub",
+        "filePath": "/fixture/comics/audio-text.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-10-29T08:00:00Z",
+      "metadata": {
+        "bookId": 25,
+        "title": "Audio and Text",
+        "authors": ["Narrated Author"],
+        "narrator": "Jim Dale",
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 45,
+      "shelves": [],
+      "alternativeFormats": [
+        {
+          "id": 1251,
+          "bookId": 25,
+          "fileName": "audio-text.m4a",
+          "filePath": "/fixture/comics/audio-text.m4a",
+          "folderBased": false,
+          "bookType": "AUDIOBOOK",
+          "fileSizeKb": 1024,
+          "extension": "m4a"
+        }
+      ],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1250,
+            "fileName": "audio-text.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          },
+          {
+            "id": 1251,
+            "fileName": "audio-text.m4a",
+            "bookType": "AUDIOBOOK",
+            "extension": "m4a",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 26,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1261,
+        "bookId": 26,
+        "fileName": "supplement-first.m4b",
+        "filePath": "/fixture/comics/supplement-first.m4b",
+        "folderBased": false,
+        "bookType": "AUDIOBOOK",
+        "fileSizeKb": 1024,
+        "extension": "m4b"
+      },
+      "addedOn": "2026-10-25T11:59:59Z",
+      "metadata": {
+        "bookId": 26,
+        "title": "Supplement First",
+        "authors": ["Someone"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 55,
+      "shelves": [],
+      "supplementaryFiles": [
+        {
+          "id": 1260,
+          "bookId": 26,
+          "fileName": "supplement.pdf",
+          "filePath": "/fixture/comics/supplement.pdf",
+          "folderBased": false,
+          "bookType": "PDF",
+          "fileSizeKb": 1024,
+          "extension": "pdf"
+        }
+      ],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1260,
+            "fileName": "supplement.pdf",
+            "bookType": "PDF",
+            "extension": "pdf",
+            "isBookFormat": false,
+            "fileSizeKb": 1024
+          },
+          {
+            "id": 1261,
+            "fileName": "supplement-first.m4b",
+            "bookType": "AUDIOBOOK",
+            "extension": "m4b",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 27,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1270,
+        "bookId": 27,
+        "fileName": "fb-two.fb2",
+        "filePath": "/fixture/books/fb-two.fb2",
+        "folderBased": false,
+        "bookType": "FB2",
+        "fileSizeKb": 1024,
+        "extension": "fb2"
+      },
+      "addedOn": "2026-09-01T00:00:00Z",
+      "metadata": {
+        "bookId": 27,
+        "title": "Fb Two",
+        "language": "ru",
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 65,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1270,
+            "fileName": "fb-two.fb2",
+            "bookType": "FB2",
+            "extension": "fb2",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 28,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "addedOn": "2026-10-25T12:00:00Z",
+      "metadata": {
+        "bookId": 28,
+        "title": "Fileless Wonder",
+        "authors": ["Ghost Writer"],
+        "tags": ["File Not Found"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 75,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 29,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "addedOn": "2026-10-28T12:00:00Z",
+      "metadata": {
+        "bookId": 29,
+        "title": "Missing Comic",
+        "tags": ["File Not Found"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 5,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": true,
+      "fixture": {
+        "files": [],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": true,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 30,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1300,
+        "bookId": 30,
+        "fileName": "unknown.epub",
+        "filePath": "/fixture/books/unknown.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2024-02-29T00:00:00Z",
+      "metadata": {
+        "bookId": 30,
+        "title": "Unknown",
+        "authors": ["Unknown Author", "unknown"],
+        "publisher": "",
+        "language": "",
+        "pageCount": 0,
+        "amazonReviewCount": 0,
+        "isbn13": "978-0-00-000000-2",
+        "tags": ["Not Found"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 85,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1300,
+            "fileName": "unknown.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 31,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1310,
+        "bookId": 31,
+        "fileName": "aardvark.pdf",
+        "filePath": "/fixture/books/aardvark.pdf",
+        "folderBased": false,
+        "bookType": "PDF",
+        "fileSizeKb": 1024,
+        "extension": "pdf"
+      },
+      "addedOn": "2026-10-28T11:59:59Z",
+      "metadata": {
+        "bookId": 31,
+        "title": "Aardvark Adventures",
+        "authors": ["Ann Author"],
+        "isbn10": "X",
+        "hardcoverRating": 3.25,
+        "hardcoverReviewCount": 3,
+        "ranobedbRating": 2.5,
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 15,
+      "readStatus": "READ",
+      "shelves": [],
+      "isPhysical": true,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1310,
+            "fileName": "aardvark.pdf",
+            "bookType": "PDF",
+            "extension": "pdf",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": true,
+        "isComic": false,
+        "progress": {
+          "readStatus": "READ"
+        },
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 32,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1320,
+        "bookId": 32,
+        "fileName": "zebra.cbz",
+        "filePath": "/fixture/comics/zebra.cbz",
+        "folderBased": false,
+        "bookType": "CBX",
+        "fileSizeKb": 1024,
+        "extension": "cbz"
+      },
+      "addedOn": "2026-10-20T00:00:00Z",
+      "metadata": {
+        "bookId": 32,
+        "title": "Zebra Comics",
+        "authors": ["Zed"],
+        "language": "en",
+        "seriesName": "Zebra",
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 35,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1320,
+            "fileName": "zebra.cbz",
+            "bookType": "CBX",
+            "extension": "cbz",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 33,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1330,
+        "bookId": 33,
+        "fileName": "op-center.epub",
+        "filePath": "/fixture/books/op-center.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-10-14T12:00:00Z",
+      "metadata": {
+        "bookId": 33,
+        "title": "Tom Clancy's Op-Center",
+        "authors": ["Tom Clancy", "Steve Pieczenik"],
+        "seriesName": "Op-Center",
+        "publisher": "Berkley",
+        "isbn13": "9780425143247",
+        "amazonRating": 3.5,
+        "amazonReviewCount": 1200,
+        "goodreadsReviewCount": 15,
+        "categories": ["Thriller"],
+        "moods": ["Dark"],
+        "pageCount": 1,
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 90,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1330,
+            "fileName": "op-center.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 34,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1340,
+        "bookId": 34,
+        "fileName": "lone.epub",
+        "filePath": "/fixture/books/lone.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "metadata": {
+        "bookId": 34,
+        "title": "Lone Title",
+        "titleChangedByAutoFetch": false
+      },
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1340,
+            "fileName": "lone.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 35,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1350,
+        "bookId": 35,
+        "fileName": "anthem.cbz",
+        "filePath": "/fixture/comics/anthem.cbz",
+        "folderBased": false,
+        "bookType": "CBX",
+        "fileSizeKb": 1024,
+        "extension": "cbz"
+      },
+      "addedOn": "2026-10-25T11:59:59Z",
+      "metadata": {
+        "bookId": 35,
+        "title": "anthem",
+        "authors": ["Ayn Rand"],
+        "titleChangedByAutoFetch": true
+      },
+      "metadataMatchScore": 25,
+      "readStatus": "READ",
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": true,
+      "fixture": {
+        "files": [
+          {
+            "id": 1350,
+            "fileName": "anthem.cbz",
+            "bookType": "CBX",
+            "extension": "cbz",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": true,
+        "progress": {
+          "readStatus": "READ"
+        },
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 36,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1360,
+        "bookId": 36,
+        "fileName": "opus-audio.opus",
+        "filePath": "/fixture/books/opus-audio.opus",
+        "folderBased": false,
+        "bookType": "AUDIOBOOK",
+        "fileSizeKb": 1024,
+        "extension": "opus"
+      },
+      "addedOn": "2026-10-29T08:00:00Z",
+      "metadata": {
+        "bookId": 36,
+        "title": "Opus Audio",
+        "authors": ["unknown"],
+        "narrator": "Unknown Narrator",
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 12,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1360,
+            "fileName": "opus-audio.opus",
+            "bookType": "AUDIOBOOK",
+            "extension": "opus",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 37,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1370,
+        "bookId": 37,
+        "fileName": "unknown-soldier.epub",
+        "filePath": "/fixture/books/unknown-soldier.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-09-01T00:00:00Z",
+      "metadata": {
+        "bookId": 37,
+        "title": "Unknown Soldier",
+        "authors": ["Unknown"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 48,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1370,
+            "fileName": "unknown-soldier.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 38,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1380,
+        "bookId": 38,
+        "fileName": "unknown-comic.cbz",
+        "filePath": "/fixture/comics/unknown-comic.cbz",
+        "folderBased": false,
+        "bookType": "CBX",
+        "fileSizeKb": 1024,
+        "extension": "cbz"
+      },
+      "addedOn": "2026-10-25T12:00:00Z",
+      "metadata": {
+        "bookId": 38,
+        "title": "Unknown Comic",
+        "authors": ["unknown"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 30,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": true,
+      "fixture": {
+        "files": [
+          {
+            "id": 1380,
+            "fileName": "unknown-comic.cbz",
+            "bookType": "CBX",
+            "extension": "cbz",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": true,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 39,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "addedOn": "2026-10-20T00:00:00Z",
+      "metadata": {
+        "bookId": 39,
+        "title": "No File Unknown",
+        "authors": ["UnKnOwN"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 20,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 40,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1400,
+        "bookId": 40,
+        "fileName": "uenknown.pdf",
+        "filePath": "/fixture/comics/uenknown.pdf",
+        "folderBased": false,
+        "bookType": "PDF",
+        "fileSizeKb": 1024,
+        "extension": "pdf"
+      },
+      "addedOn": "2026-10-14T11:59:59Z",
+      "metadata": {
+        "bookId": 40,
+        "title": "Ünknown Accents",
+        "authors": ["Ünknown"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 49.5,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1400,
+            "fileName": "uenknown.pdf",
+            "bookType": "PDF",
+            "extension": "pdf",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 41,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1410,
+        "bookId": 41,
+        "fileName": "no-metadata.cbz",
+        "filePath": "/fixture/comics/no-metadata.cbz",
+        "folderBased": false,
+        "bookType": "CBX",
+        "fileSizeKb": 1024,
+        "extension": "cbz"
+      },
+      "addedOn": "2026-10-25T12:00:00Z",
+      "metadataMatchScore": 50,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": true,
+      "fixture": {
+        "files": [
+          {
+            "id": 1410,
+            "fileName": "no-metadata.cbz",
+            "bookType": "CBX",
+            "extension": "cbz",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": false,
+        "isPhysical": false,
+        "isComic": true,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    }
+  ],
+  "deletedBooks": [
+    {
+      "id": 42,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1420,
+        "bookId": 42,
+        "fileName": "deleted.epub",
+        "filePath": "/fixture/books/deleted.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-10-28T12:00:00Z",
+      "metadata": {
+        "bookId": 42,
+        "title": "A Deleted Unknown",
+        "authors": ["unknown"],
+        "tags": ["File Not Found"],
+        "titleChangedByAutoFetch": true
+      },
+      "metadataMatchScore": 5,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1420,
+            "fileName": "deleted.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    }
+  ]
+}

@@ -47,8 +47,7 @@ export class BookFileService {
     const deleteUrl = `${this.url}/${bookId}/files/${fileId}`;
     return this.http.delete<void>(deleteUrl).pipe(
       tap(() => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        const updatedBooks = (currentState.books || []).map(book => {
+        this.bookStateService.patchBooks(books => books.map(book => {
           if (book.id === bookId) {
             return {
               ...book,
@@ -57,12 +56,7 @@ export class BookFileService {
             };
           }
           return book;
-        });
-
-        this.bookStateService.updateBookState({
-          ...currentState,
-          books: updatedBooks
-        });
+        }));
 
         this.messageService.add({
           severity: 'success',
@@ -85,8 +79,7 @@ export class BookFileService {
     const deleteUrl = `${this.url}/${bookId}/files/${fileId}`;
     return this.http.delete<void>(deleteUrl).pipe(
       tap(() => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        const updatedBooks = (currentState.books || []).map(book => {
+        this.bookStateService.patchBooks(books => books.map(book => {
           if (book.id === bookId) {
             if (isPrimary) {
               const remainingAlternatives = book.alternativeFormats?.filter(file => file.id !== fileId) || [];
@@ -112,12 +105,7 @@ export class BookFileService {
             }
           }
           return book;
-        });
-
-        this.bookStateService.updateBookState({
-          ...currentState,
-          books: updatedBooks
-        });
+        }));
 
         this.messageService.add({
           severity: 'success',
@@ -163,8 +151,7 @@ export class BookFileService {
     }
     return this.http.post<AdditionalFile>(`${this.url}/${bookId}/files`, formData).pipe(
       tap((newFile) => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        const updatedBooks = (currentState.books || []).map(book => {
+        this.bookStateService.patchBooks(books => books.map(book => {
           if (book.id === bookId) {
             const updatedBook = {...book};
             if (fileType === AdditionalFileType.ALTERNATIVE_FORMAT) {
@@ -175,12 +162,7 @@ export class BookFileService {
             return updatedBook;
           }
           return book;
-        });
-
-        this.bookStateService.updateBookState({
-          ...currentState,
-          books: updatedBooks
-        });
+        }));
 
         this.messageService.add({
           severity: 'success',
@@ -211,16 +193,10 @@ export class BookFileService {
   detachBookFile(bookId: number, fileId: number, copyMetadata: boolean): Observable<DetachBookFileResponse> {
     return this.http.post<DetachBookFileResponse>(`${this.url}/${bookId}/files/${fileId}/detach`, { copyMetadata }).pipe(
       tap(response => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        let updatedBooks = (currentState.books || []).map(book =>
-          book.id === bookId ? response.sourceBook : book
-        );
-        updatedBooks = [...updatedBooks, response.newBook];
-
-        this.bookStateService.updateBookState({
-          ...currentState,
-          books: updatedBooks
-        });
+        this.bookStateService.patchBooks(books => [
+          ...books.map(book => book.id === bookId ? response.sourceBook : book),
+          response.newBook
+        ]);
 
         this.messageService.add({
           severity: 'success',
@@ -249,16 +225,10 @@ export class BookFileService {
       moveFiles
     }).pipe(
       tap(response => {
-        const currentState = this.bookStateService.getCurrentBookState();
-        const deletedIdSet = new Set(response.deletedSourceBookIds);
-        let updatedBooks = (currentState.books || []).map(book =>
+        this.bookStateService.patchBooks(books => books.map(book =>
           book.id === targetBookId ? response.updatedBook : book
-        ).filter(book => !deletedIdSet.has(book.id));
-
-        this.bookStateService.updateBookState({
-          ...currentState,
-          books: updatedBooks
-        });
+        ));
+        this.bookStateService.removeBooks(response.deletedSourceBookIds ?? []);
 
         const fileCount = sourceBookIds.length;
         this.messageService.add({

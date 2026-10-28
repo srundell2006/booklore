@@ -139,26 +139,15 @@ public interface BookMapperV2 {
     default BookFileEntity getPrimaryBookFile(List<BookFileEntity> bookFiles) {
         if (bookFiles == null || bookFiles.isEmpty()) return null;
 
-        List<BookFileEntity> bookFormats = bookFiles.stream()
+        BookFileEntity firstBook = bookFiles.stream()
                 .filter(BookFileEntity::isBook)
-                .toList();
+                .findFirst()
+                .orElse(null);
+        if (firstBook == null) return null;
 
-        if (bookFormats.isEmpty()) return null;
-
-        BookFileEntity firstBook = bookFormats.getFirst();
         LibraryEntity library = firstBook.getBook() != null ? firstBook.getBook().getLibrary() : null;
-
-        if (library != null && library.getFormatPriority() != null && !library.getFormatPriority().isEmpty()) {
-            for (BookFileType format : library.getFormatPriority()) {
-                var match = bookFormats.stream()
-                        .filter(bf -> bf.getBookType() == format)
-                        .findFirst();
-                if (match.isPresent()) {
-                    return match.get();
-                }
-            }
-        }
-        return firstBook;
+        return PrimaryBookFile.select(bookFiles, library != null ? library.getFormatPriority() : null,
+                BookFileEntity::isBook, BookFileEntity::getBookType);
     }
 
     default BookFile toBookFile(BookFileEntity entity) {

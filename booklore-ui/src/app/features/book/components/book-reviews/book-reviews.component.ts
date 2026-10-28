@@ -11,7 +11,6 @@ import {TranslocoDirective, TranslocoService} from '@jsverse/transloco';
 import {UserService} from '../../../settings/user-management/user.service';
 import {FormsModule} from '@angular/forms';
 import {Tooltip} from 'primeng/tooltip';
-import {BookService} from '../../service/book.service';
 import {BookMetadataManageService} from '../../service/book-metadata-manage.service';
 import {AppSettingsService} from '../../../../shared/service/app-settings.service';
 
@@ -26,9 +25,10 @@ export class BookReviewsComponent implements OnInit, OnChanges {
   @Input() bookId!: number;
   @Input() reviews: BookReview[] | undefined = [];
   @Input() active: boolean = false;
+  /** From the book the detail page fetched; the list's copy of a book does not carry it. */
+  @Input() reviewsLocked = false;
 
   private reviewService = inject(BookReviewService);
-  private bookService = inject(BookService);
   private bookMetadataManageService = inject(BookMetadataManageService);
   private confirmationService = inject(ConfirmationService);
   private messageService = inject(MessageService);
@@ -41,13 +41,11 @@ export class BookReviewsComponent implements OnInit, OnChanges {
   hasPermission = false;
   revealedSpoilers = new Set<number>();
   sortAscending = false;
-  reviewsLocked = false;
   allSpoilersRevealed = false;
   reviewDownloadEnabled = true;
 
   ngOnInit(): void {
     this.checkUserPermissions();
-    this.subscribeToBookState();
     this.subscribeToAppSettings();
   }
 
@@ -55,17 +53,6 @@ export class BookReviewsComponent implements OnInit, OnChanges {
     if (changes['bookId'] && changes['bookId'].currentValue) {
       this.loadReviews();
     }
-  }
-
-  private subscribeToBookState(): void {
-    this.bookService.bookState$
-      .pipe(takeUntilDestroyed(this.destroyRef))
-      .subscribe(state => {
-        if (state.books && this.bookId) {
-          const book = state.books.find(b => b.id === this.bookId);
-          this.reviewsLocked = book?.metadata?.reviewsLocked ?? false;
-        }
-      });
   }
 
   private loadReviews(): void {
@@ -204,6 +191,7 @@ export class BookReviewsComponent implements OnInit, OnChanges {
       .pipe(takeUntilDestroyed(this.destroyRef))
       .subscribe({
         next: () => {
+          this.reviewsLocked = newLockState;
           this.messageService.add({
             severity: 'info',
             summary: this.t.translate(newLockState ? 'book.reviews.toast.lockedSummary' : 'book.reviews.toast.unlockedSummary'),

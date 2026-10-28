@@ -8,6 +8,7 @@ import {LibraryState} from '../model/state/library-state.model';
 import {BookService} from './book.service';
 import {API_CONFIG} from '../../../core/config/api-config';
 import {AuthService} from '../../../shared/service/auth.service';
+import {CatalogCountsService} from './catalog-counts.service';
 
 @Injectable({providedIn: 'root'})
 export class LibraryService {
@@ -15,6 +16,7 @@ export class LibraryService {
   private http = inject(HttpClient);
   private bookService = inject(BookService);
   private authService = inject(AuthService);
+  private catalogCountsService = inject(CatalogCountsService);
 
   private libraryStateSubject = new BehaviorSubject<LibraryState>({
     libraries: null,
@@ -162,9 +164,13 @@ export class LibraryService {
     return this.libraryStateSubject.value.libraries || [];
   }
 
-  getBookCount(libraryId: number): Observable<number> {
-    return this.bookService.bookState$.pipe(
-      map(state => (state.books || []).filter(b => b.libraryId === libraryId).length)
+  /** Null while the count loads. */
+  getBookCount(libraryId: number): Observable<number | null> {
+    return this.catalogCountsService.view$(
+      counts => counts.libraries[libraryId] ?? 0,
+      () => this.bookService.bookState$.pipe(
+        map(state => (state.books || []).filter(b => b.libraryId === libraryId).length)
+      )
     );
   }
 

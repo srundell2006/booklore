@@ -181,10 +181,17 @@ export class AppMenuitemComponent implements OnInit, OnDestroy {
     }
   }
 
+  /** Blank while the count loads. */
   formatCount(count: number | null | undefined): string {
-    if (count == null) return '0';
+    if (count == null) return '';
     if (count >= 1000) return Math.floor(count / 1000) + 'K';
     return count.toString();
+  }
+
+  /** A count that cannot be shown yet reads "–", with the reason in a tooltip. */
+  countLabel(count: number | null | undefined, hint: string | null | undefined): string {
+    if (hint) return '\u2013';
+    return count?.toString() || '';
   }
 
   getIconSelection(): IconSelection | null {
