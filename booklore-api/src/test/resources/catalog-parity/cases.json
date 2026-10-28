@@ -1,98 +1,72 @@
 [
   {
-    "name": "prod-01 metadataScore less_than 10",
+    "name": "prod-1",
     "production": true,
-    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"less_than\",\"value\":10}]}",
+    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"less_than\",\"value\":50},{\"type\":\"group\",\"join\":\"or\",\"rules\":[{\"field\":\"isbn13\",\"operator\":\"is_not_empty\"},{\"field\":\"isbn10\",\"operator\":\"is_not_empty\"}]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [5, 12, 29],
+    "expect": [6, 31, 49, 52, 57],
     "required": true
   },
   {
-    "name": "prod-02 fileType excludes_all comic and audio extensions AND metadataScore less_than 50 AND authors equals unknown",
+    "name": "prod-2",
     "production": true,
-    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"fileType\",\"operator\":\"excludes_all\",\"value\":[\"cbr\",\"cbz\",\"cb7\",\"opus\",\"mp3\",\"m4a\",\"m4b\"]},{\"field\":\"metadataScore\",\"operator\":\"less_than\",\"value\":50},{\"field\":\"authors\",\"operator\":\"equals\",\"value\":\"unknown\"}]}",
+    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"less_than\",\"value\":50},{\"field\":\"authors\",\"operator\":\"equals\",\"value\":\"unknown\"},{\"field\":\"fileType\",\"operator\":\"excludes_all\",\"value\":[\"cbr\",\"cbz\",\"cb7\",\"opus\",\"mp3\",\"m4a\",\"m4b\"]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 36, 37, 39],
+    "expect": [2, 36, 37, 39, 60],
     "required": true,
     "collationSensitive": true
   },
   {
-    "name": "prod-03 metadataScore less_than_equal_to 40",
-    "production": true,
-    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"less_than_equal_to\",\"value\":40}]}",
-    "now": "2026-10-28T12:00:00Z",
-    "expect": [5, 6, 7, 8, 9, 12, 23, 24, 29, 31, 32, 35, 36, 38, 39],
-    "required": true
-  },
-  {
-    "name": "prod-04 metadataScore greater_than 80",
-    "production": true,
-    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"greater_than\",\"value\":80}]}",
-    "now": "2026-10-28T12:00:00Z",
-    "expect": [20, 21, 30, 33],
-    "required": true
-  },
-  {
-    "name": "prod-05 metadataScore greater_than 60 AND less_than 70",
-    "production": true,
-    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"greater_than\",\"value\":60},{\"field\":\"metadataScore\",\"operator\":\"less_than\",\"value\":70}]}",
-    "now": "2026-10-28T12:00:00Z",
-    "expect": [15, 16, 27],
-    "required": true
-  },
-  {
-    "name": "prod-06 isbn13 is_empty AND isbn10 is_empty",
-    "production": true,
-    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isbn13\",\"operator\":\"is_empty\"},{\"field\":\"isbn10\",\"operator\":\"is_empty\"}]}",
-    "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 16, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 32, 34, 35, 36, 37, 38, 39, 40, 41],
-    "required": true
-  },
-  {
-    "name": "prod-07 isbn13 is_not_empty OR isbn10 is_not_empty",
-    "production": true,
-    "filterJson": "{\"type\":\"group\",\"join\":\"or\",\"rules\":[{\"field\":\"isbn13\",\"operator\":\"is_not_empty\"},{\"field\":\"isbn10\",\"operator\":\"is_not_empty\"}]}",
-    "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 6, 13, 14, 15, 18, 30, 31, 33],
-    "required": true
-  },
-  {
-    "name": "prod-08 authors equals Tom Clancy",
-    "production": true,
-    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"authors\",\"operator\":\"equals\",\"value\":\"Tom Clancy\"}]}",
-    "now": "2026-10-28T12:00:00Z",
-    "expect": [6, 7, 14, 15, 16, 17, 18, 19, 20, 21, 22, 33],
-    "required": true,
-    "collationSensitive": true
-  },
-  {
-    "name": "prod-09 authors equals unknown OR Unknown Author OR is_empty",
-    "production": true,
-    "filterJson": "{\"type\":\"group\",\"join\":\"or\",\"rules\":[{\"field\":\"authors\",\"operator\":\"equals\",\"value\":\"unknown\"},{\"field\":\"authors\",\"operator\":\"equals\",\"value\":\"Unknown Author\"},{\"field\":\"authors\",\"operator\":\"is_empty\"}]}",
-    "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 10, 11, 12, 13, 16, 27, 29, 30, 34, 36, 37, 38, 39, 41],
-    "required": true,
-    "collationSensitive": true
-  },
-  {
-    "name": "prod-10 titleChangedByAutoFetch equals true",
+    "name": "prod-3",
     "production": true,
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"titleChangedByAutoFetch\",\"operator\":\"equals\",\"value\":\"true\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [6, 7, 10, 19, 35],
+    "expect": [6, 7, 10, 19, 35, 50],
     "required": true
   },
   {
-    "name": "prod-11 title starts_with A",
+    "name": "prod-4",
     "production": true,
-    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"title\",\"operator\":\"starts_with\",\"value\":\"A\"}]}",
+    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"less_than_equal_to\",\"value\":10},{\"field\":\"title\",\"operator\":\"starts_with\",\"value\":\"A\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 23, 25, 31, 35],
+    "expect": [49, 50],
+    "required": true
+  },
+  {
+    "name": "prod-5",
+    "production": true,
+    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"less_than\",\"value\":40}]}",
+    "now": "2026-10-28T12:00:00Z",
+    "expect": [5, 6, 7, 8, 12, 23, 24, 29, 31, 32, 35, 36, 38, 39, 49, 50, 51, 55, 61],
+    "required": true
+  },
+  {
+    "name": "prod-6",
+    "production": true,
+    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isbn13\",\"operator\":\"is_empty\"},{\"field\":\"isbn10\",\"operator\":\"is_empty\"},{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isComic\",\"operator\":\"not_equals\",\"value\":\"true\"}]}]}",
+    "now": "2026-10-28T12:00:00Z",
+    "expect": [2, 4, 5, 7, 8, 9, 10, 11, 17, 19, 21, 23, 24, 25, 26, 27, 28, 32, 34, 36, 37, 39, 40, 43, 44, 45, 46, 47, 48, 51, 54, 55, 56, 58, 59, 60],
+    "required": true
+  },
+  {
+    "name": "prod-7",
+    "production": true,
+    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isbn13\",\"operator\":\"is_empty\"},{\"field\":\"isbn10\",\"operator\":\"is_empty\"},{\"field\":\"authors\",\"operator\":\"equals\",\"value\":\"Tom Clancy\"}]}",
+    "now": "2026-10-28T12:00:00Z",
+    "expect": [7, 16, 17, 19, 20, 21, 22, 45, 56],
     "required": true,
     "collationSensitive": true
   },
   {
-    "name": "prod-12 title equals Child Love",
+    "name": "prod-8",
+    "production": true,
+    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"greater_than\",\"value\":60},{\"field\":\"goodreadsRating\",\"operator\":\"is_empty\"}]}",
+    "now": "2026-10-28T12:00:00Z",
+    "expect": [15, 18, 19, 20, 27, 28, 30, 33, 47, 58, 59],
+    "required": true
+  },
+  {
+    "name": "prod-9",
     "production": true,
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"title\",\"operator\":\"equals\",\"value\":\"Child Love\"}]}",
     "now": "2026-10-28T12:00:00Z",
@@ -101,65 +75,97 @@
     "collationSensitive": true
   },
   {
-    "name": "prod-13 isComic not_equals true AND goodreadsRating is_empty",
+    "name": "prod-10",
     "production": true,
-    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isComic\",\"operator\":\"not_equals\",\"value\":\"true\"},{\"field\":\"goodreadsRating\",\"operator\":\"is_empty\"}]}",
+    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"less_than\",\"value\":70},{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isbn10\",\"operator\":\"is_empty\"},{\"field\":\"isbn13\",\"operator\":\"is_empty\"}]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 4, 5, 6, 7, 8, 9, 10, 11, 14, 15, 18, 19, 23, 24, 25, 26, 27, 28, 30, 31, 32, 33, 34, 36, 37, 39, 40],
+    "expect": [2, 3, 4, 5, 7, 8, 9, 10, 12, 16, 23, 24, 25, 26, 27, 29, 32, 35, 36, 37, 38, 39, 40, 41, 43, 44, 46, 47, 48, 50, 51, 54, 55, 56, 60, 61],
     "required": true
   },
   {
-    "name": "prod-14 addedOn within_last 14 days",
+    "name": "prod-11",
     "production": true,
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"within_last\",\"value\":14,\"valueEnd\":\"days\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 19, 20, 22, 23, 24, 25, 26, 28, 29, 31, 32, 33, 35, 36, 38, 39, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 19, 20, 22, 23, 24, 25, 26, 28, 29, 31, 32, 33, 35, 36, 38, 39, 41, 44, 45, 47, 48, 58, 59, 60, 61],
     "required": true
   },
   {
-    "name": "prod-15 addedOn within_last 3 days AND library equals 3",
+    "name": "prod-12",
     "production": true,
-    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"within_last\",\"value\":3,\"valueEnd\":\"days\"},{\"field\":\"library\",\"operator\":\"equals\",\"value\":3}]}",
+    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"within_last\",\"value\":3,\"valueEnd\":\"days\"},{\"field\":\"metadataScore\",\"operator\":\"less_than_equal_to\",\"value\":70}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [7, 12, 15, 16, 20, 22, 25, 29, 38, 41],
+    "expect": [2, 7, 9, 12, 15, 16, 25, 29, 31, 36, 38, 41, 58],
     "required": true
   },
   {
-    "name": "prod-16 tags includes_any File Not Found",
+    "name": "prod-13",
     "production": true,
-    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"tags\",\"operator\":\"includes_any\",\"value\":[\"File Not Found\"]}]}",
+    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"greater_than\",\"value\":80}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [3, 7, 9, 28, 29],
+    "expect": [20, 21, 30, 33],
+    "required": true
+  },
+  {
+    "name": "prod-14",
+    "production": true,
+    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"less_than\",\"value\":60},{\"field\":\"library\",\"operator\":\"equals\",\"value\":3}]}",
+    "now": "2026-10-28T12:00:00Z",
+    "expect": [3, 7, 12, 25, 26, 29, 32, 35, 38, 40, 41, 43, 50, 52, 56, 60, 61],
+    "required": true
+  },
+  {
+    "name": "prod-15",
+    "production": true,
+    "filterJson": "{\"type\":\"group\",\"join\":\"or\",\"rules\":[{\"field\":\"authors\",\"operator\":\"is_empty\"},{\"field\":\"authors\",\"operator\":\"equals\",\"value\":\"Unknown Author\"}]}",
+    "now": "2026-10-28T12:00:00Z",
+    "expect": [10, 11, 12, 13, 27, 29, 30, 34, 41, 47, 52, 54],
     "required": true,
     "collationSensitive": true
   },
   {
-    "name": "prod-17 library equals 3 AND (metadataScore less_than 50 OR (isbn13 is_empty AND isComic not_equals true))",
+    "name": "prod-19",
     "production": true,
-    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"library\",\"operator\":\"equals\",\"value\":3},{\"type\":\"group\",\"join\":\"or\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"less_than\",\"value\":50},{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isbn13\",\"operator\":\"is_empty\"},{\"field\":\"isComic\",\"operator\":\"not_equals\",\"value\":\"true\"}]}]}]}",
+    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"authors\",\"operator\":\"is_empty\"},{\"type\":\"group\",\"join\":\"or\",\"rules\":[{\"field\":\"isbn13\",\"operator\":\"is_not_empty\"},{\"field\":\"isbn10\",\"operator\":\"is_not_empty\"}]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [7, 12, 15, 25, 26, 29, 32, 35, 38, 40],
+    "expect": [13, 52],
     "required": true
+  },
+  {
+    "name": "prod-20",
+    "production": true,
+    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"tags\",\"operator\":\"includes_any\",\"value\":[\"File Not Found\"]}]}",
+    "now": "2026-10-28T12:00:00Z",
+    "expect": [3, 7, 9, 28, 29, 45],
+    "required": true,
+    "collationSensitive": true
   },
   {
     "name": "time: addedOn within_last 14 days, now + 1 day",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"within_last\",\"value\":14,\"valueEnd\":\"days\"}]}",
     "now": "2026-10-29T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 7, 9, 12, 13, 15, 16, 19, 20, 22, 23, 25, 26, 28, 29, 31, 32, 35, 36, 38, 39, 41],
+    "expect": [1, 2, 3, 4, 5, 7, 9, 12, 13, 15, 16, 19, 20, 22, 23, 25, 26, 28, 29, 31, 32, 35, 36, 38, 39, 41, 44, 45, 47, 48, 58, 59, 60, 61],
     "required": true
   },
   {
     "name": "time: addedOn within_last 3 days AND library equals 3, now + 1 day",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"within_last\",\"value\":3,\"valueEnd\":\"days\"},{\"field\":\"library\",\"operator\":\"equals\",\"value\":3}]}",
     "now": "2026-10-29T12:00:00Z",
-    "expect": [7, 12, 16, 22, 25, 29],
+    "expect": [7, 12, 16, 22, 25, 29, 59],
+    "required": true
+  },
+  {
+    "name": "time: prod-12 (addedOn within_last 3 days AND metadataScore less_than_equal_to 70), now + 1 day",
+    "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"within_last\",\"value\":3,\"valueEnd\":\"days\"},{\"field\":\"metadataScore\",\"operator\":\"less_than_equal_to\",\"value\":70}]}",
+    "now": "2026-10-29T12:00:00Z",
+    "expect": [7, 9, 12, 16, 25, 29, 31, 36],
     "required": true
   },
   {
     "name": "group: empty AND root is true for every book",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": true
   },
   {
@@ -173,28 +179,28 @@
     "name": "group: OR root",
     "filterJson": "{\"type\":\"group\",\"join\":\"or\",\"rules\":[{\"field\":\"library\",\"operator\":\"equals\",\"value\":3},{\"field\":\"metadataScore\",\"operator\":\"greater_than\",\"value\":80}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [3, 7, 12, 15, 16, 20, 21, 22, 25, 26, 29, 30, 32, 33, 35, 38, 40, 41],
+    "expect": [3, 7, 12, 15, 16, 20, 21, 22, 25, 26, 29, 30, 32, 33, 35, 38, 40, 41, 43, 44, 45, 50, 52, 56, 59, 60, 61],
     "required": true
   },
   {
     "name": "group: join \"AND\" (not exactly \"and\") is OR",
     "filterJson": "{\"type\":\"group\",\"join\":\"AND\",\"rules\":[{\"field\":\"library\",\"operator\":\"equals\",\"value\":3},{\"field\":\"metadataScore\",\"operator\":\"greater_than\",\"value\":80}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [3, 7, 12, 15, 16, 20, 21, 22, 25, 26, 29, 30, 32, 33, 35, 38, 40, 41],
+    "expect": [3, 7, 12, 15, 16, 20, 21, 22, 25, 26, 29, 30, 32, 33, 35, 38, 40, 41, 43, 44, 45, 50, 52, 56, 59, 60, 61],
     "required": true
   },
   {
     "name": "group: missing join is OR",
     "filterJson": "{\"type\":\"group\",\"rules\":[{\"field\":\"library\",\"operator\":\"equals\",\"value\":3},{\"field\":\"metadataScore\",\"operator\":\"greater_than\",\"value\":80}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [3, 7, 12, 15, 16, 20, 21, 22, 25, 26, 29, 30, 32, 33, 35, 38, 40, 41],
+    "expect": [3, 7, 12, 15, 16, 20, 21, 22, 25, 26, 29, 30, 32, 33, 35, 38, 40, 41, 43, 44, 45, 50, 52, 56, 59, 60, 61],
     "required": true
   },
   {
     "name": "group: nested empty AND inside OR is true",
     "filterJson": "{\"type\":\"group\",\"join\":\"or\",\"rules\":[{\"type\":\"group\",\"join\":\"and\",\"rules\":[]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": true
   },
   {
@@ -208,14 +214,14 @@
     "name": "group: nested empty AND inside AND is neutral",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"library\",\"operator\":\"equals\",\"value\":3},{\"type\":\"group\",\"join\":\"and\",\"rules\":[]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [3, 7, 12, 15, 16, 20, 22, 25, 26, 29, 32, 35, 38, 40, 41],
+    "expect": [3, 7, 12, 15, 16, 20, 22, 25, 26, 29, 32, 35, 38, 40, 41, 43, 44, 45, 50, 52, 56, 59, 60, 61],
     "required": true
   },
   {
     "name": "group: nested empty OR inside OR is neutral",
     "filterJson": "{\"type\":\"group\",\"join\":\"or\",\"rules\":[{\"field\":\"library\",\"operator\":\"equals\",\"value\":3},{\"type\":\"group\",\"join\":\"or\",\"rules\":[]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [3, 7, 12, 15, 16, 20, 22, 25, 26, 29, 32, 35, 38, 40, 41],
+    "expect": [3, 7, 12, 15, 16, 20, 22, 25, 26, 29, 32, 35, 38, 40, 41, 43, 44, 45, 50, 52, 56, 59, 60, 61],
     "required": true
   },
   {
@@ -229,7 +235,7 @@
     "name": "group: three levels",
     "filterJson": "{\"type\":\"group\",\"join\":\"or\",\"rules\":[{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"library\",\"operator\":\"equals\",\"value\":1},{\"type\":\"group\",\"join\":\"or\",\"rules\":[{\"field\":\"title\",\"operator\":\"starts_with\",\"value\":\"a\"},{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isComic\",\"operator\":\"not_equals\",\"value\":\"true\"},{\"field\":\"metadataScore\",\"operator\":\"greater_than\",\"value\":80}]}]}]},{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"tags\",\"operator\":\"includes_any\",\"value\":[\"File Not Found\"]},{\"field\":\"library\",\"operator\":\"equals\",\"value\":3}]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 7, 21, 23, 29, 30, 31, 33],
+    "expect": [1, 2, 3, 7, 21, 23, 29, 30, 31, 33, 45, 49, 51, 57],
     "required": true,
     "collationSensitive": true
   },
@@ -237,7 +243,7 @@
     "name": "group: root without \"type\" is still the root group",
     "filterJson": "{\"join\":\"and\",\"rules\":[{\"field\":\"library\",\"operator\":\"equals\",\"value\":3}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [3, 7, 12, 15, 16, 20, 22, 25, 26, 29, 32, 35, 38, 40, 41],
+    "expect": [3, 7, 12, 15, 16, 20, 22, 25, 26, 29, 32, 35, 38, 40, 41, 43, 44, 45, 50, 52, 56, 59, 60, 61],
     "required": false
   },
   {
@@ -444,105 +450,105 @@
     "name": "metadataScore less_than 50",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"less_than\",\"value\":50}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 5, 6, 7, 8, 9, 10, 12, 23, 24, 25, 29, 31, 32, 35, 36, 37, 38, 39, 40],
+    "expect": [2, 5, 6, 7, 8, 9, 10, 12, 23, 24, 25, 29, 31, 32, 35, 36, 37, 38, 39, 40, 49, 50, 51, 52, 54, 55, 56, 57, 60, 61],
     "required": true
   },
   {
     "name": "metadataScore less_than 70",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"less_than\",\"value\":70}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 29, 31, 32, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 23, 24, 25, 26, 27, 29, 31, 32, 35, 36, 37, 38, 39, 40, 41, 43, 44, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 60, 61],
     "required": true
   },
   {
     "name": "metadataScore less_than_equal_to 10",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"less_than_equal_to\",\"value\":10}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [5, 6, 12, 29],
+    "expect": [5, 6, 12, 29, 49, 50],
     "required": true
   },
   {
     "name": "metadataScore less_than_equal_to 80",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"less_than_equal_to\",\"value\":80}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 23, 24, 25, 26, 27, 28, 29, 31, 32, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 23, 24, 25, 26, 27, 28, 29, 31, 32, 35, 36, 37, 38, 39, 40, 41, 43, 44, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": true
   },
   {
     "name": "metadataScore greater_than 10",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"greater_than\",\"value\":10}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 7, 8, 9, 10, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 26, 27, 28, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 7, 8, 9, 10, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 26, 27, 28, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 43, 44, 46, 47, 48, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": true
   },
   {
     "name": "metadataScore greater_than 50",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"greater_than\",\"value\":50}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 4, 13, 14, 15, 16, 17, 18, 19, 20, 21, 26, 27, 28, 30, 33],
+    "expect": [1, 4, 13, 14, 15, 16, 17, 18, 19, 20, 21, 26, 27, 28, 30, 33, 43, 44, 46, 47, 48, 58, 59],
     "required": true
   },
   {
     "name": "metadataScore greater_than 70",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"greater_than\",\"value\":70}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 18, 19, 20, 21, 28, 30, 33],
+    "expect": [1, 18, 19, 20, 21, 28, 30, 33, 59],
     "required": true
   },
   {
     "name": "metadataScore greater_than 0",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"greater_than\",\"value\":0}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 43, 44, 46, 47, 48, 49, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": true
   },
   {
     "name": "metadataScore less_than 0.5",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"less_than\",\"value\":0.5}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [12],
+    "expect": [12, 50],
     "required": true
   },
   {
     "name": "metadataScore greater_than_equal_to 60",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"greater_than_equal_to\",\"value\":60}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 14, 15, 16, 17, 18, 19, 20, 21, 27, 28, 30, 33],
+    "expect": [1, 14, 15, 16, 17, 18, 19, 20, 21, 27, 28, 30, 33, 44, 47, 48, 58, 59],
     "required": false
   },
   {
     "name": "metadataScore equals 50",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"equals\",\"value\":50}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [3, 41],
+    "expect": [3, 41, 53],
     "required": false
   },
   {
     "name": "metadataScore not_equals 50 (absent passes)",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"not_equals\",\"value\":50}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
+    "expect": [1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
     "name": "metadataScore in_between 40 and 60",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"in_between\",\"valueStart\":40,\"valueEnd\":60}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 4, 9, 10, 13, 14, 25, 26, 37, 40, 41],
+    "expect": [2, 3, 4, 9, 10, 13, 14, 25, 26, 37, 40, 41, 43, 44, 46, 52, 53, 54, 56, 57, 60],
     "required": false
   },
   {
     "name": "metadataScore is_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"is_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [11, 22, 34],
+    "expect": [11, 22, 34, 45],
     "required": false
   },
   {
     "name": "metadataScore is_not_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"is_not_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 43, 44, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -556,7 +562,7 @@
     "name": "metadataScore less_than \"50\" (a string value is converted with Number)",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"metadataScore\",\"operator\":\"less_than\",\"value\":\"50\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 5, 6, 7, 8, 9, 10, 12, 23, 24, 25, 29, 31, 32, 35, 36, 37, 38, 39, 40],
+    "expect": [2, 5, 6, 7, 8, 9, 10, 12, 23, 24, 25, 29, 31, 32, 35, 36, 37, 38, 39, 40, 49, 50, 51, 52, 54, 55, 56, 57, 60, 61],
     "required": false
   },
   {
@@ -577,28 +583,28 @@
     "name": "isbn13 is_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isbn13\",\"operator\":\"is_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 14, 15, 16, 17, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 50, 51, 52, 54, 55, 56, 58, 59, 60, 61],
     "required": true
   },
   {
     "name": "isbn13 is_not_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isbn13\",\"operator\":\"is_not_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 6, 13, 18, 30, 33],
+    "expect": [1, 6, 13, 18, 30, 33, 49, 53, 57],
     "required": true
   },
   {
     "name": "isbn10 is_empty (tab and newline count as empty)",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isbn10\",\"operator\":\"is_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": true
   },
   {
     "name": "isbn10 is_not_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isbn10\",\"operator\":\"is_not_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 14, 15, 31],
+    "expect": [1, 14, 15, 31, 52],
     "required": true
   },
   {
@@ -626,7 +632,7 @@
     "name": "authors equals UNKNOWN (case)",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"authors\",\"operator\":\"equals\",\"value\":\"UNKNOWN\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 16, 30, 36, 37, 38, 39],
+    "expect": [2, 3, 16, 30, 36, 37, 38, 39, 60, 61],
     "required": true,
     "collationSensitive": true
   },
@@ -634,8 +640,9 @@
     "name": "authors equals Unknown Author",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"authors\",\"operator\":\"equals\",\"value\":\"Unknown Author\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [10, 30],
-    "required": true
+    "expect": [10, 30, 54],
+    "required": true,
+    "collationSensitive": true
   },
   {
     "name": "authors equals \"\" matches nothing",
@@ -648,21 +655,21 @@
     "name": "authors is_empty (no metadata, [] and absent)",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"authors\",\"operator\":\"is_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [11, 12, 13, 27, 29, 34, 41],
+    "expect": [11, 12, 13, 27, 29, 34, 41, 47, 52],
     "required": true
   },
   {
     "name": "authors is_not_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"authors\",\"operator\":\"is_not_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 28, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 28, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 43, 44, 45, 46, 48, 49, 50, 51, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
     "name": "authors not_equals Tom Clancy (every author differs; no authors passes)",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"authors\",\"operator\":\"not_equals\",\"value\":\"Tom Clancy\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 46, 47, 48, 49, 50, 51, 52, 54, 55, 58, 59, 60, 61],
     "required": false,
     "collationSensitive": true
   },
@@ -670,7 +677,7 @@
     "name": "authors contains clancy",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"authors\",\"operator\":\"contains\",\"value\":\"clancy\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [6, 7, 8, 14, 15, 16, 17, 18, 19, 20, 21, 22, 33],
+    "expect": [6, 7, 8, 14, 15, 16, 17, 18, 19, 20, 21, 22, 33, 45, 53, 56, 57],
     "required": false,
     "collationSensitive": true
   },
@@ -678,7 +685,7 @@
     "name": "authors does_not_contain clancy",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"authors\",\"operator\":\"does_not_contain\",\"value\":\"clancy\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 9, 10, 11, 12, 13, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 9, 10, 11, 12, 13, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 46, 47, 48, 49, 50, 51, 52, 54, 55, 58, 59, 60, 61],
     "required": false,
     "collationSensitive": true
   },
@@ -686,21 +693,22 @@
     "name": "authors starts_with tom",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"authors\",\"operator\":\"starts_with\",\"value\":\"tom\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [6, 7, 8, 9, 14, 15, 16, 17, 18, 19, 20, 21, 22, 33],
+    "expect": [6, 7, 8, 9, 14, 15, 16, 17, 18, 19, 20, 21, 22, 33, 45, 53, 56, 57],
     "required": false
   },
   {
     "name": "authors ends_with author",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"authors\",\"operator\":\"ends_with\",\"value\":\"author\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [10, 25, 30, 31],
-    "required": false
+    "expect": [10, 25, 30, 31, 43, 54],
+    "required": false,
+    "collationSensitive": true
   },
   {
     "name": "authors includes_any",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"authors\",\"operator\":\"includes_any\",\"value\":[\"Tom Clancy\",\"Dan Brown\"]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [4, 6, 7, 14, 15, 16, 17, 18, 19, 20, 21, 22, 33],
+    "expect": [4, 6, 7, 14, 15, 16, 17, 18, 19, 20, 21, 22, 33, 45, 53, 56, 57],
     "required": false,
     "collationSensitive": true
   },
@@ -715,7 +723,7 @@
     "name": "authors excludes_all",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"authors\",\"operator\":\"excludes_all\",\"value\":[\"Tom Clancy\",\"unknown\"]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 4, 5, 8, 9, 10, 11, 12, 13, 23, 24, 25, 26, 27, 28, 29, 31, 32, 34, 35, 40, 41],
+    "expect": [1, 4, 5, 8, 9, 10, 11, 12, 13, 23, 24, 25, 26, 27, 28, 29, 31, 32, 34, 35, 40, 41, 43, 44, 46, 47, 48, 49, 50, 51, 52, 54, 55, 58, 59],
     "required": false,
     "collationSensitive": true
   },
@@ -730,21 +738,21 @@
     "name": "authors equals with an array value",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"authors\",\"operator\":\"equals\",\"value\":[\"Dan Brown\",\"Ayn Rand\"]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [4, 35],
+    "expect": [4, 35, 49],
     "required": false
   },
   {
     "name": "titleChangedByAutoFetch equals false",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"titleChangedByAutoFetch\",\"operator\":\"equals\",\"value\":\"false\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
     "name": "titleChangedByAutoFetch not_equals true",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"titleChangedByAutoFetch\",\"operator\":\"not_equals\",\"value\":\"true\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 8, 9, 11, 12, 13, 14, 15, 16, 17, 18, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -758,14 +766,14 @@
     "name": "titleChangedByAutoFetch equals boolean true",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"titleChangedByAutoFetch\",\"operator\":\"equals\",\"value\":true}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [6, 7, 10, 19, 35],
+    "expect": [6, 7, 10, 19, 35, 50],
     "required": false
   },
   {
     "name": "titleChangedByAutoFetch equals TRUE (upper case)",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"titleChangedByAutoFetch\",\"operator\":\"equals\",\"value\":\"TRUE\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [6, 7, 10, 19, 35],
+    "expect": [6, 7, 10, 19, 35, 50],
     "required": false
   },
   {
@@ -788,7 +796,7 @@
     "name": "title starts_with a (case)",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"title\",\"operator\":\"starts_with\",\"value\":\"a\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 23, 25, 31, 35],
+    "expect": [1, 2, 3, 23, 25, 31, 35, 49, 50, 51, 56, 57, 61],
     "required": true,
     "collationSensitive": true
   },
@@ -803,7 +811,7 @@
     "name": "title starts_with \"\" matches every title string",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"title\",\"operator\":\"starts_with\",\"value\":\"\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 43, 44, 45, 46, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": true
   },
   {
@@ -824,7 +832,7 @@
     "name": "title not_equals Child Love",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"title\",\"operator\":\"not_equals\",\"value\":\"Child Love\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false,
     "collationSensitive": true
   },
@@ -840,7 +848,7 @@
     "name": "title does_not_contain love",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"title\",\"operator\":\"does_not_contain\",\"value\":\"love\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 9, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false,
     "collationSensitive": true
   },
@@ -856,14 +864,14 @@
     "name": "title is_empty (blank and whitespace titles)",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"title\",\"operator\":\"is_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [11, 12, 13, 41],
+    "expect": [11, 12, 13, 41, 47],
     "required": false
   },
   {
     "name": "title is_not_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"title\",\"operator\":\"is_not_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 43, 44, 45, 46, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -878,7 +886,7 @@
     "name": "title excludes_all",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"title\",\"operator\":\"excludes_all\",\"value\":[\"Child Love\",\"About Time\"]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 4, 5, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false,
     "collationSensitive": true
   },
@@ -900,7 +908,7 @@
     "name": "title includes_any [\"\"] matches no title and blank title",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"title\",\"operator\":\"includes_any\",\"value\":[\"\"]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [11, 12, 41],
+    "expect": [11, 12, 41, 47],
     "required": false,
     "collationSensitive": true
   },
@@ -915,35 +923,35 @@
     "name": "isComic equals true",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isComic\",\"operator\":\"equals\",\"value\":\"true\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [3, 12, 16, 20, 22, 29, 35, 38, 41],
+    "expect": [3, 12, 16, 20, 22, 29, 35, 38, 41, 50, 52, 61],
     "required": false
   },
   {
     "name": "isComic equals false",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isComic\",\"operator\":\"equals\",\"value\":\"false\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 19, 21, 23, 25, 26, 27, 28, 30, 31, 32, 33, 34, 36, 37, 39, 40],
+    "expect": [1, 2, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 17, 18, 19, 21, 23, 25, 26, 27, 28, 30, 31, 32, 33, 34, 36, 37, 39, 40, 43, 44, 45, 46, 47, 48, 49, 51, 53, 54, 55, 58, 59, 60],
     "required": false
   },
   {
     "name": "isComic not_equals false",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isComic\",\"operator\":\"not_equals\",\"value\":\"false\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [3, 12, 16, 20, 22, 24, 29, 35, 38, 41],
+    "expect": [3, 12, 16, 20, 22, 24, 29, 35, 38, 41, 50, 52, 56, 57, 61],
     "required": false
   },
   {
     "name": "isComic is_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isComic\",\"operator\":\"is_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [24],
+    "expect": [24, 56, 57],
     "required": false
   },
   {
     "name": "isComic is_not_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isComic\",\"operator\":\"is_not_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -957,14 +965,14 @@
     "name": "isPhysical equals false",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isPhysical\",\"operator\":\"equals\",\"value\":\"false\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 25, 26, 27, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 25, 26, 27, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
     "name": "isPhysical not_equals true",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"isPhysical\",\"operator\":\"not_equals\",\"value\":\"true\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -978,7 +986,7 @@
     "name": "goodreadsRating is_not_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"goodreadsRating\",\"operator\":\"is_not_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 3, 13, 16, 17, 21],
+    "expect": [1, 3, 13, 16, 17, 21, 48],
     "required": false
   },
   {
@@ -992,7 +1000,7 @@
     "name": "goodreadsRating less_than_equal_to 2.5",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"goodreadsRating\",\"operator\":\"less_than_equal_to\",\"value\":2.5}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [13, 16],
+    "expect": [13, 16, 48],
     "required": false
   },
   {
@@ -1006,7 +1014,7 @@
     "name": "goodreadsRating not_equals 4",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"goodreadsRating\",\"operator\":\"not_equals\",\"value\":4}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -1034,7 +1042,7 @@
     "name": "ranobedbRating is_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"ranobedbRating\",\"operator\":\"is_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -1055,7 +1063,7 @@
     "name": "goodreadsReviewCount less_than 100",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"goodreadsReviewCount\",\"operator\":\"less_than\",\"value\":100}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [33],
+    "expect": [33, 48],
     "required": false
   },
   {
@@ -1090,7 +1098,7 @@
     "name": "pageCount is_empty (0 is not empty)",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"pageCount\",\"operator\":\"is_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -1118,42 +1126,42 @@
     "name": "addedOn within_last 2 weeks",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"within_last\",\"value\":2,\"valueEnd\":\"weeks\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 19, 20, 22, 23, 24, 25, 26, 28, 29, 31, 32, 33, 35, 36, 38, 39, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 19, 20, 22, 23, 24, 25, 26, 28, 29, 31, 32, 33, 35, 36, 38, 39, 41, 44, 45, 47, 48, 58, 59, 60, 61],
     "required": true
   },
   {
     "name": "addedOn within_last 14 without valueEnd defaults to days",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"within_last\",\"value\":14}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 19, 20, 22, 23, 24, 25, 26, 28, 29, 31, 32, 33, 35, 36, 38, 39, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 19, 20, 22, 23, 24, 25, 26, 28, 29, 31, 32, 33, 35, 36, 38, 39, 41, 44, 45, 47, 48, 58, 59, 60, 61],
     "required": true
   },
   {
     "name": "addedOn within_last 0 days",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"within_last\",\"value\":0,\"valueEnd\":\"days\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [7, 9, 16, 25, 29, 36],
+    "expect": [7, 9, 16, 25, 29, 36, 59],
     "required": true
   },
   {
     "name": "addedOn within_last 14 Days (unit case)",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"within_last\",\"value\":14,\"valueEnd\":\"Days\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 19, 20, 22, 23, 24, 25, 26, 28, 29, 31, 32, 33, 35, 36, 38, 39, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 19, 20, 22, 23, 24, 25, 26, 28, 29, 31, 32, 33, 35, 36, 38, 39, 41, 44, 45, 47, 48, 58, 59, 60, 61],
     "required": false
   },
   {
     "name": "addedOn within_last 3 with an unknown unit reads as days",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"within_last\",\"value\":3,\"valueEnd\":\"fortnights\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 7, 9, 12, 15, 16, 20, 22, 25, 28, 29, 31, 36, 38, 41],
+    "expect": [1, 2, 7, 9, 12, 15, 16, 20, 22, 25, 28, 29, 31, 36, 38, 41, 58, 59],
     "required": false
   },
   {
     "name": "addedOn within_last \"14\" (string amount)",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"within_last\",\"value\":\"14\",\"valueEnd\":\"days\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 19, 20, 22, 23, 24, 25, 26, 28, 29, 31, 32, 33, 35, 36, 38, 39, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 9, 12, 13, 14, 15, 16, 19, 20, 22, 23, 24, 25, 26, 28, 29, 31, 32, 33, 35, 36, 38, 39, 41, 44, 45, 47, 48, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -1167,14 +1175,14 @@
     "name": "addedOn older_than 14 days",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"older_than\",\"value\":14,\"valueEnd\":\"days\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [8, 10, 17, 18, 21, 27, 30, 37, 40],
+    "expect": [8, 10, 17, 18, 21, 27, 30, 37, 40, 43, 46, 49, 50, 51, 52, 53, 54, 55, 56, 57],
     "required": false
   },
   {
     "name": "addedOn older_than 1 weeks",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"older_than\",\"value\":1,\"valueEnd\":\"weeks\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [5, 6, 8, 10, 13, 14, 17, 18, 21, 23, 24, 27, 30, 32, 33, 37, 39, 40],
+    "expect": [5, 6, 8, 10, 13, 14, 17, 18, 21, 23, 24, 27, 30, 32, 33, 37, 39, 40, 43, 44, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 60, 61],
     "required": false
   },
   {
@@ -1188,7 +1196,7 @@
     "name": "addedOn is_not_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"is_not_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -1202,35 +1210,35 @@
     "name": "addedOn greater_than a date",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"greater_than\",\"value\":\"2026-10-20\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 7, 9, 12, 15, 16, 19, 20, 22, 25, 26, 28, 29, 31, 35, 36, 38, 41],
+    "expect": [1, 2, 3, 4, 7, 9, 12, 15, 16, 19, 20, 22, 25, 26, 28, 29, 31, 35, 36, 38, 41, 45, 58, 59],
     "required": false
   },
   {
     "name": "addedOn greater_than_equal_to a UTC instant",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"greater_than_equal_to\",\"value\":\"2026-10-25T12:00:00Z\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 7, 9, 12, 15, 16, 20, 22, 25, 28, 29, 31, 36, 38, 41],
+    "expect": [1, 2, 7, 9, 12, 15, 16, 20, 22, 25, 28, 29, 31, 36, 38, 41, 58, 59],
     "required": false
   },
   {
     "name": "addedOn equals a UTC instant",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"equals\",\"value\":\"2026-10-28T12:00:00Z\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [7, 16, 29],
+    "expect": [7, 16, 29, 59],
     "required": false
   },
   {
     "name": "addedOn in_between two dates",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"addedOn\",\"operator\":\"in_between\",\"valueStart\":\"2026-10-14\",\"valueEnd\":\"2026-10-26\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 4, 5, 6, 8, 13, 14, 15, 19, 20, 21, 23, 24, 26, 28, 32, 33, 35, 38, 39, 40, 41],
+    "expect": [2, 3, 4, 5, 6, 8, 13, 14, 15, 19, 20, 21, 23, 24, 26, 28, 32, 33, 35, 38, 39, 40, 41, 44, 45, 47, 48, 58, 60, 61],
     "required": false
   },
   {
     "name": "library equals 1",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"library\",\"operator\":\"equals\",\"value\":1}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 4, 5, 6, 8, 9, 10, 11, 13, 14, 17, 18, 19, 21, 23, 24, 27, 28, 30, 31, 33, 34, 36, 37, 39],
+    "expect": [1, 2, 4, 5, 6, 8, 9, 10, 11, 13, 14, 17, 18, 19, 21, 23, 24, 27, 28, 30, 31, 33, 34, 36, 37, 39, 46, 47, 48, 49, 51, 53, 54, 55, 57, 58],
     "required": true
   },
   {
@@ -1244,28 +1252,28 @@
     "name": "library not_equals 3",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"library\",\"operator\":\"not_equals\",\"value\":3}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 4, 5, 6, 8, 9, 10, 11, 13, 14, 17, 18, 19, 21, 23, 24, 27, 28, 30, 31, 33, 34, 36, 37, 39],
+    "expect": [1, 2, 4, 5, 6, 8, 9, 10, 11, 13, 14, 17, 18, 19, 21, 23, 24, 27, 28, 30, 31, 33, 34, 36, 37, 39, 46, 47, 48, 49, 51, 53, 54, 55, 57, 58],
     "required": false
   },
   {
     "name": "library includes_any [\"3\"]",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"library\",\"operator\":\"includes_any\",\"value\":[\"3\"]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [3, 7, 12, 15, 16, 20, 22, 25, 26, 29, 32, 35, 38, 40, 41],
+    "expect": [3, 7, 12, 15, 16, 20, 22, 25, 26, 29, 32, 35, 38, 40, 41, 43, 44, 45, 50, 52, 56, 59, 60, 61],
     "required": false
   },
   {
     "name": "library includes_any [1, 3]",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"library\",\"operator\":\"includes_any\",\"value\":[1,3]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
     "name": "library excludes_all [1]",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"library\",\"operator\":\"excludes_all\",\"value\":[1]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [3, 7, 12, 15, 16, 20, 22, 25, 26, 29, 32, 35, 38, 40, 41],
+    "expect": [3, 7, 12, 15, 16, 20, 22, 25, 26, 29, 32, 35, 38, 40, 41, 43, 44, 45, 50, 52, 56, 59, 60, 61],
     "required": false
   },
   {
@@ -1279,14 +1287,14 @@
     "name": "library is_not_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"library\",\"operator\":\"is_not_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
     "name": "tags includes_any two values (case)",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"tags\",\"operator\":\"includes_any\",\"value\":[\"file not found\",\"COMICS\"]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [3, 7, 9, 28, 29],
+    "expect": [3, 7, 9, 28, 29, 45],
     "required": true,
     "collationSensitive": true
   },
@@ -1301,7 +1309,7 @@
     "name": "tags includes_any with a string value",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"tags\",\"operator\":\"includes_any\",\"value\":\"File Not Found\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [3, 7, 9, 28, 29],
+    "expect": [3, 7, 9, 28, 29, 45],
     "required": false,
     "collationSensitive": true
   },
@@ -1309,7 +1317,7 @@
     "name": "tags excludes_all",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"tags\",\"operator\":\"excludes_all\",\"value\":[\"File Not Found\"]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 4, 5, 6, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 4, 5, 6, 8, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false,
     "collationSensitive": true
   },
@@ -1324,14 +1332,14 @@
     "name": "tags is_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"tags\",\"operator\":\"is_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 4, 5, 6, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 25, 26, 27, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 4, 5, 6, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 25, 26, 27, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
     "name": "tags is_not_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"tags\",\"operator\":\"is_not_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [3, 7, 8, 9, 21, 24, 28, 29, 30],
+    "expect": [3, 7, 8, 9, 21, 24, 28, 29, 30, 45],
     "required": false
   },
   {
@@ -1345,28 +1353,28 @@
     "name": "tags contains found",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"tags\",\"operator\":\"contains\",\"value\":\"found\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [3, 7, 8, 9, 28, 29, 30],
+    "expect": [3, 7, 8, 9, 28, 29, 30, 45],
     "required": false
   },
   {
     "name": "tags does_not_contain found",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"tags\",\"operator\":\"does_not_contain\",\"value\":\"found\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 4, 5, 6, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 4, 5, 6, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
     "name": "fileType excludes_all alone in an AND root",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"fileType\",\"operator\":\"excludes_all\",\"value\":[\"cbr\",\"cbz\",\"cb7\",\"opus\",\"mp3\",\"m4a\",\"m4b\"]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 21, 23, 25, 26, 27, 28, 29, 30, 31, 33, 34, 36, 37, 39, 40],
+    "expect": [1, 2, 4, 5, 6, 8, 9, 10, 11, 12, 13, 14, 15, 17, 18, 19, 21, 23, 25, 26, 27, 28, 29, 30, 31, 33, 34, 36, 37, 39, 40, 43, 44, 45, 46, 47, 48, 49, 51, 53, 54, 55, 57, 58, 59, 60],
     "required": false
   },
   {
     "name": "fileType equals epub AND metadataScore greater_than 50",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"fileType\",\"operator\":\"equals\",\"value\":\"epub\"},{\"field\":\"metadataScore\",\"operator\":\"greater_than\",\"value\":50}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 4, 13, 14, 19, 21, 30, 33],
+    "expect": [1, 4, 13, 14, 19, 21, 30, 33, 47, 48, 58],
     "required": false
   },
   {
@@ -1380,21 +1388,21 @@
     "name": "fileType includes_any cbz and pdf",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"fileType\",\"operator\":\"includes_any\",\"value\":[\"cbz\",\"pdf\"]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 7, 8, 16, 17, 20, 22, 24, 31, 32, 35, 38, 40, 41],
+    "expect": [2, 3, 7, 8, 16, 17, 20, 22, 24, 31, 32, 35, 38, 40, 41, 50, 51, 52, 56, 61],
     "required": false
   },
   {
     "name": "fileType includes_any audiobook",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"fileType\",\"operator\":\"includes_any\",\"value\":[\"audiobook\"]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [5, 15, 26, 36],
+    "expect": [5, 15, 26, 36, 43, 44, 45, 46, 59, 60],
     "required": false
   },
   {
     "name": "fileType not_equals epub",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"fileType\",\"operator\":\"not_equals\",\"value\":\"epub\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 5, 7, 8, 11, 12, 15, 16, 17, 18, 20, 22, 24, 26, 27, 28, 29, 31, 32, 35, 36, 38, 39, 40, 41],
+    "expect": [2, 3, 5, 7, 8, 11, 12, 15, 16, 17, 18, 20, 22, 24, 26, 27, 28, 29, 31, 32, 35, 36, 38, 39, 40, 41, 43, 44, 45, 46, 50, 51, 52, 56, 59, 60, 61],
     "required": false
   },
   {
@@ -1415,7 +1423,7 @@
     "name": "publisher not_equals Penguin Classics",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"publisher\",\"operator\":\"not_equals\",\"value\":\"Penguin Classics\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -1430,7 +1438,7 @@
     "name": "publisher does_not_contain penguin",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"publisher\",\"operator\":\"does_not_contain\",\"value\":\"penguin\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false,
     "collationSensitive": true
   },
@@ -1453,7 +1461,7 @@
     "name": "publisher is_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"publisher\",\"operator\":\"is_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -1474,7 +1482,7 @@
     "name": "publisher excludes_all",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"publisher\",\"operator\":\"excludes_all\",\"value\":[\"berkley\"]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -1488,7 +1496,7 @@
     "name": "seriesName not_equals jack ryan",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"seriesName\",\"operator\":\"not_equals\",\"value\":\"jack ryan\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -1502,7 +1510,7 @@
     "name": "seriesName is_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"seriesName\",\"operator\":\"is_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 7, 8, 9, 10, 11, 12, 13, 16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -1523,7 +1531,7 @@
     "name": "language not_equals en",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"language\",\"operator\":\"not_equals\",\"value\":\"en\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28, 29, 30, 31, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28, 29, 30, 31, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -1544,28 +1552,28 @@
     "name": "language includes_any [\"\"] matches absent and blank",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"language\",\"operator\":\"includes_any\",\"value\":[\"\"]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24, 25, 26, 28, 29, 30, 31, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24, 25, 26, 28, 29, 30, 31, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
     "name": "language excludes_all en",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"language\",\"operator\":\"excludes_all\",\"value\":[\"en\"]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28, 29, 30, 31, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 24, 25, 26, 27, 28, 29, 30, 31, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
     "name": "language is_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"language\",\"operator\":\"is_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24, 25, 26, 28, 29, 30, 31, 33, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 24, 25, 26, 28, 29, 30, 31, 33, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
     "name": "narrator equals Scott Brick",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"narrator\",\"operator\":\"equals\",\"value\":\"Scott Brick\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [5, 14, 15],
+    "expect": [5, 14, 15, 45],
     "required": false
   },
   {
@@ -1579,14 +1587,14 @@
     "name": "narrator is_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"narrator\",\"operator\":\"is_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 6, 7, 8, 9, 10, 11, 12, 13, 16, 17, 18, 19, 20, 21, 22, 23, 24, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 37, 38, 39, 40, 41, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 60, 61],
     "required": false
   },
   {
     "name": "narrator is_not_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"narrator\",\"operator\":\"is_not_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [5, 14, 15, 25, 36],
+    "expect": [5, 14, 15, 25, 36, 43, 44, 45, 59],
     "required": false
   },
   {
@@ -1607,7 +1615,7 @@
     "name": "categories excludes_all thriller",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"categories\",\"operator\":\"excludes_all\",\"value\":[\"thriller\"]}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -1621,7 +1629,7 @@
     "name": "categories not_equals thriller",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"categories\",\"operator\":\"not_equals\",\"value\":\"thriller\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -1635,7 +1643,7 @@
     "name": "categories is_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"categories\",\"operator\":\"is_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 23, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 20, 22, 23, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -1649,7 +1657,7 @@
     "name": "moods does_not_contain dark",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"moods\",\"operator\":\"does_not_contain\",\"value\":\"dark\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -1663,7 +1671,7 @@
     "name": "moods is_empty",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"moods\",\"operator\":\"is_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41],
+    "expect": [1, 2, 3, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 34, 35, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -1677,14 +1685,14 @@
     "name": "readStatus equals unset (no row, null status and UNSET)",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"readStatus\",\"operator\":\"equals\",\"value\":\"unset\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 5, 7, 8, 9, 10, 11, 12, 13, 15, 16, 21, 23, 24, 25, 26, 27, 28, 29, 30, 32, 33, 34, 36, 37, 38, 39, 40, 41],
+    "expect": [2, 3, 5, 7, 8, 9, 10, 11, 12, 13, 15, 16, 21, 23, 24, 25, 26, 27, 28, 29, 30, 32, 33, 34, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
     "name": "readStatus not_equals READ",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"readStatus\",\"operator\":\"not_equals\",\"value\":\"READ\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 32, 33, 34, 36, 37, 38, 39, 40, 41],
+    "expect": [2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 32, 33, 34, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {
@@ -1712,7 +1720,7 @@
     "name": "readStatus is_empty (no progress row)",
     "filterJson": "{\"type\":\"group\",\"join\":\"and\",\"rules\":[{\"field\":\"readStatus\",\"operator\":\"is_empty\"}]}",
     "now": "2026-10-28T12:00:00Z",
-    "expect": [2, 3, 7, 8, 9, 10, 11, 12, 15, 16, 21, 23, 24, 25, 26, 27, 28, 29, 30, 32, 33, 34, 36, 37, 38, 39, 40, 41],
+    "expect": [2, 3, 7, 8, 9, 10, 11, 12, 15, 16, 21, 23, 24, 25, 26, 27, 28, 29, 30, 32, 33, 34, 36, 37, 38, 39, 40, 41, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61],
     "required": false
   },
   {

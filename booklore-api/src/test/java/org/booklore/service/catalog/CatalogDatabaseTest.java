@@ -40,7 +40,7 @@ import static org.mockito.Mockito.mock;
         "spring.jpa.hibernate.ddl-auto=create-drop",
         "spring.jpa.database-platform=org.hibernate.dialect.H2Dialect",
         "spring.jpa.properties.hibernate.dialect=org.hibernate.dialect.H2Dialect",
-        "spring.datasource.url=jdbc:h2:mem:catalogdb;DB_CLOSE_DELAY=-1",
+        "spring.datasource.url=jdbc:h2:mem:catalogdb;DB_CLOSE_DELAY=-1;NON_KEYWORDS=VALUE",
         "spring.datasource.driver-class-name=org.h2.Driver",
         "spring.datasource.username=sa",
         "spring.datasource.password=",
@@ -89,9 +89,18 @@ abstract class CatalogDatabaseTest {
         em.persist(library);
         LibraryPathEntity path = LibraryPathEntity.builder().library(library).path("/fixture/" + name).build();
         em.persist(path);
-        library.setLibraryPaths(new ArrayList<>(List.of(path)));
+        addPath(library, path);
         em.flush();
         return library;
+    }
+
+    /** Adds to the managed collection: replacing it would orphan the old one, which orphanRemoval refuses. */
+    protected static void addPath(LibraryEntity library, LibraryPathEntity path) {
+        if (library.getLibraryPaths() == null) {
+            library.setLibraryPaths(new ArrayList<>(List.of(path)));
+        } else {
+            library.getLibraryPaths().add(path);
+        }
     }
 
     protected BookLoreUserEntity user(String username) {

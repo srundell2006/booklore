@@ -1,5 +1,5 @@
 {
-  "about": ["Shared parity fixture for the magic-shelf count compiler (MagicShelfCountCompiler) and the UI BookRuleEvaluatorService.", "\"books\" is exactly the list-view stream a viewer who sees both libraries receives: Jackson NON_NULL, so a null value is an absent key (never write an explicit null: the UI reads Number(null) as 0 but Number(undefined) as NaN).", "Each book carries a \"fixture\" object that is not part of the DTO: it holds what the backend needs to rebuild the entities. The UI spec strips it before evaluating.", "fixture.files are the book_file rows in id order (ids only fix the order). primaryFile, alternativeFormats and supplementaryFiles are derived from them with library formatPriority the way BookMapperV2.getPrimaryBookFile does.", "fixture.progress is the viewer's user_book_progress row (null = none; readStatus null and \"UNSET\" both serialize as \"UNSET\"); fixture.otherUserProgress is another user's row that must not affect the viewer.", "fixture.isPhysical / fixture.isComic null exist only on H2 (the production columns are NOT NULL DEFAULT FALSE).", "\"deletedBooks\" are inserted with deleted = TRUE; the stream never shows them and no case expects them.", "Tag, category and mood names that differ only by case or trailing space are distinct rows (exact-name lookup).", "Book ids, file ids and library ids are fixture ids: map them to the generated ids, and insert files in the listed order.", "metadata.authors [] (book 12), tags [] (book 12) and categories [] (book 13) are explicit on purpose: the list-view DTO strips empty collections, and the evaluator reads [] and an absent list alike.", "cases.json entries: {name, production?, filterJson (exactly as stored), now (UTC), expect: [ids ascending] | \"UNSUPPORTED\" | \"INVALID\", required?, reason?, collationSensitive?}.", "required: true means the server must answer OK with exactly these ids; false means it may answer UNSUPPORTED instead, but any count it gives must be these ids. reason is the expected UNSUPPORTED reason (informational).", "collationSensitive: an accent-insensitive or PAD SPACE collation (MariaDB) can give other ids; H2 compares exactly and must match. Every array expect was computed by the real BookRuleEvaluatorService, and does not depend on the time zone."],
+  "about": ["Shared parity fixture for the magic-shelf count compiler (MagicShelfCountCompiler) and the UI BookRuleEvaluatorService.", "\"books\" is exactly the list-view stream a viewer who sees both libraries receives: Jackson NON_NULL, so a null value is an absent key (never write an explicit null: the UI reads Number(null) as 0 but Number(undefined) as NaN).", "Each book carries a \"fixture\" object that is not part of the DTO: it holds what the backend needs to rebuild the entities. The UI spec strips it before evaluating.", "fixture.files are the book_file rows in id order (ids only fix the order). primaryFile, alternativeFormats and supplementaryFiles are derived from them with library formatPriority the way BookMapperV2.getPrimaryBookFile does.", "fixture.progress is the viewer's user_book_progress row (null = none; readStatus null and \"UNSET\" both serialize as \"UNSET\"); fixture.otherUserProgress is another user's row that must not affect the viewer.", "fixture.isPhysical / fixture.isComic null exist only on H2 (the production columns are NOT NULL DEFAULT FALSE).", "\"deletedBooks\" are inserted with deleted = TRUE; the stream never shows them and no case expects them.", "Tag, category and mood names that differ only by case or trailing space are distinct rows (exact-name lookup).", "Book ids, file ids and library ids are fixture ids: map them to the generated ids, and insert files in the listed order.", "metadata.authors [] (book 12), tags [] (book 12) and categories [] (book 13) are explicit on purpose: the list-view DTO strips empty collections, and the evaluator reads [] and an absent list alike.", "cases.json entries: {name, production?, filterJson (exactly as stored), now (UTC), expect: [ids ascending] | \"UNSUPPORTED\" | \"INVALID\", required?, reason?, collationSensitive?}.", "The production cases are named prod-<magic shelf id>: their filterJson is the stored string of that production shelf, verbatim, and every one is required.", "required: true means the server must answer OK with exactly these ids; false means it may answer UNSUPPORTED instead, but any count it gives must be these ids. reason is the expected UNSUPPORTED reason (informational).", "collationSensitive: an accent-insensitive or PAD SPACE collation (MariaDB) can give other ids; H2 compares exactly and must match. Every array expect was computed by the real BookRuleEvaluatorService, and does not depend on the time zone."],
   "libraries": [
     {
       "id": 1,
@@ -1938,6 +1938,846 @@
           }
         ],
         "hasMetadata": false,
+        "isPhysical": false,
+        "isComic": true,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 43,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1430,
+        "bookId": 43,
+        "fileName": "just-under-sixty.m4b",
+        "filePath": "/fixture/comics/just-under-sixty.m4b",
+        "folderBased": false,
+        "bookType": "AUDIOBOOK",
+        "fileSizeKb": 1024,
+        "extension": "m4b"
+      },
+      "addedOn": "2026-09-01T00:00:00Z",
+      "metadata": {
+        "bookId": 43,
+        "title": "Just Under Sixty",
+        "authors": ["Narrated Author"],
+        "narrator": "Jim Dale",
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 59.99,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1430,
+            "fileName": "just-under-sixty.m4b",
+            "bookType": "AUDIOBOOK",
+            "extension": "m4b",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 44,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1440,
+        "bookId": 44,
+        "fileName": "exactly-sixty.mp3",
+        "filePath": "/fixture/comics/exactly-sixty.mp3",
+        "folderBased": false,
+        "bookType": "AUDIOBOOK",
+        "fileSizeKb": 1024,
+        "extension": "mp3"
+      },
+      "addedOn": "2026-10-20T00:00:00Z",
+      "metadata": {
+        "bookId": 44,
+        "title": "Exactly Sixty",
+        "authors": ["Someone"],
+        "narrator": "Jim Dale",
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 60,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1440,
+            "fileName": "exactly-sixty.mp3",
+            "bookType": "AUDIOBOOK",
+            "extension": "mp3",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 45,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1450,
+        "bookId": 45,
+        "fileName": "without-remorse.m4b",
+        "filePath": "/fixture/comics/without-remorse.m4b",
+        "folderBased": false,
+        "bookType": "AUDIOBOOK",
+        "fileSizeKb": 1024,
+        "extension": "m4b"
+      },
+      "addedOn": "2026-10-25T11:59:59Z",
+      "metadata": {
+        "bookId": 45,
+        "title": "Without Remorse",
+        "authors": ["Tom Clancy"],
+        "narrator": "Scott Brick",
+        "tags": ["File Not Found"],
+        "titleChangedByAutoFetch": false
+      },
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1450,
+            "fileName": "without-remorse.m4b",
+            "bookType": "AUDIOBOOK",
+            "extension": "m4b",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 46,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1460,
+        "bookId": 46,
+        "fileName": "other-library.m4b",
+        "filePath": "/fixture/books/other-library.m4b",
+        "folderBased": false,
+        "bookType": "AUDIOBOOK",
+        "fileSizeKb": 1024,
+        "extension": "m4b"
+      },
+      "addedOn": "2026-09-01T00:00:00Z",
+      "metadata": {
+        "bookId": 46,
+        "title": "Other Library Audio",
+        "authors": ["Someone"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 59,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1460,
+            "fileName": "other-library.m4b",
+            "bookType": "AUDIOBOOK",
+            "extension": "m4b",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 47,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1470,
+        "bookId": 47,
+        "fileName": "no-metadata-high.epub",
+        "filePath": "/fixture/books/no-metadata-high.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-10-20T00:00:00Z",
+      "metadataMatchScore": 61,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1470,
+            "fileName": "no-metadata-high.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": false,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 48,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1480,
+        "bookId": 48,
+        "fileName": "goodreads-zero.epub",
+        "filePath": "/fixture/books/goodreads-zero.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-10-20T00:00:00Z",
+      "metadata": {
+        "bookId": 48,
+        "title": "Goodreads Zero",
+        "authors": ["Someone"],
+        "goodreadsRating": 0,
+        "goodreadsReviewCount": 0,
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 61,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1480,
+            "fileName": "goodreads-zero.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 49,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1490,
+        "bookId": 49,
+        "fileName": "atlas.epub",
+        "filePath": "/fixture/books/atlas.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-09-01T00:00:00Z",
+      "metadata": {
+        "bookId": 49,
+        "title": "Atlas Shrugged",
+        "authors": ["Ayn Rand"],
+        "isbn13": "9780451191144",
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 10,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1490,
+            "fileName": "atlas.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 50,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1500,
+        "bookId": 50,
+        "fileName": "astro-boy.cbz",
+        "filePath": "/fixture/comics/astro-boy.cbz",
+        "folderBased": false,
+        "bookType": "CBX",
+        "fileSizeKb": 1024,
+        "extension": "cbz"
+      },
+      "addedOn": "2026-09-01T00:00:00Z",
+      "metadata": {
+        "bookId": 50,
+        "title": "astro boy",
+        "authors": ["Osamu Tezuka"],
+        "titleChangedByAutoFetch": true
+      },
+      "metadataMatchScore": 0,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": true,
+      "fixture": {
+        "files": [
+          {
+            "id": 1500,
+            "fileName": "astro-boy.cbz",
+            "bookType": "CBX",
+            "extension": "cbz",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": true,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 51,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1510,
+        "bookId": 51,
+        "fileName": "almost.pdf",
+        "filePath": "/fixture/books/almost.pdf",
+        "folderBased": false,
+        "bookType": "PDF",
+        "fileSizeKb": 1024,
+        "extension": "pdf"
+      },
+      "addedOn": "2026-09-01T00:00:00Z",
+      "metadata": {
+        "bookId": 51,
+        "title": "Almost Low Enough",
+        "authors": ["Someone"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 10.5,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1510,
+            "fileName": "almost.pdf",
+            "bookType": "PDF",
+            "extension": "pdf",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 52,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1520,
+        "bookId": 52,
+        "fileName": "ten-digits.cbz",
+        "filePath": "/fixture/comics/ten-digits.cbz",
+        "folderBased": false,
+        "bookType": "CBX",
+        "fileSizeKb": 1024,
+        "extension": "cbz"
+      },
+      "addedOn": "2026-09-01T00:00:00Z",
+      "metadata": {
+        "bookId": 52,
+        "title": "Ten Digits Only",
+        "isbn10": "1234567890",
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 49.5,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": true,
+      "fixture": {
+        "files": [
+          {
+            "id": 1520,
+            "fileName": "ten-digits.cbz",
+            "bookType": "CBX",
+            "extension": "cbz",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": true,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 53,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1530,
+        "bookId": 53,
+        "fileName": "boundary-fifty.epub",
+        "filePath": "/fixture/books/boundary-fifty.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-09-01T00:00:00Z",
+      "metadata": {
+        "bookId": 53,
+        "title": "Boundary Fifty",
+        "authors": ["Tom Clancy"],
+        "isbn13": "9780000000530",
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 50,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1530,
+            "fileName": "boundary-fifty.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 54,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1540,
+        "bookId": 54,
+        "fileName": "lower-unknown-author.epub",
+        "filePath": "/fixture/books/lower-unknown-author.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-09-01T00:00:00Z",
+      "metadata": {
+        "bookId": 54,
+        "title": "Lower Case Unknown Author",
+        "authors": ["unknown author"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 45,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1540,
+            "fileName": "lower-unknown-author.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 55,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1550,
+        "bookId": 55,
+        "fileName": "padded-unknown-author.epub",
+        "filePath": "/fixture/books/padded-unknown-author.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-09-01T00:00:00Z",
+      "metadata": {
+        "bookId": 55,
+        "title": "Padded Unknown Author",
+        "authors": ["Unknown Author "],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 30,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1550,
+            "fileName": "padded-unknown-author.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 56,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1560,
+        "bookId": 56,
+        "fileName": "absent-flag.cbz",
+        "filePath": "/fixture/comics/absent-flag.cbz",
+        "folderBased": false,
+        "bookType": "CBX",
+        "fileSizeKb": 1024,
+        "extension": "cbz"
+      },
+      "addedOn": "2026-09-01T00:00:00Z",
+      "metadata": {
+        "bookId": 56,
+        "title": "Absent Comic Flag",
+        "authors": ["Tom Clancy"],
+        "isbn13": "",
+        "isbn10": "",
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 40,
+      "shelves": [],
+      "isPhysical": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1560,
+            "fileName": "absent-flag.cbz",
+            "bookType": "CBX",
+            "extension": "cbz",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": null,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 57,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1570,
+        "bookId": 57,
+        "fileName": "absent-flag-isbn.epub",
+        "filePath": "/fixture/books/absent-flag-isbn.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-09-01T00:00:00Z",
+      "metadata": {
+        "bookId": 57,
+        "title": "Absent Comic Flag With ISBN",
+        "authors": ["Tom Clancy"],
+        "isbn13": "9780000000570",
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 40,
+      "shelves": [],
+      "isPhysical": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1570,
+            "fileName": "absent-flag-isbn.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": null,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 58,
+      "libraryId": 1,
+      "libraryName": "Books",
+      "primaryFile": {
+        "id": 1580,
+        "bookId": 58,
+        "fileName": "seventy.epub",
+        "filePath": "/fixture/books/seventy.epub",
+        "folderBased": false,
+        "bookType": "EPUB",
+        "fileSizeKb": 1024,
+        "extension": "epub"
+      },
+      "addedOn": "2026-10-25T12:00:00Z",
+      "metadata": {
+        "bookId": 58,
+        "title": "Seventy at Three Days",
+        "authors": ["Someone"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 70,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1580,
+            "fileName": "seventy.epub",
+            "bookType": "EPUB",
+            "extension": "epub",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 59,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1590,
+        "bookId": 59,
+        "fileName": "new-audio.m4b",
+        "filePath": "/fixture/comics/new-audio.m4b",
+        "folderBased": false,
+        "bookType": "AUDIOBOOK",
+        "fileSizeKb": 1024,
+        "extension": "m4b"
+      },
+      "addedOn": "2026-10-28T12:00:00Z",
+      "metadata": {
+        "bookId": 59,
+        "title": "New Audio",
+        "authors": ["Someone"],
+        "narrator": "Jim Dale",
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 70.5,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1590,
+            "fileName": "new-audio.m4b",
+            "bookType": "AUDIOBOOK",
+            "extension": "m4b",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 60,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1600,
+        "bookId": 60,
+        "fileName": "unknown-narration.m4b",
+        "filePath": "/fixture/comics/unknown-narration.m4b",
+        "folderBased": false,
+        "bookType": "AUDIOBOOK",
+        "fileSizeKb": 1024,
+        "extension": "m4b"
+      },
+      "addedOn": "2026-10-20T00:00:00Z",
+      "metadata": {
+        "bookId": 60,
+        "title": "Unknown Narration",
+        "authors": ["unknown"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 42,
+      "shelves": [],
+      "isPhysical": false,
+      "isComic": false,
+      "fixture": {
+        "files": [
+          {
+            "id": 1600,
+            "fileName": "unknown-narration.m4b",
+            "bookType": "AUDIOBOOK",
+            "extension": "m4b",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
+        "isPhysical": false,
+        "isComic": false,
+        "progress": null,
+        "otherUserProgress": null
+      }
+    },
+    {
+      "id": 61,
+      "libraryId": 3,
+      "libraryName": "Comics",
+      "primaryFile": {
+        "id": 1611,
+        "bookId": 61,
+        "fileName": "audio-comic.cbz",
+        "filePath": "/fixture/comics/audio-comic.cbz",
+        "folderBased": false,
+        "bookType": "CBX",
+        "fileSizeKb": 1024,
+        "extension": "cbz"
+      },
+      "addedOn": "2026-10-20T00:00:00Z",
+      "metadata": {
+        "bookId": 61,
+        "title": "Audio Comic",
+        "authors": ["unknown"],
+        "titleChangedByAutoFetch": false
+      },
+      "metadataMatchScore": 20,
+      "shelves": [],
+      "alternativeFormats": [
+        {
+          "id": 1610,
+          "bookId": 61,
+          "fileName": "audio-comic.m4b",
+          "filePath": "/fixture/comics/audio-comic.m4b",
+          "folderBased": false,
+          "bookType": "AUDIOBOOK",
+          "fileSizeKb": 1024,
+          "extension": "m4b"
+        }
+      ],
+      "isPhysical": false,
+      "isComic": true,
+      "fixture": {
+        "files": [
+          {
+            "id": 1610,
+            "fileName": "audio-comic.m4b",
+            "bookType": "AUDIOBOOK",
+            "extension": "m4b",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          },
+          {
+            "id": 1611,
+            "fileName": "audio-comic.cbz",
+            "bookType": "CBX",
+            "extension": "cbz",
+            "isBookFormat": true,
+            "fileSizeKb": 1024
+          }
+        ],
+        "hasMetadata": true,
         "isPhysical": false,
         "isComic": true,
         "progress": null,

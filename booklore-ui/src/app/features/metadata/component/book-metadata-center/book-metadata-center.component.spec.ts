@@ -46,6 +46,12 @@ describe('BookMetadataCenterComponent without the book list', () => {
       addListener: () => undefined, removeListener: () => undefined,
       addEventListener: () => undefined, removeEventListener: () => undefined, dispatchEvent: () => false,
     })) as typeof window.matchMedia;
+    // The tab list measures itself; jsdom has no ResizeObserver
+    vi.stubGlobal('ResizeObserver', class {
+      observe(): void {}
+      unobserve(): void {}
+      disconnect(): void {}
+    });
 
     TestBed.configureTestingModule({
       imports: [TranslocoTestingModule.forRoot({langs: {}})],
@@ -67,10 +73,19 @@ describe('BookMetadataCenterComponent without the book list', () => {
     http = TestBed.inject(HttpTestingController);
   });
 
-  afterEach(() => http.verify());
+  afterEach(() => {
+    http.verify();
+    vi.unstubAllGlobals();
+  });
 
   const isListRequest = (req: HttpRequest<unknown>) => req.url.endsWith('/api/v1/books') && req.method === 'GET';
   const bookRequests = () => http.match(req => req.method === 'GET' && req.url === api('/api/v1/books/7'));
+
+  /** Answers what the default tab asks for besides the book. */
+  function flushOtherRequests(): void {
+    http.match(req => !isListRequest(req) && req.url !== api('/api/v1/books/7'))
+      .forEach(req => req.flush(req.request.url.endsWith('/sidecar/status') ? {status: 'NOT_APPLICABLE'} : null));
+  }
 
   function open(book: Book = apiBook(7)): void {
     fixture = TestBed.createComponent(BookMetadataCenterComponent);
@@ -80,8 +95,7 @@ describe('BookMetadataCenterComponent without the book list', () => {
     expect(requests[0].request.params.get('withDescription')).toBe('true');
     requests[0].flush(book);
     fixture.detectChanges();
-    // What the default tab asks for besides the book
-    http.match(req => !isListRequest(req) && req.url !== api('/api/v1/books/7')).forEach(req => req.flush(null));
+    flushOtherRequests();
   }
 
   it('should show the book from GET /books/{id} with no request for the book list', () => {
@@ -104,7 +118,7 @@ describe('BookMetadataCenterComponent without the book list', () => {
     expect(refetch.length).toBe(1);
     refetch[0].flush(apiBook(7, {readStatus: ReadStatus.READ}));
     fixture.detectChanges();
-    http.match(req => !isListRequest(req) && req.url !== api('/api/v1/books/7')).forEach(req => req.flush(null));
+    flushOtherRequests();
 
     TestBed.inject(BookService).updateBookReadStatus(8, ReadStatus.READ).subscribe();
     http.expectOne(api('/api/v1/books/status')).flush([{bookId: 8, readStatus: ReadStatus.READ}]);
@@ -121,8 +135,38 @@ describe('BookMetadataCenterComponent without the book list', () => {
 
     bookRequests().forEach(req => req.flush(apiBook(7)));
     fixture.detectChanges();
-    http.match(req => !isListRequest(req) && req.url !== api('/api/v1/books/7')).forEach(req => req.flush(null));
+    flushOtherRequests();
     http.expectNone(isListRequest);
+  });
+
+  it('should open the reviews tab without the book list', async () => {
+    open();
+
+    const reviewsTab = fixture.nativeElement.querySelector('p-tab[value="reviews"]') as HTMLElement;
+    expect(reviewsTab).toBeTruthy();
+    reviewsTab.click();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('app-book-reviews')).toBeTruthy();
+    flushOtherRequests();
+    http.expectNone(isListRequest);
+  });
+
+  it('should download the book list only once the Edit tab opens, for its suggestions', async () => {
+    open();
+    http.expectNone(isListRequest);
+
+    (fixture.nativeElement.querySelector('p-tab[value="edit"]') as HTMLElement).click();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    expect(fixture.nativeElement.querySelector('app-metadata-editor')).toBeTruthy();
+    http.expectOne(isListRequest).flush([apiBook(7)]);
+    fixture.detectChanges();
+    flushOtherRequests();
   });
 
   it('should read the book shown, not one from the list', () => {
