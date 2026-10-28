@@ -19,11 +19,7 @@
           "/manifest.webmanifest",
           "/*.css",
           "/*.js",
-          "/media/primeicons-*.woff2",
-          "/media/primeicons-*.woff",
-          "/media/primeicons-*.ttf",
-          "/media/primeicons-*.svg",
-          "/media/primeicons-*.eot"
+          "/media/primeicons-*.woff2"
         ]
       }
     },
