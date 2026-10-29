@@ -3,9 +3,12 @@ import {Component, inject, OnDestroy, OnInit, Optional} from '@angular/core';
 import {ActivatedRoute, Router} from '@angular/router';
 import {UserService} from '../../../settings/user-management/user.service';
 import {Book, BookRecommendation} from '../../../book/model/book.model';
-import {BehaviorSubject, Observable, Subject} from 'rxjs';
-import {distinctUntilChanged, filter, map, shareReplay, switchMap, take, takeUntil, tap,} from 'rxjs/operators';
+import {BehaviorSubject, EMPTY, merge, Observable, of, Subject} from 'rxjs';
+import {catchError, debounceTime, distinctUntilChanged, filter, map, pairwise, shareReplay, switchMap, take, takeUntil, tap,} from 'rxjs/operators';
 import {BookService} from '../../../book/service/book.service';
+import {BookStateService} from '../../../book/service/book-state.service';
+import {bookIdsOf} from '../../../book/service/book-socket.service';
+import {LocalWriteService, writeTouchesBook} from '../../../../core/services/catalog-write.interceptor';
 import {AppSettingsService} from '../../../../shared/service/app-settings.service';
 import {Tab, TabList, TabPanel, TabPanels, Tabs,} from 'primeng/tabs';
 import {DynamicDialogConfig, DynamicDialogRef} from 'primeng/dynamicdialog';
@@ -17,6 +20,8 @@ import {MetadataEditorComponent} from './metadata-editor/metadata-editor.compone
 import {MetadataSearcherComponent} from './metadata-searcher/metadata-searcher.component';
 import {SidecarViewerComponent} from './sidecar-viewer/sidecar-viewer.component';
 import {TaskHelperService} from '../../../settings/task-management/task-helper.service';
+
+const REFETCH_DEBOUNCE_MS = 300;
 
 @Component({
   selector: 'app-book-metadata-center',
@@ -43,6 +48,8 @@ export class BookMetadataCenterComponent implements OnInit, OnDestroy {
   private route = inject(ActivatedRoute);
   private router = inject(Router);
   private bookService = inject(BookService);
+  private bookStateService = inject(BookStateService);
+  private localWriteService = inject(LocalWriteService);
   private userService = inject(UserService);
   private appSettingsService = inject(AppSettingsService);
   private metadataHostService = inject(BookMetadataHostService);
@@ -110,19 +117,29 @@ export class BookMetadataCenterComponent implements OnInit, OnDestroy {
         this.currentBookId$.next(bookId);
       });
 
+    // The book is fetched by id, so the page opens without the book list. It is fetched again after a
+    // change to it: a write from this client, a websocket change, or a change to the list's copy of it.
+    // The list arriving is no change: a fetch then would reset what the user is typing in the Edit tab
     this.book$ = this.currentBookId$.pipe(
       filter((bookId): bookId is number => bookId != null),
       distinctUntilChanged(),
-      switchMap(bookId =>
-        this.bookService.bookState$.pipe(
-          map(state => state.books?.find(b => b.id === bookId)),
-          filter((book): book is Book => !!book && !!book.metadata),
-          distinctUntilChanged(),
-          switchMap(book =>
-            this.bookService.getBookByIdFromAPI(book.id, true)
+      switchMap(bookId => merge(
+        of(null),
+        merge(
+          this.localWriteService.writes$.pipe(filter(write => writeTouchesBook(write, bookId))),
+          this.bookService.bookChanges$.pipe(filter(changes => bookIdsOf(changes).has(bookId))),
+          this.bookStateService.bookState$.pipe(
+            map(state => state.books?.find(b => b.id === bookId)),
+            distinctUntilChanged(),
+            pairwise(),
+            filter(([previous]) => previous !== undefined)
           )
-        )
-      ),
+        ).pipe(debounceTime(REFETCH_DEBOUNCE_MS))
+      ).pipe(
+        switchMap(() => this.bookService.getBookByIdFromAPI(bookId, true).pipe(
+          catchError(() => EMPTY)
+        ))
+      )),
       tap(book => this.isPhysical = book.isPhysical ?? false),
       takeUntil(this.destroy$),
       shareReplay({bufferSize: 1, refCount: true})

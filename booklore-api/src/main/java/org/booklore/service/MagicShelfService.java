@@ -30,7 +30,8 @@ public class MagicShelfService {
         return getShelvesForUser(userId);
     }
 
-    private List<MagicShelf> getShelvesForUser(Long userId) {
+    /** The user's own magic shelves, then the public shelves of other users: what {@link #getUserShelves()} lists. */
+    public List<MagicShelf> getShelvesForUser(Long userId) {
         List<MagicShelf> shelves = magicShelfRepository.findAllByUserId(userId).stream()
                 .map(this::toDto)
                 .collect(Collectors.toList());

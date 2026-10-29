@@ -22,6 +22,7 @@ import {DialogLauncherService} from '../../../../shared/services/dialog-launcher
 import {SortService} from '../../../book/service/sort.service';
 import {PageTitleService} from "../../../../shared/service/page-title.service";
 import {SortDirection, SortOption} from '../../../book/model/sort.model';
+import {catalogRowKind, DashboardRowService, DashboardRowState} from '../../services/dashboard-row.service';
 
 const DEFAULT_MAX_ITEMS = 20;
 
@@ -37,6 +38,7 @@ const DEFAULT_MAX_ITEMS = 20;
     TooltipModule,
     TranslocoDirective
   ],
+  providers: [DashboardRowService],
   standalone: true
 })
 export class MainDashboardComponent implements OnInit {
@@ -49,14 +51,18 @@ export class MainDashboardComponent implements OnInit {
   private ruleEvaluatorService = inject(BookRuleEvaluatorService);
   private sortService = inject(SortService);
   private pageTitle = inject(PageTitleService);
+  private dashboardRowService = inject(DashboardRowService);
   private readonly t = inject(TranslocoService);
 
-  bookState$ = this.bookService.bookState$;
-  dashboardConfig$ = this.dashboardConfigService.config$;
+  libraryState$ = inject(LibraryService).libraryState$;
+  dashboardConfig$ = this.dashboardConfigService.ready$;
 
+  // Keyed by what a row shows, so a config change that keeps a row (a new title, say) does not fetch it
+  // again, and the random row keeps its books
+  private rowStates = new Map<string, Observable<DashboardRowState>>();
   private scrollerBooksCache = new Map<string, Observable<Book[]>>();
 
-  isLibrariesEmpty$: Observable<boolean> = inject(LibraryService).libraryState$.pipe(
+  isLibrariesEmpty$: Observable<boolean> = this.libraryState$.pipe(
     map(state => !state.libraries || state.libraries.length === 0)
   );
 
@@ -64,14 +70,30 @@ export class MainDashboardComponent implements OnInit {
 
   ngOnInit(): void {
     this.pageTitle.setPageTitle(this.t.translate('dashboard.main.pageTitle'));
+  }
 
-    this.dashboardConfig$.subscribe(() => {
-      this.scrollerBooksCache.clear();
-    });
+  /**
+   * The four fixed rows come from the server. A magic shelf row is computed from the book list as before,
+   * which downloads the list, but only for a user who added such a row.
+   */
+  getRowState(config: ScrollerConfig): Observable<DashboardRowState> {
+    const key = this.rowKey(config);
+    let state$ = this.rowStates.get(key);
+    if (!state$) {
+      const kind = catalogRowKind(config.type);
+      const rowState$: Observable<DashboardRowState> = kind
+        ? this.dashboardRowService.row$(kind, config.maxItems || DEFAULT_MAX_ITEMS, () => this.getBooksForScroller(config))
+        : this.getBooksForScroller(config).pipe(
+          map((books): DashboardRowState => ({status: this.bookService.getCurrentBookState().loaded ? 'ready' : 'loading', books}))
+        );
+      state$ = rowState$.pipe(shareReplay({bufferSize: 1, refCount: true}));
+      this.rowStates.set(key, state$);
+    }
+    return state$;
+  }
 
-    this.magicShelfService.shelvesState$.subscribe(() => {
-      this.scrollerBooksCache.clear();
-    });
+  private rowKey(config: ScrollerConfig): string {
+    return [config.type, config.magicShelfId, config.sortField, config.sortDirection, config.maxItems || DEFAULT_MAX_ITEMS].join('|');
   }
 
   private getLastReadBooks(maxItems: number, sortBy?: string): Observable<Book[]> {
@@ -181,8 +203,10 @@ export class MainDashboardComponent implements OnInit {
     );
   }
 
+  /** A row computed from the book list. */
   getBooksForScroller(config: ScrollerConfig): Observable<Book[]> {
-    if (!this.scrollerBooksCache.has(config.id)) {
+    const key = this.rowKey(config);
+    if (!this.scrollerBooksCache.has(key)) {
       let books$: Observable<Book[]>;
 
       switch (config.type) {
@@ -209,10 +233,10 @@ export class MainDashboardComponent implements OnInit {
           books$ = this.bookService.bookState$.pipe(map(() => []));
       }
 
-      this.scrollerBooksCache.set(config.id, books$.pipe(shareReplay(1)));
+      this.scrollerBooksCache.set(key, books$.pipe(shareReplay(1)));
     }
 
-    return this.scrollerBooksCache.get(config.id)!;
+    return this.scrollerBooksCache.get(key)!;
   }
 
   private createSortOption(field: string, direction: string): SortOption {

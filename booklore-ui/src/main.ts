@@ -13,6 +13,7 @@ import Aura from '@primeuix/themes/aura';
 import { routes } from './app/app.routes';
 import { AuthInterceptorService } from './app/core/security/auth-interceptor.service';
 import { NgswBypassInterceptor } from './app/core/services/ngsw-bypass.interceptor';
+import { CatalogWriteInterceptor } from './app/core/services/catalog-write.interceptor';
 import { AuthService, websocketInitializer } from './app/shared/service/auth.service';
 import { inject, isDevMode, provideAppInitializer, provideZoneChangeDetection } from '@angular/core';
 import { initializeAuthFactory } from './app/core/security/auth-initializer';
@@ -40,7 +41,7 @@ bootstrapApplication(AppComponent, {
       const startup = inject(StartupService);
       return startup.load();
     }),
-    provideHttpClient(withInterceptors([NgswBypassInterceptor, AuthInterceptorService])),
+    provideHttpClient(withInterceptors([NgswBypassInterceptor, AuthInterceptorService, CatalogWriteInterceptor])),
     provideAppInitializer(initializeAuthFactory()),
     provideRouter(routes),
     DialogService,

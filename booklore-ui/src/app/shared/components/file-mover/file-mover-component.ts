@@ -72,9 +72,14 @@ export class FileMoverComponent implements OnDestroy {
 
   constructor() {
     this.bookIds = new Set(this.config.data?.bookIds ?? []);
-    this.books = this.bookService.getBooksByIdsFromState([...this.bookIds]);
     this.loadAvailableLibraries();
-    this.loadDefaultPattern();
+    // Opened from a dashboard card or the detail page, the books may not be in a loaded list
+    this.bookService.getBooksByIds([...this.bookIds]).pipe(
+      takeUntil(this.destroy$)
+    ).subscribe(books => {
+      this.books = books;
+      this.loadDefaultPattern();
+    });
   }
 
   ngOnDestroy(): void {

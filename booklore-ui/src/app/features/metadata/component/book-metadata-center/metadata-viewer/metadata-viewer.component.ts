@@ -516,8 +516,10 @@ export class MetadataViewerComponent implements OnInit, OnChanges, AfterViewChec
     return html ? DOMPurify.sanitize(html) : '';
   }
 
+  /** Reads the book shown, which this page fetched itself: the book list may not be loaded. */
   read(bookId: number | undefined, reader?: "epub-streaming", bookType?: BookType): void {
-    if (bookId) this.bookService.readBook(bookId, reader, bookType);
+    if (!bookId) return;
+    this.withCurrentBook(book => this.bookService.readBook(book?.id === bookId ? book : bookId, reader, bookType));
   }
 
   isInProgressStatus(): boolean {
@@ -705,7 +707,10 @@ export class MetadataViewerComponent implements OnInit, OnChanges, AfterViewChec
   }
 
   assignShelf(bookId: number) {
-    this.bookDialogHelperService.openShelfAssignerDialog((this.bookService.getBookByIdFromState(bookId) as Book), null);
+    this.withCurrentBook(book => {
+      const shown = book?.id === bookId ? book : this.bookService.getBookByIdFromState(bookId);
+      this.bookDialogHelperService.openShelfAssignerDialog(shown ?? null, shown ? null : new Set([bookId]));
+    });
   }
 
   updateReadStatus(status: ReadStatus): void {
@@ -1335,8 +1340,8 @@ export class MetadataViewerComponent implements OnInit, OnChanges, AfterViewChec
   getBookCoverUrl(book: Book): string {
     const isAudiobook = book.primaryFile?.bookType === 'AUDIOBOOK';
     return isAudiobook
-      ? this.urlHelper.getAudiobookCoverUrl(book.id, book.metadata?.audiobookCoverUpdatedOn)
-      : this.urlHelper.getCoverUrl(book.id, book.metadata?.coverUpdatedOn);
+      ? this.urlHelper.getAudiobookCoverUrl(book.id, book.metadata?.audiobookCoverUpdatedOn, book)
+      : this.urlHelper.getCoverUrl(book.id, book.metadata?.coverUpdatedOn, book);
   }
 
   // Comic metadata helpers

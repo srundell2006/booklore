@@ -14,6 +14,8 @@ public interface UserContentRestrictionRepository extends JpaRepository<UserCont
 
     List<UserContentRestrictionEntity> findByUserId(Long userId);
 
+    boolean existsByUserId(Long userId);
+
     List<UserContentRestrictionEntity> findByUserIdAndRestrictionType(Long userId, ContentRestrictionType type);
 
     List<UserContentRestrictionEntity> findByUserIdAndMode(Long userId, ContentRestrictionMode mode);

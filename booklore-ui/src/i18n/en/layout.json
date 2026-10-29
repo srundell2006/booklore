@@ -28,7 +28,9 @@
     "series": "Series",
     "authors": "Authors",
     "notebook": "Notebook",
-    "update": "(Update)"
+    "update": "(Update)",
+    "countUnsupported": "Counted once the book list is loaded. The server cannot count: {{reasons}}",
+    "countError": "Counted once the book list is loaded. The server could not count this shelf."
   },
   "changelog": {
     "title": "What's New",

@@ -107,16 +107,21 @@
           [recommendedBooks]="recommendedBooks">
         </app-metadata-viewer>
       </p-tabpanel>
+      <!-- Created when first opened: both download the book list, for their suggestions -->
       @if (admin || canEditMetadata) {
         <p-tabpanel value="edit">
-          <app-metadata-editor
-            [book$]="book$">
-          </app-metadata-editor>
+          <ng-template #content>
+            <app-metadata-editor
+              [book$]="book$">
+            </app-metadata-editor>
+          </ng-template>
         </p-tabpanel>
       }
       @if (admin || canEditMetadata) {
         <p-tabpanel value="match">
-          <app-metadata-searcher [book$]="book$" [isActiveTab]="tab === 'match'"></app-metadata-searcher>
+          <ng-template #content>
+            <app-metadata-searcher [book$]="book$" [isActiveTab]="tab === 'match'"></app-metadata-searcher>
+          </ng-template>
         </p-tabpanel>
       }
       @if ((admin || canEditMetadata) && !isPhysical && isLocalStorage) {

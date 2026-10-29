@@ -138,6 +138,45 @@ public class BookService {
         log.info("Streamed {} books in {} chunks for user {} in {} ms", written, chunks, userId, elapsedMs(started));
     }
 
+    /**
+     * The list-view DTOs {@link #streamBooks} writes, for the given books only and in the given order.
+     *
+     * <p>Ids the user cannot see in the stream are left out: deleted books, books the user's content restrictions
+     * hide (non-admins only, as in the stream) and books outside the user's libraries. The loader filters the first
+     * two; the library is checked here, as {@link #getBooksByIds} does.
+     */
+    public List<Book> getListViewBooks(BookLoreUser user, List<Long> orderedIds) {
+        if (orderedIds.isEmpty()) return List.of();
+
+        boolean isAdmin = user.getPermissions().isAdmin();
+        Long userId = user.getId();
+        Set<Long> userLibraryIds = isAdmin ? Set.of() : getUserLibraryIds(user);
+
+        List<Long> ids = List.copyOf(new LinkedHashSet<>(orderedIds));
+        Map<Long, Book> booksById = new HashMap<>();
+        for (int offset = 0; offset < ids.size(); offset += STREAM_CHUNK_SIZE) {
+            Set<Long> chunk = new LinkedHashSet<>(ids.subList(offset, Math.min(offset + STREAM_CHUNK_SIZE, ids.size())));
+
+            List<Book> books = bookQueryService.getListViewChunk(chunk, false, userId, !isAdmin);
+            if (!isAdmin) {
+                Map<Boolean, List<Book>> byAccess = books.stream()
+                        .collect(Collectors.partitioningBy(book -> userLibraryIds.contains(book.getLibraryId())));
+                if (!byAccess.get(false).isEmpty()) {
+                    log.warn("Left out books {} for user {}: they are outside the user's libraries",
+                            byAccess.get(false).stream().map(Book::getId).toList(), userId);
+                }
+                books = byAccess.get(true);
+            }
+            enrichChunkWithProgress(books, userId, false);
+            books.forEach(book -> booksById.put(book.getId(), book));
+        }
+
+        return ids.stream()
+                .map(booksById::get)
+                .filter(Objects::nonNull)
+                .toList();
+    }
+
     private static long elapsedMs(long startedNanos) {
         return TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - startedNanos);
     }
