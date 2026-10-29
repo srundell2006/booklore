@@ -223,8 +223,9 @@ export class BookPatchService {
   updateLastReadTime(bookId: number): void {
     const timestamp = new Date().toISOString();
     // Only a guess at what the server stores once progress is saved, so not worth a refresh of the list
-    this.bookStateService.applyChangeById(books => books.map(book =>
-      book.id === bookId ? {...book, lastReadTime: timestamp} : book
-    ));
+    this.bookStateService.applyChangeById(booksById => {
+      const book = booksById.get(bookId);
+      if (book) booksById.set(bookId, {...book, lastReadTime: timestamp});
+    });
   }
 }

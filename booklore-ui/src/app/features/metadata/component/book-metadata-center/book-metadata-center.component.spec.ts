@@ -1,5 +1,6 @@
 import {afterEach, beforeEach, describe, expect, it, vi} from 'vitest';
 import {ComponentFixture, TestBed} from '@angular/core/testing';
+import {By} from '@angular/platform-browser';
 import {provideNoopAnimations} from '@angular/platform-browser/animations';
 import {HttpRequest, provideHttpClient, withInterceptors} from '@angular/common/http';
 import {HttpTestingController, provideHttpClientTesting} from '@angular/common/http/testing';
@@ -9,6 +10,7 @@ import {DialogService} from 'primeng/dynamicdialog';
 import {TranslocoTestingModule} from '@jsverse/transloco';
 import {BehaviorSubject, NEVER, of} from 'rxjs';
 import {BookMetadataCenterComponent} from './book-metadata-center.component';
+import {MetadataEditorComponent} from './metadata-editor/metadata-editor.component';
 import {API_CONFIG} from '../../../../core/config/api-config';
 import {CatalogWriteInterceptor} from '../../../../core/services/catalog-write.interceptor';
 import {AuthService} from '../../../../shared/service/auth.service';
@@ -165,6 +167,38 @@ describe('BookMetadataCenterComponent without the book list', () => {
 
     expect(fixture.nativeElement.querySelector('app-metadata-editor')).toBeTruthy();
     http.expectOne(isListRequest).flush([apiBook(7)]);
+    fixture.detectChanges();
+    flushOtherRequests();
+  });
+
+  it('should keep what is typed in the Edit tab when the book list arrives, and fetch again on a later change to it', async () => {
+    open();
+    (fixture.nativeElement.querySelector('p-tab[value="edit"]') as HTMLElement).click();
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
+
+    const editor = fixture.debugElement.query(By.directive(MetadataEditorComponent)).componentInstance as MetadataEditorComponent;
+    const title = editor.metadataForm.get('title')!;
+    title.setValue('Typed by user');
+    title.markAsDirty();
+    http.expectOne(isListRequest).flush([apiBook(7)]);
+    fixture.detectChanges();
+    flushOtherRequests();
+    await new Promise(resolve => setTimeout(resolve, 350));
+
+    const refetches = bookRequests();
+    refetches.forEach(req => req.flush(apiBook(7)));
+    fixture.detectChanges();
+    flushOtherRequests();
+    expect(title.value).toBe('Typed by user');
+    expect(refetches.length).toBe(0);
+
+    TestBed.inject(BookService).updateLastReadTime(7);
+    await new Promise(resolve => setTimeout(resolve, 350));
+    const refetch = bookRequests();
+    expect(refetch.length).toBe(1);
+    refetch[0].flush(apiBook(7));
     fixture.detectChanges();
     flushOtherRequests();
   });

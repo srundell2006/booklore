@@ -146,6 +146,28 @@ class CatalogCountServiceTest extends CatalogDatabaseTest {
     }
 
     @Test
+    void seriesNamesLoseTheWhitespaceJavaScriptTrims() throws IOException {
+        // String.prototype.trim also removes tabs, no-break and ideographic spaces at either end, which SQL TRIM keeps
+        BookEntity saga3 = book(comics, "Saga 3", ADDED);
+        seriesName(saga3, "Saga　");
+        BookEntity saga4 = book(comics, "Saga 4", ADDED);
+        seriesName(saga4, "　  \tsaga \n");
+        // A name of such whitespace only is the blank series ''
+        BookEntity ideographicBlank = book(comics, "Ideographic blank", ADDED);
+        seriesName(ideographicBlank, "　 ");
+        // Inside a name it stays
+        BookEntity spacedSaga = book(comics, "Sa ga", ADDED);
+        seriesName(spacedSaga, "Sa　ga");
+        BookLoreUser admin = viewer(adminUser, true);
+
+        CatalogCounts counts = countService.getCounts(admin);
+
+        assertThat(counts).isEqualTo(uiCounts(admin, List.of(fiction, comics), List.of(adminPicks)));
+        // dune, foundation, '', saga and the spaced saga
+        assertThat(counts.series()).isEqualTo(5L);
+    }
+
+    @Test
     void withoutOwnShelvesEveryBookIsUnshelved() throws IOException {
         BookLoreUserEntity shelfless = user("shelfless");
         BookLoreUser viewer = viewer(shelfless, false, comics);

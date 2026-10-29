@@ -34,11 +34,14 @@ import static org.booklore.service.catalog.JsSemantics.*;
  * <p>Every rule predicate is two-valued (never SQL NULL), so NOT, AND and OR combine like the JavaScript booleans.
  * List fields are correlated EXISTS subqueries and the metadata join is one-to-one, so a count needs no DISTINCT.
  *
+ * <p>Text equality is a LIKE without wildcards: under MariaDB's PAD SPACE collations {@code =} and {@code IN} ignore
+ * trailing spaces, which the UI's {@code ===} and {@code includes} do not, and LIKE compares character by character.
+ *
  * <p>Differences accepted on MariaDB, where H2 compares exactly:
  * <ul>
- *     <li>Text is compared through the column collation, which also folds accents and pads trailing spaces in
- *     {@code =} and {@code IN} (not in LIKE). Both sides are lower-cased, the value in Java with {@link Locale#ROOT};
- *     the database's LOWER can differ from JavaScript's toLowerCase for rare characters.</li>
+ *     <li>Text is compared through the column collation, which also folds accents. Both sides are lower-cased, the
+ *     value in Java with {@link Locale#ROOT}; the database's LOWER can differ from JavaScript's toLowerCase for rare
+ *     characters.</li>
  *     <li>FLOAT columns ({@code book.metadata_match_score} and the ratings) are compared as stored, against rule
  *     numbers that a float represents exactly (other numbers are unsupported). The UI holds the value MariaDB's text
  *     protocol returned for the float; where that text is rounded (to six significant digits), a stored value within
@@ -339,7 +342,7 @@ public class MagicShelfCountCompiler {
         return switch (v.kind()) {
             case STRING -> ctx -> {
                 Expression<String> c = column.of(ctx);
-                return ctx.cb().and(ctx.cb().isNotNull(c), ctx.cb().equal(ctx.cb().lower(c), v.string()));
+                return ctx.cb().and(ctx.cb().isNotNull(c), matchesExactly(ctx.cb(), ctx.cb().lower(c), v.string()));
             };
             case NULL -> isNull(column);
             default -> FALSE;
@@ -376,7 +379,7 @@ public class MagicShelfCountCompiler {
         if (list == null) return null;
         Set<String> values = new LinkedHashSet<>(list);
         Column<String> asListed = ctx -> ctx.cb().lower(ctx.cb().coalesce(column.of(ctx), ""));
-        SqlRule any = values.isEmpty() ? FALSE : ctx -> asListed.of(ctx).in(values);
+        SqlRule any = values.isEmpty() ? FALSE : ctx -> matchesAnyExactly(ctx.cb(), asListed.of(ctx), values);
         return switch (operator) {
             case "includes_any" -> any;
             case "excludes_all" -> not(any);
@@ -393,12 +396,13 @@ public class MagicShelfCountCompiler {
                 List<String> list = ruleList(value, JsSemantics::lower);
                 if (list == null) yield null;
                 Set<String> values = new LinkedHashSet<>(list);
-                SqlRule any = values.isEmpty() ? FALSE : hasEntry(collection, (cb, name) -> cb.lower(name).in(values));
+                SqlRule any = values.isEmpty() ? FALSE
+                        : hasEntry(collection, (cb, name) -> matchesAnyExactly(cb, cb.lower(name), values));
                 yield switch (operator) {
                     case "equals", "includes_any" -> any;
                     case "not_equals", "excludes_all" -> not(any);
                     default -> and(values.stream()
-                            .map(entry -> hasEntry(collection, (cb, name) -> cb.equal(cb.lower(name), entry)))
+                            .map(entry -> hasEntry(collection, (cb, name) -> matchesExactly(cb, cb.lower(name), entry)))
                             .toList());
                 };
             }
@@ -817,6 +821,16 @@ public class MagicShelfCountCompiler {
 
     private static <T> SqlRule isNull(Column<T> column) {
         return ctx -> ctx.cb().isNull(column.of(ctx));
+    }
+
+    /** {@code text === value}, as a LIKE without wildcards: MariaDB's {@code =} ignores trailing spaces. */
+    private static Predicate matchesExactly(CriteriaBuilder cb, Expression<String> text, String value) {
+        return cb.like(text, escapeLike(value), LIKE_ESCAPE);
+    }
+
+    /** {@code values.includes(text)}, for values that are not empty. */
+    private static Predicate matchesAnyExactly(CriteriaBuilder cb, Expression<String> text, Collection<String> values) {
+        return cb.or(values.stream().map(value -> matchesExactly(cb, text, value)).toArray(Predicate[]::new));
     }
 
     private static String escapeLike(String value) {

@@ -66,6 +66,8 @@ export class DashboardRowService {
       let failures = 0;
       let request: Subscription | null = null;
       let retry: Subscription | null = null;
+      // Removed books, kept out of the answers of the fetches started up to then, which may have read them
+      const removedIds = new Set<number>();
       const subscriptions = new Subscription();
 
       const emit = (status: DashboardRowState['status']) => subscriber.next({status, books: books ?? []});
@@ -83,10 +85,13 @@ export class DashboardRowService {
         retry?.unsubscribe();
         retry = null;
         request?.unsubscribe();
+        const removedBefore = [...removedIds];
         request = this.http.get<CatalogRowResponse>(`${this.url}/${kind}`, {params: {size}}).subscribe({
           next: response => {
             failures = 0;
-            books = response.books ?? [];
+            books = (response.books ?? []).filter(book => !removedIds.has(book.id));
+            // Once a fetch started after a removal has answered, later ones read the server after it
+            removedBefore.forEach(id => removedIds.delete(id));
             emit('ready');
           },
           error: (error: HttpErrorResponse) => {
@@ -109,6 +114,8 @@ export class DashboardRowService {
       fetch();
       subscriptions.add(refresh$.subscribe(() => fetch()));
       subscriptions.add(this.bookStateService.removed$.subscribe(ids => {
+        // The random row fetches only once, so only while that fetch runs
+        if (!legacyMode && (kind !== 'random' || request?.closed === false)) ids.forEach(id => removedIds.add(id));
         const removed = new Set(ids);
         if (!books || !books.some(book => removed.has(book.id))) return;
         books = books.filter(book => !removed.has(book.id));

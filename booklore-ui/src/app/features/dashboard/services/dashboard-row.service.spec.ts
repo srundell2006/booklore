@@ -116,6 +116,43 @@ describe('DashboardRowService', () => {
     expect(shown(states)).toEqual(['loading:', 'ready:4,2,9', 'ready:4,9']);
   });
 
+  it('should keep a book removed while a row fetch runs out of its answer', () => {
+    const states = watch('recently-added');
+    answer('recently-added', 3, 2, 1);
+
+    write('/api/v1/books/status');
+    vi.advanceTimersByTime(500);
+    const running = http.expectOne(`${ROWS_URL}/recently-added?size=20`);
+    bookState.removeBooks([2]);
+    running.flush({books: [3, 2, 1].map(book)});
+
+    expect(shown(states)).toEqual(['loading:', 'ready:3,2,1', 'ready:3,1', 'ready:3,1']);
+  });
+
+  it('should keep a book removed while the random row loads out of it', () => {
+    const states = watch('random');
+    const loading = http.expectOne(`${ROWS_URL}/random?size=20`);
+    bookState.removeBooks([2]);
+    loading.flush({books: [4, 2, 9].map(book)});
+
+    expect(shown(states)).toEqual(['loading:', 'ready:4,9']);
+  });
+
+  it('should keep a book the server removed out of the fetch the removal starts, and trust the next one', () => {
+    const states = watch('recently-added');
+    answer('recently-added', 3, 2, 1);
+
+    // A removed library path is announced before its books are gone, so the fetch it starts may still read them
+    bookState.removeBooks([2]);
+    bookChanges$.next([{kind: 'removed', ids: [2]}]);
+    answer('recently-added', 3, 2, 1);
+    write('/api/v1/books/status');
+    vi.advanceTimersByTime(500);
+    answer('recently-added', 3, 2, 1);
+
+    expect(shown(states)).toEqual(['loading:', 'ready:3,2,1', 'ready:3,1', 'ready:3,1', 'ready:3,2,1']);
+  });
+
   it('should show the error with no books, and keep the books on a later failure', () => {
     const states = watch('recently-added');
     http.expectOne(`${ROWS_URL}/recently-added?size=20`).flush(null, {status: 500, statusText: 'Server Error'});

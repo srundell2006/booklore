@@ -26,6 +26,9 @@ import java.util.*;
 @RequiredArgsConstructor
 public class CatalogCountService {
 
+    /** {@code String.prototype.trim}: a run of JavaScript whitespace at the start or at the very end. */
+    private static final String JS_TRIM_PATTERN = "^[" + JsSemantics.WHITESPACE + "]+|[" + JsSemantics.WHITESPACE + "]+\\z";
+
     private final EntityManager entityManager;
     private final ShelfRepository shelfRepository;
     private final CatalogViewerResolver viewerResolver;
@@ -91,7 +94,9 @@ public class CatalogCountService {
     /**
      * The UI groups books by {@code seriesName.trim().toLowerCase()} and skips a missing or empty name. A
      * whitespace-only name is not skipped there, so the length test reads the raw column: on MariaDB {@code <> ''}
-     * would drop it (PAD SPACE). The collation also folds accents in the DISTINCT, which the UI does not; accepted.
+     * would drop it (PAD SPACE). SQL TRIM removes spaces only, so the JavaScript whitespace (tabs, line breaks, no-break
+     * and ideographic spaces) goes by REGEXP_REPLACE, which H2 and MariaDB both have. The collation also folds accents
+     * in the DISTINCT, which the UI does not; accepted.
      */
     private long countSeries(CatalogViewer viewer) {
         CriteriaBuilder cb = entityManager.getCriteriaBuilder();
@@ -99,7 +104,9 @@ public class CatalogCountService {
         Root<BookEntity> book = query.from(BookEntity.class);
         Join<BookEntity, BookMetadataEntity> metadata = book.join("metadata");
         Expression<String> seriesName = metadata.get("seriesName");
-        query.select(cb.countDistinct(cb.lower(cb.trim(seriesName))))
+        Expression<String> trimmed = cb.function("regexp_replace", String.class,
+                seriesName, cb.literal(JS_TRIM_PATTERN), cb.literal(""));
+        query.select(cb.countDistinct(cb.lower(trimmed)))
                 .where(viewer.visible(cb, book),
                         cb.isNotNull(seriesName),
                         cb.greaterThan(cb.length(seriesName), 0));

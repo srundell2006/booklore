@@ -4,7 +4,7 @@ import {ActivatedRoute, Router} from '@angular/router';
 import {UserService} from '../../../settings/user-management/user.service';
 import {Book, BookRecommendation} from '../../../book/model/book.model';
 import {BehaviorSubject, EMPTY, merge, Observable, of, Subject} from 'rxjs';
-import {catchError, debounceTime, distinctUntilChanged, filter, map, shareReplay, skip, switchMap, take, takeUntil, tap,} from 'rxjs/operators';
+import {catchError, debounceTime, distinctUntilChanged, filter, map, pairwise, shareReplay, switchMap, take, takeUntil, tap,} from 'rxjs/operators';
 import {BookService} from '../../../book/service/book.service';
 import {BookStateService} from '../../../book/service/book-state.service';
 import {bookIdsOf} from '../../../book/service/book-socket.service';
@@ -118,7 +118,8 @@ export class BookMetadataCenterComponent implements OnInit, OnDestroy {
       });
 
     // The book is fetched by id, so the page opens without the book list. It is fetched again after a
-    // change to it: a write from this client, a websocket change, or a change to the list's copy of it
+    // change to it: a write from this client, a websocket change, or a change to the list's copy of it.
+    // The list arriving is no change: a fetch then would reset what the user is typing in the Edit tab
     this.book$ = this.currentBookId$.pipe(
       filter((bookId): bookId is number => bookId != null),
       distinctUntilChanged(),
@@ -130,7 +131,8 @@ export class BookMetadataCenterComponent implements OnInit, OnDestroy {
           this.bookStateService.bookState$.pipe(
             map(state => state.books?.find(b => b.id === bookId)),
             distinctUntilChanged(),
-            skip(1)
+            pairwise(),
+            filter(([previous]) => previous !== undefined)
           )
         ).pipe(debounceTime(REFETCH_DEBOUNCE_MS))
       ).pipe(

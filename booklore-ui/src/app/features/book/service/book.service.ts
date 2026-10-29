@@ -80,10 +80,7 @@ export class BookService {
   private fetchBooks(): Observable<Book[]> {
     return this.http.get<Book[]>(this.url).pipe(
       map(bookList => {
-        // A change made while the list downloaded may be missing from it
-        const refresh = this.bookStateService.takeRefreshRequest();
-        this.bookStateService.setLoaded(bookList);
-        if (refresh) this.refreshBooks();
+        this.setDownloaded(bookList);
         return bookList;
       }),
       catchError(error => {
@@ -94,22 +91,31 @@ export class BookService {
   }
 
   /**
-   * Downloads the list again, when one is held. While the first download runs, one more follows it; with no
-   * list there is nothing to bring up to date, since the next page that needs the list downloads it fresh.
+   * Downloads the list again, when one is held. While a download runs, the first or a refresh, one more follows
+   * it, so that changes made meanwhile are kept and two downloads never land out of order; with no list there
+   * is nothing to bring up to date, since the next page that needs the list downloads it fresh.
    */
   refreshBooks(): void {
-    if (!this.bookStateService.isLoaded()) {
+    if (!this.bookStateService.isLoaded() || this.bookStateService.isFetching()) {
       this.bookStateService.requestRefresh();
       return;
     }
 
+    this.bookStateService.markFetching();
     this.http.get<Book[]>(this.url).pipe(
-      tap(bookList => this.bookStateService.setLoaded(bookList)),
+      tap(bookList => this.setDownloaded(bookList)),
       catchError(error => {
         this.bookStateService.setError(error.message);
         return of(null);
       })
     ).subscribe();
+  }
+
+  private setDownloaded(bookList: Book[]): void {
+    // A change made while the list downloaded may be missing from it
+    const refresh = this.bookStateService.takeRefreshRequest();
+    this.bookStateService.setLoaded(bookList);
+    if (refresh) this.refreshBooks();
   }
 
   removeBooksByLibraryId(libraryId: number): void {

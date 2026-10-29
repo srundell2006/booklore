@@ -126,6 +126,81 @@ describe('BookStateService: the list is never partial', () => {
     http.expectNone(isListRequest);
   });
 
+  it('should keep out a book created and then deleted while the list downloads', () => {
+    service.bookState$.subscribe();
+    const download = expectListRequest();
+
+    service.handleBookChanges([{kind: 'created', book: book(4)}]);
+    deleteBooks(4);
+    download.flush([book(1), book(2), book(3), book(4)]);
+
+    expect(ids()).toEqual([1, 2, 3]);
+    http.expectNone(isListRequest);
+  });
+
+  it('should apply the changes that came in while the list downloaded in one pass over the downloaded list', () => {
+    service.bookState$.subscribe();
+    const download = expectListRequest();
+    for (let id = 10; id < 60; id++) {
+      service.handleBookChanges([{kind: 'created', book: book(id)}]);
+    }
+
+    // Counts each look at a downloaded book: once per queued batch would be 50 times each
+    let looks = 0;
+    const downloaded = [1, 2, 3].map(id => Object.defineProperty({...book(id)}, 'id', {
+      get: () => { looks++; return id; }, enumerable: true,
+    }) as Book);
+    download.flush(downloaded);
+
+    expect(looks).toBeLessThanOrEqual(2 * downloaded.length);
+    expect(ids()).toEqual([1, 2, 3, ...Array.from({length: 50}, (_, i) => 10 + i)]);
+  });
+
+  it('should keep the changes made while a refresh downloads', () => {
+    service.bookState$.subscribe();
+    const download = expectListRequest();
+    markRead(1);
+    download.flush([book(1), book(2), book(3)]);
+
+    const refresh = expectListRequest();
+    deleteBooks(2);
+    service.handleBookChanges([{kind: 'updated', books: [{...book(3), metadata: {bookId: 3, title: 'Renamed'}}]}]);
+    expect(ids()).toEqual([1, 3]);
+    refresh.flush([{...book(1), readStatus: ReadStatus.READ}, book(2), book(3)]);
+
+    expect(state.getCurrentBookState().books?.map(b => [b.id, b.metadata?.title])).toEqual([[1, 'Book 1'], [3, 'Renamed']]);
+    http.expectNone(isListRequest);
+  });
+
+  it('should show a change made while a refresh downloads at once, and download once more after it', () => {
+    service.bookState$.subscribe();
+    expectListRequest().flush([book(1), book(2)]);
+    service.refreshBooks();
+    const refresh = expectListRequest();
+
+    markRead(2);
+    expect(state.getCurrentBookState().books?.find(b => b.id === 2)?.readStatus).toBe(ReadStatus.READ);
+    refresh.flush([book(1), book(2)]);
+
+    expectListRequest().flush([book(1), {...book(2), readStatus: ReadStatus.READ}]);
+    expect(state.getCurrentBookState().books?.find(b => b.id === 2)?.readStatus).toBe(ReadStatus.READ);
+    http.expectNone(isListRequest);
+  });
+
+  it('should run one refresh at a time, with one more after it when asked meanwhile', () => {
+    service.bookState$.subscribe();
+    expectListRequest().flush([book(1)]);
+
+    service.refreshBooks();
+    service.refreshBooks();
+    service.refreshBooks();
+    expectListRequest().flush([book(1), book(2)]);
+    expectListRequest().flush([book(1), book(2), book(3)]);
+
+    expect(ids()).toEqual([1, 2, 3]);
+    http.expectNone(isListRequest);
+  });
+
   it('should not download a list to refresh one that was never loaded', () => {
     service.refreshBooks();
 

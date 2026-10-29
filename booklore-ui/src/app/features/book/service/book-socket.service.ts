@@ -46,10 +46,7 @@ export class BookSocketService {
     if (changes.length === 0) return;
     const removedIds = changes.flatMap(change => change.kind === 'removed' ? change.ids : []);
 
-    this.bookStateService.applyChangeById(books => {
-      // A Map keeps each book at its place in the list, and appends the new ones as before
-      const booksById = new Map(books.map(book => [book.id, book]));
-
+    this.bookStateService.applyChangeById(booksById => {
       for (const change of changes) {
         switch (change.kind) {
           case 'created':
@@ -73,8 +70,6 @@ export class BookSocketService {
             break;
         }
       }
-
-      return Array.from(booksById.values());
     }, removedIds);
   }
 
