@@ -101,7 +101,7 @@ class MagicShelfCountSqlTest extends CatalogDatabaseTest {
     }
 
     /** The operator after each {@code lower(...)}, such as {@code =}, {@code in} or {@code not like}. */
-    private static List<String> operatorsOnLowerCasedText(String hql) {
+    static List<String> operatorsOnLowerCasedText(String hql) {
         List<String> operators = new ArrayList<>();
         String lowerCased = hql.toLowerCase(Locale.ROOT);
         for (int at = lowerCased.indexOf("lower("); at >= 0; at = lowerCased.indexOf("lower(", at + 1)) {

@@ -1,8 +1,9 @@
 import {AfterViewChecked, Component, DestroyRef, ElementRef, inject, Input, OnChanges, OnInit, SimpleChanges, ViewChild} from '@angular/core';
 import {Button} from 'primeng/button';
 import {AsyncPipe, DecimalPipe, NgClass} from '@angular/common';
-import {combineLatest, Observable} from 'rxjs';
+import {combineLatest, Observable, of} from 'rxjs';
 import {BookService} from '../../../../book/service/book.service';
+import {SeriesBooksService} from '../../../../book/service/series-books.service';
 import {BookFileService} from '../../../../book/service/book-file.service';
 import {Rating, RatingRateEvent} from 'primeng/rating';
 import {FormsModule} from '@angular/forms';
@@ -18,7 +19,7 @@ import {takeUntilDestroyed} from '@angular/core/rxjs-interop';
 import {ProgressBar} from 'primeng/progressbar';
 import {MetadataRefreshType} from '../../../model/request/metadata-refresh-type.enum';
 import {Router} from '@angular/router';
-import {filter, map, switchMap, take, tap} from 'rxjs/operators';
+import {catchError, distinctUntilChanged, filter, map, switchMap, take} from 'rxjs/operators';
 import {Menu} from 'primeng/menu';
 import {ResetProgressType, ResetProgressTypes} from '../../../../../shared/constants/reset-progress-type';
 import {DatePicker} from 'primeng/datepicker';
@@ -40,6 +41,8 @@ import {Dialog} from 'primeng/dialog';
 import {Checkbox} from 'primeng/checkbox';
 import DOMPurify from 'dompurify';
 
+/** The books of the series the "More in series" tab shows at most. */
+const SERIES_TAB_LIMIT = 200;
 
 @Component({
   selector: 'app-metadata-viewer',
@@ -59,6 +62,7 @@ export class MetadataViewerComponent implements OnInit, OnChanges, AfterViewChec
   private emailService = inject(EmailService);
   private messageService = inject(MessageService);
   private bookService = inject(BookService);
+  private seriesBooksService = inject(SeriesBooksService);
   private bookFileService = inject(BookFileService);
   private taskHelperService = inject(TaskHelperService);
   private authorService = inject(AuthorService);
@@ -456,9 +460,10 @@ export class MetadataViewerComponent implements OnInit, OnChanges, AfterViewChec
       )
       .subscribe(book => {
         this.isAutoFetching = false;
-        this.loadBooksInSeriesAndFilterRecommended(book.metadata!.bookId);
         this.selectedReadStatus = book.readStatus ?? ReadStatus.UNREAD;
       });
+
+    this.loadBooksInSeriesAndFilterRecommended();
 
     this.appSettings$
       .pipe(
@@ -473,7 +478,7 @@ export class MetadataViewerComponent implements OnInit, OnChanges, AfterViewChec
   ngOnChanges(changes: SimpleChanges): void {
     if (changes['recommendedBooks']) {
       this.originalRecommendedBooks = [...this.recommendedBooks];
-      this.withCurrentBook(book => this.filterRecommendations(book));
+      this.filterRecommendations();
     }
   }
 
@@ -481,19 +486,29 @@ export class MetadataViewerComponent implements OnInit, OnChanges, AfterViewChec
     this.book$.pipe(take(1)).subscribe(callback);
   }
 
-  private loadBooksInSeriesAndFilterRecommended(bookId: number): void {
-    this.bookService.getBooksInSeries(bookId).pipe(
-      tap(series => {
-        series.sort((a, b) => (a.metadata?.seriesNumber ?? 0) - (b.metadata?.seriesNumber ?? 0));
-        this.bookInSeries = series;
-        this.originalRecommendedBooks = [...this.recommendedBooks];
-      }),
-      switchMap(() => this.book$.pipe(take(1))),
+  /**
+   * The series of the book shown, from the server, so the tab shows without the book list. It is fetched again when
+   * another book is shown or the series name changes, not each time the same book is fetched again.
+   */
+  private loadBooksInSeriesAndFilterRecommended(): void {
+    this.book$.pipe(
+      filter((book): book is Book => book != null),
+      map(book => ({bookId: book.id, seriesName: book.metadata?.seriesName?.trim() || null})),
+      distinctUntilChanged((a, b) => a.bookId === b.bookId && a.seriesName === b.seriesName),
+      switchMap(({seriesName}) => seriesName
+        ? this.seriesBooksService.getSeriesBooks(seriesName, SERIES_TAB_LIMIT).pipe(
+          map(series => series.books),
+          catchError(() => of([] as Book[]))
+        )
+        : of([] as Book[])),
       takeUntilDestroyed(this.destroyRef)
-    ).subscribe(book => this.filterRecommendations(book));
+    ).subscribe(series => {
+      this.bookInSeries = series;
+      this.filterRecommendations();
+    });
   }
 
-  private filterRecommendations(book: Book | null): void {
+  private filterRecommendations(): void {
     if (!this.originalRecommendedBooks) return;
     const bookInSeriesIds = new Set(this.bookInSeries.map(book => book.id));
     this.recommendedBooks = this.originalRecommendedBooks.filter(

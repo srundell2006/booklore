@@ -796,6 +796,13 @@
   color: var(--text-secondary-color);
 }
 
+.truncation-note {
+  margin: 0;
+  padding: 0 0.5rem;
+  font-size: 0.85rem;
+  color: var(--text-secondary-color);
+}
+
 // ── Loading ──
 
 .loading-state {
