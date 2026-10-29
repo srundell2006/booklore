@@ -19,6 +19,7 @@ import java.util.*;
 import java.util.function.BiFunction;
 import java.util.function.UnaryOperator;
 
+import static org.booklore.service.catalog.CatalogSql.*;
 import static org.booklore.service.catalog.JsSemantics.*;
 
 /**
@@ -55,7 +56,6 @@ import static org.booklore.service.catalog.JsSemantics.*;
 @Component
 public class MagicShelfCountCompiler {
 
-    private static final char LIKE_ESCAPE = '!';
     private static final int MAX_DEPTH = 64;
 
     private static final SqlRule TRUE = ctx -> ctx.cb().conjunction();
@@ -823,24 +823,8 @@ public class MagicShelfCountCompiler {
         return ctx -> ctx.cb().isNull(column.of(ctx));
     }
 
-    /** {@code text === value}, as a LIKE without wildcards: MariaDB's {@code =} ignores trailing spaces. */
-    private static Predicate matchesExactly(CriteriaBuilder cb, Expression<String> text, String value) {
-        return cb.like(text, escapeLike(value), LIKE_ESCAPE);
-    }
-
     /** {@code values.includes(text)}, for values that are not empty. */
     private static Predicate matchesAnyExactly(CriteriaBuilder cb, Expression<String> text, Collection<String> values) {
         return cb.or(values.stream().map(value -> matchesExactly(cb, text, value)).toArray(Predicate[]::new));
-    }
-
-    private static String escapeLike(String value) {
-        StringBuilder escaped = new StringBuilder(value.length());
-        for (char ch : value.toCharArray()) {
-            if (ch == LIKE_ESCAPE || ch == '%' || ch == '_') {
-                escaped.append(LIKE_ESCAPE);
-            }
-            escaped.append(ch);
-        }
-        return escaped.toString();
     }
 }

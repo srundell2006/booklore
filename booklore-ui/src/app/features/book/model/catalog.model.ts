@@ -32,5 +32,16 @@ export interface CatalogRowResponse {
   books: Book[];
 }
 
+/**
+ * GET /api/v1/catalog/series/books: the first books of a series, in series order (number ascending, books without
+ * one last, ties by id), as GET /api/v1/books lists them. total counts every book of the series.
+ */
+export interface SeriesBooks {
+  /** The series name as the first book stores it; the server sends the name asked for when no book matches. */
+  seriesName: string | null;
+  total: number;
+  books: Book[];
+}
+
 /** 'legacy': every count is computed from the book list, as before the catalog endpoints. */
 export type CatalogMode = 'server' | 'legacy';

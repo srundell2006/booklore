@@ -184,6 +184,12 @@ public abstract class CatalogDatabaseTest {
         jdbcTemplate.update("UPDATE book_metadata SET series_name = ? WHERE book_id = ?", seriesName, book.getId());
     }
 
+    /** Written past the entity, like the name: a change to the entity would flush its stale name over that one. */
+    protected void seriesNumber(BookEntity book, Float seriesNumber) {
+        em.flush();
+        jdbcTemplate.update("UPDATE book_metadata SET series_number = ? WHERE book_id = ?", seriesNumber, book.getId());
+    }
+
     protected void tag(BookEntity book, String name) {
         TagEntity tag = em.createQuery("SELECT t FROM TagEntity t WHERE t.name = :name", TagEntity.class)
                 .setParameter("name", name)

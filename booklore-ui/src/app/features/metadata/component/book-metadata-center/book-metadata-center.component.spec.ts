@@ -81,12 +81,24 @@ describe('BookMetadataCenterComponent without the book list', () => {
   });
 
   const isListRequest = (req: HttpRequest<unknown>) => req.url.endsWith('/api/v1/books') && req.method === 'GET';
+  const isSeriesRequest = (req: HttpRequest<unknown>) => req.url === api('/api/v1/catalog/series/books');
   const bookRequests = () => http.match(req => req.method === 'GET' && req.url === api('/api/v1/books/7'));
 
-  /** Answers what the default tab asks for besides the book. */
+  /** Answers what the default tab asks for besides the book and its series. */
   function flushOtherRequests(): void {
-    http.match(req => !isListRequest(req) && req.url !== api('/api/v1/books/7'))
+    http.match(req => !isListRequest(req) && !isSeriesRequest(req) && req.url !== api('/api/v1/books/7'))
       .forEach(req => req.flush(req.request.url.endsWith('/sidecar/status') ? {status: 'NOT_APPLICABLE'} : null));
+  }
+
+  function inSeries(id: number, seriesNumber: number, seriesName = 'The Expanse'): Book {
+    const book = apiBook(id);
+    return {...book, metadata: {...book.metadata!, seriesName, seriesNumber}};
+  }
+
+  async function settle(): Promise<void> {
+    fixture.detectChanges();
+    await fixture.whenStable();
+    fixture.detectChanges();
   }
 
   function open(book: Book = apiBook(7)): void {
@@ -201,6 +213,77 @@ describe('BookMetadataCenterComponent without the book list', () => {
     refetch[0].flush(apiBook(7));
     fixture.detectChanges();
     flushOtherRequests();
+  });
+
+  it('should show the "More in series" tab from the series endpoint with no book list loaded', async () => {
+    open(inSeries(7, 2, ' The Expanse '));
+
+    const request = http.expectOne(isSeriesRequest);
+    expect(request.request.params.get('name')).toBe('The Expanse');
+    expect(request.request.params.get('limit')).toBe('200');
+    request.flush({seriesName: 'The Expanse', total: 3, books: [inSeries(5, 1), inSeries(7, 2), inSeries(9, 3)]});
+    await settle();
+    flushOtherRequests();
+
+    expect(fixture.nativeElement.querySelector('p-tab[value="series"]')).toBeTruthy();
+    const cards = Array.from(fixture.nativeElement.querySelectorAll('app-book-card-lite-component img') as NodeListOf<HTMLImageElement>)
+      .map(img => img.alt);
+    expect(cards).toEqual(['Cover of Book 5', 'Cover of Book 9']);
+    http.expectNone(isListRequest);
+  });
+
+  it('should draw a coverless book in the "More in series" tab from its title, with no book list loaded', async () => {
+    open(inSeries(7, 2));
+    const withCover = inSeries(9, 3);
+    http.expectOne(isSeriesRequest).flush({seriesName: 'The Expanse', total: 3, books: [
+      inSeries(5, 1), inSeries(7, 2), {...withCover, metadata: {...withCover.metadata!, coverUpdatedOn: '2024-01-01T00:00:00Z'}},
+    ]});
+    await settle();
+    flushOtherRequests();
+
+    const covers = Array.from(fixture.nativeElement.querySelectorAll('app-book-card-lite-component img') as NodeListOf<HTMLImageElement>)
+      .map(img => img.getAttribute('src'));
+    expect(covers.length).toBe(2);
+    expect(covers[0]).toMatch(/^data:image\/svg\+xml;base64,/);
+    expect(covers[1]).toBe(api('/api/v1/media/book/9/thumbnail?2024-01-01T00:00:00Z&token=token'));
+    http.expectNone(isListRequest);
+  });
+
+  it('should not fetch the series again when the same book is fetched again, and should when its series changes', async () => {
+    open(inSeries(7, 2));
+    http.expectOne(isSeriesRequest).flush({seriesName: 'The Expanse', total: 2, books: [inSeries(5, 1), inSeries(7, 2)]});
+    await settle();
+    flushOtherRequests();
+
+    TestBed.inject(BookService).updateBookReadStatus(7, ReadStatus.READ).subscribe();
+    http.expectOne(api('/api/v1/books/status')).flush([{bookId: 7, readStatus: ReadStatus.READ}]);
+    await new Promise(resolve => setTimeout(resolve, 350));
+    bookRequests().forEach(req => req.flush({...inSeries(7, 2), readStatus: ReadStatus.READ}));
+    await settle();
+    flushOtherRequests();
+    http.expectNone(isSeriesRequest);
+
+    TestBed.inject(BookService).handleBookChanges([{kind: 'updated', books: [inSeries(7, 1, 'Leviathan')]}]);
+    await new Promise(resolve => setTimeout(resolve, 350));
+    bookRequests().forEach(req => req.flush(inSeries(7, 1, 'Leviathan')));
+    await settle();
+    flushOtherRequests();
+    const refetch = http.expectOne(isSeriesRequest);
+    expect(refetch.request.params.get('name')).toBe('Leviathan');
+    refetch.flush({seriesName: 'Leviathan', total: 1, books: [inSeries(7, 1, 'Leviathan')]});
+    await settle();
+
+    expect(fixture.nativeElement.querySelector('p-tab[value="series"]')).toBeNull();
+    http.expectNone(isListRequest);
+  });
+
+  it('should show no "More in series" tab, and ask for no series, for a book without one', async () => {
+    open(apiBook(7, {metadata: {bookId: 7, title: 'Book 7', seriesName: '  ', reviewsLocked: true}}));
+    await settle();
+
+    http.expectNone(isSeriesRequest);
+    expect(fixture.nativeElement.querySelector('p-tab[value="series"]')).toBeNull();
+    http.expectNone(isListRequest);
   });
 
   it('should read the book shown, not one from the list', () => {

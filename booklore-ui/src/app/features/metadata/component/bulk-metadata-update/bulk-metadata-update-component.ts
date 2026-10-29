@@ -1,4 +1,5 @@
-import {Component, inject, OnInit} from '@angular/core';
+import {Component, DestroyRef, inject, OnInit} from '@angular/core';
+import {takeUntilDestroyed} from '@angular/core/rxjs-interop';
 import {FormBuilder, FormGroup, FormsModule, ReactiveFormsModule} from '@angular/forms';
 
 import {InputText} from 'primeng/inputtext';
@@ -63,6 +64,7 @@ export class BulkMetadataUpdateComponent implements OnInit {
   private readonly bookService = inject(BookService);
   private readonly bookMetadataManageService = inject(BookMetadataManageService);
   private readonly messageService = inject(MessageService);
+  private readonly destroyRef = inject(DestroyRef);
 
   allAuthors!: string[];
   allGenres!: string[];
@@ -121,7 +123,10 @@ export class BulkMetadataUpdateComponent implements OnInit {
 
   ngOnInit(): void {
     this.bookIds = this.config.data?.bookIds ?? [];
-    this.books = this.bookService.getBooksByIdsFromState(this.bookIds);
+    // Opened from the series page, the books may not be in a loaded list; only the suggestions wait for it
+    this.bookService.getBooksByIds(this.bookIds)
+      .pipe(takeUntilDestroyed(this.destroyRef))
+      .subscribe(books => this.books = books);
 
     this.metadataForm = this.fb.group({
       authors: [],

@@ -242,9 +242,12 @@
                   <i class="pi pi-objects-column"></i>
                   {{ t('booksInSeries') }}
                 </h3>
+                @if (truncation$ | async; as truncation) {
+                  <p class="truncation-note">{{ t('truncated', truncation) }}</p>
+                }
                 <div class="series-items-grid" #Container
                   [ngStyle]="{'grid-template-columns': 'repeat(auto-fill, minmax(' + gridColumnMinWidth + ', 1fr))'}">
-                  @for (book of books; track book; let i = $index) {
+                  @for (book of books; track book.id; let i = $index) {
                     <div class="grid-item"
                       [ngStyle]="{width: currentCardSize.width + 'px', height: currentCardSize.height + 'px'}">
                       <app-book-card
@@ -267,6 +270,8 @@
               </div>
 
             </div>
+        } @else {
+          <div class="empty-state">{{ t('noBooksFound') }}</div>
         }
 
       </p-tabpanel>
@@ -274,6 +279,9 @@
       <!-- BOOK LIST TAB -->
       <p-tabpanel value="list">
         <div class="book-list-container">
+          @if (truncation$ | async; as truncation) {
+            <p class="truncation-note">{{ t('truncated', truncation) }}</p>
+          }
           @for (book of books; track book.id; let i = $index) {
             <div class="book-list-card">
               <div class="list-number-col">

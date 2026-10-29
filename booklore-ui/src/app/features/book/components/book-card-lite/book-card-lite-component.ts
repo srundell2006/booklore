@@ -41,11 +41,12 @@ export class BookCardLiteComponent implements OnInit, OnDestroy {
     return primaryIsAudiobook && !hasEbookAlternative;
   }
 
+  /** The book is passed along: the book list, where a generated cover would otherwise be looked up, may not be loaded. */
   getThumbnailUrl(): string {
     if (this.isAudiobookOnly()) {
-      return this.urlHelper.getAudiobookThumbnailUrl(this.book.id, this.book.metadata?.audiobookCoverUpdatedOn);
+      return this.urlHelper.getAudiobookThumbnailUrl(this.book.id, this.book.metadata?.audiobookCoverUpdatedOn, this.book);
     }
-    return this.urlHelper.getThumbnailUrl(this.book.id, this.book.metadata?.coverUpdatedOn);
+    return this.urlHelper.getThumbnailUrl(this.book.id, this.book.metadata?.coverUpdatedOn, this.book);
   }
 
   ngOnInit(): void {

@@ -832,6 +832,7 @@
     "continueButton": "Continue",
     "readPercent": "{{ progress }} read",
     "listPages": "pages",
+    "truncated": "Showing the first {{ shown }} of {{ total }} books",
     "stats": {
       "totalPages": "Total Pages",
       "avgPersonalRating": "Avg. Personal Rating",

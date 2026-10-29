@@ -3,12 +3,17 @@ import {Tab, TabList, TabPanel, TabPanels, Tabs} from 'primeng/tabs';
 import {Book} from '../../../book/model/book.model';
 import {DynamicDialogConfig, DynamicDialogRef} from 'primeng/dynamicdialog';
 import {BookService} from '../../../book/service/book.service';
-import {BehaviorSubject, combineLatest, Observable, Subject} from 'rxjs';
+import {BookStateService} from '../../../book/service/book-state.service';
+import {bookIdsOf} from '../../../book/service/book-socket.service';
+import {LocalWriteService, writeTouchesBook} from '../../../../core/services/catalog-write.interceptor';
+import {BehaviorSubject, EMPTY, merge, Observable, of, Subject} from 'rxjs';
 import {UserService} from '../../../settings/user-management/user.service';
-import {distinctUntilChanged, filter, map, shareReplay, switchMap, takeUntil} from 'rxjs/operators';
+import {catchError, debounceTime, distinctUntilChanged, filter, map, pairwise, shareReplay, switchMap, takeUntil} from 'rxjs/operators';
 import {MetadataEditorComponent} from '../book-metadata-center/metadata-editor/metadata-editor.component';
 import {MetadataSearcherComponent} from '../book-metadata-center/metadata-searcher/metadata-searcher.component';
 import {Button} from 'primeng/button';
+
+const REFETCH_DEBOUNCE_MS = 300;
 
 @Component({
   selector: 'app-multi-book-metadata-editor-component',
@@ -29,7 +34,6 @@ import {Button} from 'primeng/button';
 export class MultiBookMetadataEditorComponent implements OnInit, OnDestroy {
 
   bookIds: number[] = [];
-  filteredBooks: Book[] = [];
   loading = false;
 
   currentIndex$ = new BehaviorSubject<number>(0);
@@ -41,12 +45,15 @@ export class MultiBookMetadataEditorComponent implements OnInit, OnDestroy {
   private readonly config = inject(DynamicDialogConfig);
   readonly ref = inject(DynamicDialogRef);
   private readonly bookService = inject(BookService);
+  private readonly bookStateService = inject(BookStateService);
+  private readonly localWriteService = inject(LocalWriteService);
   private readonly userService = inject(UserService);
 
   private readonly destroy$ = new Subject<void>();
 
   ngOnInit(): void {
-    this.bookIds = this.config.data?.bookIds ?? [];
+    // Shown in id order
+    this.bookIds = [...new Set<number>((this.config.data?.bookIds ?? []).map(Number))].sort((a, b) => a - b);
 
     this.userService.userState$.pipe(
       filter(userState => !!userState?.user && userState.loaded),
@@ -57,25 +64,31 @@ export class MultiBookMetadataEditorComponent implements OnInit, OnDestroy {
       this.admin = userPermissions?.admin ?? false;
     });
 
-    const filteredBooks$ = this.bookService.bookState$.pipe(
-      map(state => state.books?.filter(book =>
-        !!book?.metadata && this.bookIds.includes(book.id)
-      ) ?? []),
-      filter(books => books.length > 0),
-      map(books => {
-        this.filteredBooks = books;
-        return books;
-      }),
-      takeUntil(this.destroy$)
-    );
-
-    this.book$ = combineLatest([filteredBooks$, this.currentIndex$]).pipe(
-      map(([books, index]) => books[index]),
-      filter((book): book is Book => !!book),
-      distinctUntilChanged((a, b) => a.id === b.id && a.metadata === b.metadata),
-      switchMap(book =>
-        this.bookService.getBookByIdFromAPI(book.id, true)
-      ),
+    // The shown book is fetched by id, so the editor opens without the book list (the series page opens it before
+    // the list is loaded). It is fetched again after a change to it: a write from this client, a websocket change,
+    // or a change to the list's copy of its metadata. The list arriving is no change: a fetch then would reset what
+    // the user is typing
+    this.book$ = this.currentIndex$.pipe(
+      map(index => this.bookIds[index]),
+      filter((bookId): bookId is number => bookId != null),
+      distinctUntilChanged(),
+      switchMap(bookId => merge(
+        of(null),
+        merge(
+          this.localWriteService.writes$.pipe(filter(write => writeTouchesBook(write, bookId))),
+          this.bookService.bookChanges$.pipe(filter(changes => bookIdsOf(changes).has(bookId))),
+          this.bookStateService.bookState$.pipe(
+            map(state => state.books?.find(b => b.id === bookId)?.metadata),
+            distinctUntilChanged(),
+            pairwise(),
+            filter(([previous]) => previous !== undefined)
+          )
+        ).pipe(debounceTime(REFETCH_DEBOUNCE_MS))
+      ).pipe(
+        switchMap(() => this.bookService.getBookByIdFromAPI(bookId, true).pipe(
+          catchError(() => EMPTY)
+        ))
+      )),
       takeUntil(this.destroy$),
       shareReplay({bufferSize: 1, refCount: true})
     );
@@ -89,7 +102,7 @@ export class MultiBookMetadataEditorComponent implements OnInit, OnDestroy {
 
   handleNextBook() {
     const next = this.currentIndex$.value + 1;
-    if (next < this.filteredBooks.length) {
+    if (next < this.bookIds.length) {
       this.currentIndex$.next(next);
     }
   }
@@ -106,7 +119,7 @@ export class MultiBookMetadataEditorComponent implements OnInit, OnDestroy {
   }
 
   get disableNext(): boolean {
-    return this.currentIndex$.value >= this.filteredBooks.length - 1;
+    return this.currentIndex$.value >= this.bookIds.length - 1;
   }
 
   get disablePrevious(): boolean {

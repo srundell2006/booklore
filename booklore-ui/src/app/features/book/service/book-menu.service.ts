@@ -3,7 +3,7 @@ import {ConfirmationService, MenuItem, MessageService} from 'primeng/api';
 import {BookService} from './book.service';
 import {BookMetadataManageService} from './book-metadata-manage.service';
 import {AGE_RATING_OPTIONS, CONTENT_RATING_LABELS, readStatusLabels} from '../components/book-browser/book-filter/book-filter.config';
-import {ReadStatus} from '../model/book.model';
+import {Book, ReadStatus} from '../model/book.model';
 import {ResetProgressTypes} from '../../../shared/constants/reset-progress-type';
 import {finalize} from 'rxjs';
 import {LoadingService} from '../../../core/services/loading.service';
@@ -83,7 +83,10 @@ export class BookMenuService {
     return items;
   }
 
-  getMoreActionsMenu(selectedBooks: Set<number>, user: User | null): MenuItem[] {
+  /**
+   * booksInHand gives the books a page shows, for a page that shows them without the book list: the series page.
+   */
+  getMoreActionsMenu(selectedBooks: Set<number>, user: User | null, booksInHand?: () => Book[]): MenuItem[] {
     const count = selectedBooks.size;
     const permissions = user?.permissions;
     const items: MenuItem[] = [];
@@ -330,7 +333,7 @@ export class BookMenuService {
              rejectLabel: this.t.translate('common.no'),
              accept: () => {
                const loader = this.loadingService.show(this.t.translate('book.menuService.loading.removingFromShelves', {count}));
-               const books = this.bookService.getBooksByIdsFromState(Array.from(selectedBooks));
+               const books = this.selectedBooks(selectedBooks, booksInHand);
                const allShelfIds = new Set<number>();
                books.forEach(b => b.shelves?.forEach(s => {
                  if (s.id) allShelfIds.add(s.id);
@@ -482,5 +485,13 @@ export class BookMenuService {
     }
 
     return items;
+  }
+
+  /** The selected books: those the page holds, and the others from the book list when it is loaded. */
+  private selectedBooks(selectedBooks: Set<number>, booksInHand?: () => Book[]): Book[] {
+    const held = (booksInHand?.() ?? []).filter(book => selectedBooks.has(book.id));
+    const heldIds = new Set(held.map(book => book.id));
+    const others = Array.from(selectedBooks).filter(id => !heldIds.has(id));
+    return [...held, ...this.bookService.getBooksByIdsFromState(others)];
   }
 }

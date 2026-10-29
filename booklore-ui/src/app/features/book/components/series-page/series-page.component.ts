@@ -2,7 +2,7 @@ import {FormsModule} from "@angular/forms";
 import {Button} from "primeng/button";
 import {ActivatedRoute, Router} from "@angular/router";
 import {AsyncPipe, DecimalPipe, KeyValuePipe, NgClass, NgStyle} from "@angular/common";
-import {filter, finalize, map, switchMap, tap} from "rxjs/operators";
+import {distinctUntilChanged, filter, finalize, map, shareReplay, switchMap, tap} from "rxjs/operators";
 import {combineLatest, Observable, Subscription} from "rxjs";
 import {Book, BookType, ReadStatus} from "../../model/book.model";
 import {BookService} from "../../service/book.service";
@@ -31,6 +31,7 @@ import {animate, style, transition, trigger} from "@angular/animations";
 import {AfterViewChecked, Component, ElementRef, inject, OnDestroy, ViewChild} from '@angular/core';
 import {BookCardOverlayPreferenceService} from '../book-browser/book-card-overlay-preference.service';
 import {UrlHelperService} from '../../../../shared/service/url-helper.service';
+import {SeriesBooksService, SeriesBooksState} from '../../service/series-books.service';
 
 interface ReadStatusSegment {
   status: ReadStatus;
@@ -107,6 +108,7 @@ export class SeriesPageComponent implements OnDestroy, AfterViewChecked {
 
   private route = inject(ActivatedRoute);
   private bookService = inject(BookService);
+  private seriesBooksService = inject(SeriesBooksService);
   private bookMetadataManageService = inject(BookMetadataManageService);
   protected coverScalePreferenceService = inject(CoverScalePreferenceService);
   private metadataCenterViewMode: "route" | "dialog" = "route";
@@ -141,29 +143,36 @@ export class SeriesPageComponent implements OnDestroy, AfterViewChecked {
 
   seriesParam$: Observable<string> = this.route.paramMap.pipe(
     map((params) => params.get("seriesName") || ""),
-    map((name) => decodeURIComponent(name))
+    map((name) => {
+      // Some links do not encode the name, and a lone '%' in it cannot be decoded
+      try {
+        return decodeURIComponent(name);
+      } catch {
+        return name;
+      }
+    })
   );
 
-  booksInSeries$: Observable<Book[]> = this.bookService.bookState$.pipe(
-    filter((state) => state.loaded && !!state.books),
-    map((state) => state.books || [])
+  // The series from the server, so the page does not download the book list. Nothing is emitted before the
+  // first answer for a name, so the page keeps what it shows: the spinner, or the books of the last name
+  private seriesState$: Observable<SeriesBooksState> = this.seriesParam$.pipe(
+    distinctUntilChanged(),
+    switchMap((name) => this.seriesBooksService.series$(name)),
+    filter((state) => state.status !== "loading"),
+    shareReplay({bufferSize: 1, refCount: true})
   );
 
-  filteredBooks$: Observable<Book[]> = combineLatest([
-    this.seriesParam$.pipe(map((n) => n.trim().toLowerCase())),
-    this.booksInSeries$,
-  ]).pipe(
-    map(([seriesName, books]) => {
-      const inSeries = books.filter(
-        (b) => b.metadata?.seriesName?.trim().toLowerCase() === seriesName
-      );
-      return inSeries.sort((a, b) => {
-        const aNum = a.metadata?.seriesNumber ?? Number.MAX_SAFE_INTEGER;
-        const bNum = b.metadata?.seriesNumber ?? Number.MAX_SAFE_INTEGER;
-        return aNum - bNum;
-      });
-    }),
+  booksInSeries$: Observable<Book[]> = this.seriesState$.pipe(
+    map((state) => state.books)
+  );
+
+  filteredBooks$: Observable<Book[]> = this.booksInSeries$.pipe(
     tap(books => this.currentBooks = books)
+  );
+
+  /** Set when the server sent only the first books of a long series. */
+  truncation$: Observable<{ shown: number; total: number } | null> = this.seriesState$.pipe(
+    map((state) => state.total > state.books.length ? {shown: state.books.length, total: state.total} : null)
   );
 
   coverBook$: Observable<Book | null> = this.filteredBooks$.pipe(
@@ -172,8 +181,8 @@ export class SeriesPageComponent implements OnDestroy, AfterViewChecked {
 
   seriesTitle$: Observable<string> = combineLatest([
     this.seriesParam$,
-    this.filteredBooks$,
-  ]).pipe(map(([param, books]) => books[0]?.metadata?.seriesName || param));
+    this.seriesState$,
+  ]).pipe(map(([param, state]) => state.seriesName || param));
 
   yearsRange$: Observable<string | null> = this.filteredBooks$.pipe(
     map((books) => {
@@ -196,6 +205,8 @@ export class SeriesPageComponent implements OnDestroy, AfterViewChecked {
   firstBookWithDesc$: Observable<Book> = this.filteredBooks$.pipe(
     map((books) => books[0]),
     filter((b): b is Book => !!b),
+    // Fetched again when a fetch of the series brought the book again, not when another book left the series
+    distinctUntilChanged(),
     switchMap((b) => this.bookService.getBookByIdFromAPI(b.id, true))
   );
 
@@ -340,10 +351,7 @@ export class SeriesPageComponent implements OnDestroy, AfterViewChecked {
       const target = reading || books.find(b => b.readStatus === ReadStatus.UNREAD || !b.readStatus);
       if (!target) return null;
 
-      const isAudiobook = target.primaryFile?.bookType === 'AUDIOBOOK';
-      const thumbnailUrl = isAudiobook
-        ? this.urlHelper.getAudiobookThumbnailUrl(target.id, target.metadata?.audiobookCoverUpdatedOn)
-        : this.urlHelper.getThumbnailUrl(target.id, target.metadata?.coverUpdatedOn);
+      const thumbnailUrl = this.getBookThumbnailUrl(target);
 
       const isReading = target.readStatus === ReadStatus.READING ||
         target.readStatus === ReadStatus.RE_READING ||
@@ -421,7 +429,7 @@ export class SeriesPageComponent implements OnDestroy, AfterViewChecked {
           () => this.generateCustomCoversForSelected(),
           userState.user
         );
-        this.moreActionsMenuItems = this.bookMenuService.getMoreActionsMenu(this.selectedBooks, this.user());
+        this.moreActionsMenuItems = this.bookMenuService.getMoreActionsMenu(this.selectedBooks, this.user(), () => this.currentBooks);
       });
   }
 
@@ -536,11 +544,12 @@ export class SeriesPageComponent implements OnDestroy, AfterViewChecked {
     }
   }
 
+  /** The book is passed along: the book list, where a generated cover would otherwise be looked up, may not be loaded. */
   getBookThumbnailUrl(book: Book): string {
     const isAudiobook = book.primaryFile?.bookType === 'AUDIOBOOK';
     return isAudiobook
-      ? this.urlHelper.getAudiobookThumbnailUrl(book.id, book.metadata?.audiobookCoverUpdatedOn)
-      : this.urlHelper.getThumbnailUrl(book.id, book.metadata?.coverUpdatedOn);
+      ? this.urlHelper.getAudiobookThumbnailUrl(book.id, book.metadata?.audiobookCoverUpdatedOn, book)
+      : this.urlHelper.getThumbnailUrl(book.id, book.metadata?.coverUpdatedOn, book);
   }
 
   readBook(bookId: number): void {
@@ -613,12 +622,12 @@ export class SeriesPageComponent implements OnDestroy, AfterViewChecked {
         this.handleBookSelection(book, !isUnselectingRange);
       }
     }
-    this.moreActionsMenuItems = this.bookMenuService.getMoreActionsMenu(this.selectedBooks, this.user());
+    this.moreActionsMenuItems = this.bookMenuService.getMoreActionsMenu(this.selectedBooks, this.user(), () => this.currentBooks);
   }
 
   handleBookSelect(book: Book, selected: boolean): void {
     this.handleBookSelection(book, selected);
-    this.moreActionsMenuItems = this.bookMenuService.getMoreActionsMenu(this.selectedBooks, this.user());
+    this.moreActionsMenuItems = this.bookMenuService.getMoreActionsMenu(this.selectedBooks, this.user(), () => this.currentBooks);
   }
 
   selectAllBooks(): void {
@@ -626,12 +635,12 @@ export class SeriesPageComponent implements OnDestroy, AfterViewChecked {
     for (const book of this.currentBooks) {
       this.selectedBooks.add(book.id);
     }
-    this.moreActionsMenuItems = this.bookMenuService.getMoreActionsMenu(this.selectedBooks, this.user());
+    this.moreActionsMenuItems = this.bookMenuService.getMoreActionsMenu(this.selectedBooks, this.user(), () => this.currentBooks);
   }
 
   deselectAllBooks(): void {
     this.selectedBooks.clear();
-    this.moreActionsMenuItems = this.bookMenuService.getMoreActionsMenu(this.selectedBooks, this.user());
+    this.moreActionsMenuItems = this.bookMenuService.getMoreActionsMenu(this.selectedBooks, this.user(), () => this.currentBooks);
   }
 
   confirmDeleteBooks(): void {

@@ -11,14 +11,16 @@ import org.booklore.model.dto.BookLoreUser;
 import org.booklore.model.dto.catalog.CatalogCounts;
 import org.booklore.model.dto.catalog.DashboardRow;
 import org.booklore.model.dto.catalog.MagicShelfCounts;
+import org.booklore.model.dto.catalog.SeriesBooks;
 import org.booklore.service.catalog.CatalogCountService;
 import org.booklore.service.catalog.DashboardRowKind;
 import org.booklore.service.catalog.DashboardRowService;
 import org.booklore.service.catalog.MagicShelfCountService;
+import org.booklore.service.catalog.SeriesBooksService;
 import org.springframework.http.ResponseEntity;
 import org.springframework.web.bind.annotation.*;
 
-@Tag(name = "Catalog", description = "Sidebar counts and dashboard rows, computed on the server so the client need not load the whole book list")
+@Tag(name = "Catalog", description = "Sidebar counts, dashboard rows and series books, computed on the server so the client need not load the whole book list")
 @RequestMapping("/api/v1/catalog")
 @RestController
 @AllArgsConstructor
@@ -28,6 +30,7 @@ public class CatalogController {
     private final CatalogCountService catalogCountService;
     private final MagicShelfCountService magicShelfCountService;
     private final DashboardRowService dashboardRowService;
+    private final SeriesBooksService seriesBooksService;
 
     @Operation(summary = "Get sidebar counts",
             description = "Count the user's books overall, by library, by own shelf, unshelved, and their series. "
@@ -63,6 +66,24 @@ public class CatalogController {
     static int clampSize(Integer size) {
         if (size == null) return DashboardRowService.DEFAULT_SIZE;
         return Math.clamp(size, 1, DashboardRowService.MAX_SIZE);
+    }
+
+    @Operation(summary = "Get the books of a series",
+            description = "The books whose series name, trimmed and lower-cased, equals the given name trimmed and "
+                    + "lower-cased, by series number with unnumbered books last. total counts every match, also those "
+                    + "past the limit.")
+    @ApiResponse(responseCode = "200", description = "Books returned successfully")
+    @ApiResponse(responseCode = "400", description = "No series name")
+    @GetMapping("/series/books")
+    public ResponseEntity<SeriesBooks> getSeriesBooks(
+            @Parameter(description = "The series name") @RequestParam(required = false) String name,
+            @Parameter(description = "How many books, 1 to 5000 (default 1000)") @RequestParam(required = false) Integer limit) {
+        return ResponseEntity.ok(seriesBooksService.getSeriesBooks(currentUser(), name, clampLimit(limit)));
+    }
+
+    static int clampLimit(Integer limit) {
+        if (limit == null) return SeriesBooksService.DEFAULT_LIMIT;
+        return Math.clamp(limit, 1, SeriesBooksService.MAX_LIMIT);
     }
 
     private BookLoreUser currentUser() {
