@@ -8,8 +8,9 @@ import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
  * A book saved from a prepared file.
  *
  * @param created    false when the file's book already existed and was updated instead
+ * @param restored   true when that book was deleted and the file brought it back
  * @param sidecarJob the sidecar still to be written for the book, or null for none
  */
-public record PersistedBook(Book book, long bookId, boolean created, String primaryFileName, BookFileType primaryType,
-                            SidecarMetadataWriter.SidecarJob sidecarJob) {
+public record PersistedBook(Book book, long bookId, boolean created, boolean restored, String primaryFileName,
+                            BookFileType primaryType, SidecarMetadataWriter.SidecarJob sidecarJob) {
 }

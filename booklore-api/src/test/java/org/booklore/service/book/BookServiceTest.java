@@ -28,6 +28,7 @@ import org.springframework.core.io.UrlResource;
 import org.springframework.http.HttpStatus;
 import org.springframework.http.ResponseEntity;
 
+import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
@@ -412,6 +413,56 @@ class BookServiceTest {
         assertNotNull(response);
         assertTrue(response.getFailedFileDeletions().isEmpty());
         assertEquals(Set.of(13L), response.getDeleted());
+    }
+
+    @Test
+    void deleteBooks_watchesAgainAFolderThatWasWatched(@org.junit.jupiter.api.io.TempDir Path tmp) throws Exception {
+        Path folder = bookInFolder(tmp, 14L);
+        when(monitoringRegistrationService.isPathMonitored(folder)).thenReturn(true);
+
+        bookService.deleteBooks(Set.of(14L));
+
+        // Asked before the folder is unregistered, as afterwards it would never be watched
+        org.mockito.InOrder inOrder = inOrder(monitoringRegistrationService);
+        inOrder.verify(monitoringRegistrationService).isPathMonitored(folder);
+        inOrder.verify(monitoringRegistrationService).unregisterSpecificPath(folder);
+        inOrder.verify(monitoringRegistrationService).registerSpecificPath(folder, 42L);
+    }
+
+    @Test
+    void deleteBooks_doesNotStartWatchingAFolderThatWasNotWatched(@org.junit.jupiter.api.io.TempDir Path tmp) throws Exception {
+        // A folder of a library whose watching is off
+        Path folder = bookInFolder(tmp, 15L);
+        when(monitoringRegistrationService.isPathMonitored(folder)).thenReturn(false);
+
+        bookService.deleteBooks(Set.of(15L));
+
+        verify(monitoringRegistrationService).unregisterSpecificPath(folder);
+        verify(monitoringRegistrationService, never()).registerSpecificPath(any(), any());
+    }
+
+    /** A book of library 42 whose one file is in a folder of its own under the library's root; returns that folder. */
+    private Path bookInFolder(Path tmp, long bookId) throws IOException {
+        Path root = Files.createDirectories(tmp.resolve("library"));
+        Path folder = Files.createDirectories(root.resolve("Author"));
+        Files.write(folder.resolve("book.txt"), "abc".getBytes());
+        BookEntity entity = new BookEntity();
+        entity.setId(bookId);
+        LibraryEntity library = new LibraryEntity();
+        library.setId(42L);
+        LibraryPathEntity libPath = new LibraryPathEntity();
+        libPath.setPath(root.toString());
+        library.setLibraryPaths(List.of(libPath));
+        entity.setLibrary(library);
+        entity.setLibraryPath(libPath);
+        BookFileEntity file = new BookFileEntity();
+        file.setBook(entity);
+        file.setFileSubPath("Author");
+        file.setFileName("book.txt");
+        entity.setBookFiles(List.of(file));
+        when(bookQueryService.findAllWithMetadataByIds(Set.of(bookId))).thenReturn(List.of(entity));
+        when(authenticationService.getAuthenticatedUser()).thenReturn(testUser);
+        return folder;
     }
 
     @Test

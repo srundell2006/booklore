@@ -10,6 +10,7 @@ import org.booklore.mapper.BookMapper;
 import org.booklore.mapper.LibraryMapper;
 import org.booklore.model.dto.BookLoreUser;
 import org.booklore.model.dto.Library;
+import org.booklore.model.dto.LibraryPath;
 import org.booklore.model.dto.request.CreateLibraryRequest;
 import org.booklore.model.entity.BookLoreUserEntity;
 import org.booklore.model.entity.LibraryEntity;
@@ -35,6 +36,7 @@ import org.slf4j.LoggerFactory;
 import org.springframework.http.HttpStatus;
 
 import java.io.IOException;
+import java.nio.file.Paths;
 import java.util.Collections;
 import java.util.List;
 import java.util.Optional;
@@ -49,6 +51,7 @@ import static org.mockito.ArgumentMatchers.eq;
 import static org.mockito.Mockito.atLeastOnce;
 import static org.mockito.Mockito.doAnswer;
 import static org.mockito.Mockito.doThrow;
+import static org.mockito.Mockito.never;
 import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 import static org.mockito.Mockito.when;
@@ -253,5 +256,25 @@ class LibraryServiceScanTest {
         });
         assertThat(notified()).containsExactly("ERROR Failed to process library: Books - Stale file handle");
         assertThat(LibraryService.isLibraryScanning(libraryId)).isFalse();
+    }
+
+    @Test
+    void aLibraryCreatedWithWatchingOnCountsAsWatched_soThatAPauseGivesItBackInFull() throws Exception {
+        long libraryId = 9106L;
+        when(authenticationService.getAuthenticatedUser()).thenReturn(BookLoreUser.builder().id(1L).build());
+        when(userRepository.findById(1L)).thenReturn(Optional.of(BookLoreUserEntity.builder().id(1L).build()));
+        when(libraryRepository.save(any(LibraryEntity.class))).thenAnswer(invocation -> {
+            LibraryEntity entity = invocation.getArgument(0);
+            entity.setId(libraryId);
+            return entity;
+        });
+        when(libraryMapper.toLibrary(any(LibraryEntity.class))).thenReturn(Library.builder().name("Books").build());
+
+        libraryService.createLibrary(CreateLibraryRequest.builder().name("Books").watch(true)
+                .paths(List.of(LibraryPath.builder().path("/books/new").build())).build());
+        awaitScanEnd(libraryId);
+
+        verify(libraryWatchService).watchNewLibrary(libraryId, List.of(Paths.get("/books/new")));
+        verify(libraryWatchService, never()).registerPath(any(), anyLong());
     }
 }

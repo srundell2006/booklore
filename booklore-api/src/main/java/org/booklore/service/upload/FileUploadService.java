@@ -35,7 +35,6 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Instant;
-import java.util.List;
 import java.util.Optional;
 import java.util.Set;
 import org.booklore.model.enums.AuditAction;
@@ -174,10 +173,7 @@ public class FileUploadService {
             if (monitoringPause != null && !monitoringPause.isEmpty()) {
                 try {
                     log.debug("Resuming monitoring of library {}", libraryId);
-                    monitoringRegistrationService.resume(monitoringPause, id ->
-                            book.getLibrary() != null && book.getLibrary().getLibraryPaths() != null
-                                    ? book.getLibrary().getLibraryPaths().stream().map(libPath -> Path.of(libPath.getPath())).toList()
-                                    : null);
+                    monitoringRegistrationService.resume(monitoringPause);
                 } catch (Exception e) {
                     log.warn("Failed to re-register library {} for monitoring after additional file upload: {}", libraryId, e.getMessage());
                 }

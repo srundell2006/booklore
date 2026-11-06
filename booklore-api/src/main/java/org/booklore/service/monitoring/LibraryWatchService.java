@@ -290,6 +290,17 @@ public class LibraryWatchService {
     }
 
     /**
+     * Watches a library that was just created with watching on: it counts as watched, so that a writer pausing it (see
+     * {@link MonitoringRegistrationService#pauseLibraries}) gives it back in full, and its roots are registered.
+     */
+    public void watchNewLibrary(long libraryId, Collection<Path> libraryRoots) {
+        libraryWatchStatus.put(libraryId, true);
+        for (Path libraryRoot : libraryRoots) {
+            registerPath(libraryRoot, libraryId);
+        }
+    }
+
+    /**
      * Watches a library again that a writer paused (see {@link MonitoringRegistrationService#pauseLibraries}):
      * it counts as watched again, then its folders are registered. Reaching the inotify limit turns its watching off
      * again, as {@link #registerLibraryPaths} says.

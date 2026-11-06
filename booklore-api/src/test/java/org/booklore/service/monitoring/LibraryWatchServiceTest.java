@@ -3,6 +3,8 @@ package org.booklore.service.monitoring;
 import org.booklore.model.dto.Library;
 import org.booklore.model.dto.LibraryPath;
 import org.booklore.model.enums.BookFileExtension;
+import org.booklore.repository.LibraryPathRepository;
+import org.booklore.repository.LibraryRepository;
 import org.booklore.service.watcher.LibraryFileEventProcessor;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
@@ -14,6 +16,7 @@ import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.nio.file.StandardWatchEventKinds;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.CompletableFuture;
 import java.util.concurrent.TimeUnit;
@@ -244,7 +247,9 @@ class LibraryWatchServiceTest {
 
     @Test
     void aPauseAndResume_givesAWatchedLibraryBackInFullAndAnUnwatchedOneOnlyTheFolderItHad() throws Exception {
-        MonitoringRegistrationService registration = new MonitoringRegistrationService(service);
+        LibraryRepository libraryRepository = mock(LibraryRepository.class);
+        LibraryPathRepository libraryPathRepository = mock(LibraryPathRepository.class);
+        MonitoringRegistrationService registration = new MonitoringRegistrationService(service, libraryRepository, libraryPathRepository);
         Path watchedRoot = tmp.resolve("watched");
         Path watchedSub = watchedRoot.resolve("sub");
         Path unwatchedRoot = tmp.resolve("unwatched");
@@ -273,17 +278,57 @@ class LibraryWatchServiceTest {
         assertThat(pause.folders()).containsOnlyKeys(strayFolder);
         assertThat(service.isPathMonitored(watchedSub)).isFalse();
         assertThat(service.isPathMonitored(strayFolder)).isFalse();
+        // Folders the writer makes while the libraries are paused
+        Path newInWatched = watchedRoot.resolve("New Author").resolve("New Title");
+        Path newInUnwatched = unwatchedRoot.resolve("New Author");
+        Files.createDirectories(newInWatched);
+        Files.createDirectories(newInUnwatched);
+        when(libraryRepository.findWatchById(1L)).thenReturn(Optional.of(true));
+        when(libraryPathRepository.findPathsByLibraryId(1L)).thenReturn(List.of(watchedRoot.toString()));
+        when(libraryRepository.existsById(2L)).thenReturn(true);
 
-        registration.resume(pause, id -> id == 1L ? List.of(watchedRoot) : List.of(unwatchedRoot));
+        registration.resume(pause);
 
         assertThat(service.isLibraryMonitored(1L)).isTrue();
         assertThat(service.isPathMonitored(watchedRoot)).isTrue();
         assertThat(service.isPathMonitored(watchedSub)).isTrue();
+        assertThat(service.isPathMonitored(newInWatched)).isTrue();
+        assertThat(service.isPathMonitored(newInUnwatched)).isFalse();
         // The unwatched library gets back the one folder it had: it is not walked and does not become watched
         assertThat(service.isPathMonitored(strayFolder)).isTrue();
         assertThat(service.isPathMonitored(unwatchedRoot)).isFalse();
         assertThat(service.isPathMonitored(otherFolder)).isFalse();
         assertThat(service.isLibraryMonitored(2L)).isFalse();
         assertThat(service.getPathsForLibraries(Set.of(2L))).containsExactly(strayFolder);
+    }
+
+    @Test
+    void aWatchedLibraryCreatedWhileRunning_isPausedAndResumedAsAWatchedOne() throws Exception {
+        LibraryRepository libraryRepository = mock(LibraryRepository.class);
+        LibraryPathRepository libraryPathRepository = mock(LibraryPathRepository.class);
+        MonitoringRegistrationService registration = new MonitoringRegistrationService(service, libraryRepository, libraryPathRepository);
+        Path root = tmp.resolve("created");
+        Path existing = root.resolve("Existing Author");
+        Files.createDirectories(existing);
+
+        // What LibraryService.createLibrary does for a library with watching on
+        service.watchNewLibrary(9L, List.of(root));
+
+        assertThat(service.isLibraryMonitored(9L)).isTrue();
+        assertThat(service.isPathMonitored(root)).isTrue();
+
+        MonitoringPause pause = registration.pauseLibraries(List.of(9L));
+        assertThat(pause.watchedLibraries()).containsExactly(9L);
+        assertThat(pause.folders()).isEmpty();
+        Path imported = root.resolve("Imported Author").resolve("Imported Title");
+        Files.createDirectories(imported);
+        when(libraryRepository.findWatchById(9L)).thenReturn(Optional.of(true));
+        when(libraryPathRepository.findPathsByLibraryId(9L)).thenReturn(List.of(root.toString()));
+
+        registration.resume(pause);
+
+        assertThat(service.isLibraryMonitored(9L)).isTrue();
+        assertThat(service.isPathMonitored(imported)).isTrue();
+        assertThat(service.isPathMonitored(existing)).isTrue();
     }
 }

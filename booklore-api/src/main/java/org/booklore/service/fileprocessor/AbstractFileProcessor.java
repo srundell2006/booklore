@@ -94,7 +94,7 @@ public abstract class AbstractFileProcessor implements PreparableBookFileProcess
                 log.warn("Failed to write sidecar metadata for book ID {}: {}", persisted.bookId(), e.getMessage());
             }
         }
-        return new FileProcessResult(persisted.book(), FileProcessStatus.NEW, persisted.created());
+        return new FileProcessResult(persisted.book(), FileProcessStatus.NEW, persisted.created(), persisted.restored());
     }
 
     @Override
@@ -153,7 +153,7 @@ public abstract class AbstractFileProcessor implements PreparableBookFileProcess
             }
         }
 
-        return new PersistedBook(bookMapper.toBook(entity), entity.getId(), shell.created(), libraryFile.getFileName(),
+        return new PersistedBook(bookMapper.toBook(entity), entity.getId(), shell.created(), shell.restored(), libraryFile.getFileName(),
                 entity.getPrimaryBookFile().getBookType(), sidecarJob);
     }
 

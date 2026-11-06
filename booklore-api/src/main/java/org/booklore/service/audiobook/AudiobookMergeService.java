@@ -6,7 +6,6 @@ import lombok.extern.slf4j.Slf4j;
 import org.booklore.exception.ApiError;
 import org.booklore.model.dto.settings.AudiobookMergeSettings;
 import org.booklore.service.appsettings.AppSettingService;
-import org.booklore.repository.LibraryRepository;
 import org.booklore.service.monitoring.MonitoringPause;
 import org.booklore.service.monitoring.MonitoringRegistrationService;
 import org.springframework.stereotype.Service;
@@ -48,7 +47,6 @@ public class AudiobookMergeService {
 
     private final MergeContextLoader contextLoader;
     private final MonitoringRegistrationService monitoringRegistrationService;
-    private final LibraryRepository libraryRepository;
     private final AppSettingService appSettingService;
     private final M4bMergeClient mergeClient;
     private final ObjectMapper objectMapper;
@@ -252,11 +250,7 @@ public class AudiobookMergeService {
     private void resumeMonitoring(Long libraryId, MonitoringPause pause) {
         if (libraryId == null || pause == null || pause.isEmpty()) return;
         try {
-            monitoringRegistrationService.resume(pause, id -> libraryRepository.findById(id)
-                    .map(library -> library.getLibraryPaths().stream()
-                            .map(libraryPath -> Path.of(libraryPath.getPath()))
-                            .toList())
-                    .orElse(null));
+            monitoringRegistrationService.resume(pause);
             log.info("Resumed file monitoring for library {}", libraryId);
         } catch (Exception e) {
             log.warn("Could not resume monitoring for library {}: {}", libraryId, e.getMessage());

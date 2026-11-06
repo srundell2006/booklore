@@ -250,7 +250,7 @@ class AbstractFileProcessorTest {
             assertThat(book.getMetadata().getCoverUpdatedOn()).isNotNull();
             assertThat(book.getBookCoverHash()).isNotNull();
             assertThat(book.getAudiobookCoverHash()).isNull();
-            assertThat(persisted).isEqualTo(new PersistedBook(dto, BOOK_ID, true, "book.epub", BookFileType.EPUB, null));
+            assertThat(persisted).isEqualTo(new PersistedBook(dto, BOOK_ID, true, false, "book.epub", BookFileType.EPUB, null));
 
             InOrder order = inOrder(bookCreatorService, fileService, metadataMatchService, bookMapper);
             order.verify(bookCreatorService).createShellBook(libraryFile, BookFileType.EPUB, prepared.facts());

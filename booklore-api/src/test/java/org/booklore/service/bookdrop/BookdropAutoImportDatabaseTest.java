@@ -36,6 +36,7 @@ import java.io.IOException;
 import java.nio.charset.StandardCharsets;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
@@ -183,6 +184,34 @@ class BookdropAutoImportDatabaseTest {
         assertThat(next.source()).doesNotExist();
         assertThat(bookdropFileRepository.findById(next.bookdropFileId())).isEmpty();
         assertThat(outcome.boundAfterwards()).isFalse();
+    }
+
+    @Test
+    void aDeletedBookThatAFailedImportBroughtBackIsMarkedDeletedAgain() throws Exception {
+        Fixture first = fixture("Returning Book");
+        Outcome<BookdropFinalizeResult> imported = onAPlainThread(() -> openEntityManagerRunner.call(() -> bookDropService.finalizeImport(first.request())));
+        assertThat(imported.result().getSuccessfullyImported()).isEqualTo(1);
+        Long bookId = jdbcTemplate.queryForObject("SELECT id FROM book WHERE library_id = ?", Long.class, first.library().getId());
+        // As the watcher leaves a book whose last file went: marked deleted, with its file row kept
+        Instant deletedAt = Instant.parse("2020-01-01T00:00:00Z");
+        bookRepository.markDeleted(bookId, deletedAt);
+        Files.delete(libraryRoot.resolve("Returning Book.epub"));
+
+        // The same book dropped again, and a step after the metadata update fails
+        Fixture again = fixture("Returning Book", first.library());
+        doThrow(new IllegalStateException("Kobo shelf failed")).when(koboAutoShelfService).autoAddBookToKoboShelves(anyLong());
+
+        Outcome<BookdropFinalizeResult> outcome = onAPlainThread(() -> openEntityManagerRunner.call(() -> bookDropService.finalizeImport(again.request())));
+
+        assertThat(outcome.error()).isNull();
+        assertThat(outcome.result().getFailed()).isEqualTo(1);
+        // Still the one book, brought back by the import and then marked deleted again by it, not left live without its file
+        assertThat(booksInLibrary(first.library())).isEqualTo(1);
+        assertThat(jdbcTemplate.queryForObject("SELECT COUNT(*) FROM book WHERE id = ? AND deleted = TRUE AND deleted_at > ?",
+                Long.class, bookId, Timestamp.from(deletedAt))).isEqualTo(1);
+        assertThat(libraryRoot.resolve("Returning Book.epub")).doesNotExist();
+        assertThat(again.source()).exists();
+        assertThat(bookdropFileRepository.findById(again.bookdropFileId())).isPresent();
     }
 
     @Test

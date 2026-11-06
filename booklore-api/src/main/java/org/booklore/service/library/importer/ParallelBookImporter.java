@@ -413,7 +413,7 @@ public class ParallelBookImporter {
             return null;
         }
         Book book = result.getBook();
-        return new PersistedBook(book, book.getId(), false, plan.primary().getFileName(), plan.primary().getBookFileType(), null);
+        return new PersistedBook(book, book.getId(), false, false, plan.primary().getFileName(), plan.primary().getBookFileType(), null);
     }
 
     /** Tells clients and Kobo shelves about the new book. A failure of either leaves the rest of the group alone. */

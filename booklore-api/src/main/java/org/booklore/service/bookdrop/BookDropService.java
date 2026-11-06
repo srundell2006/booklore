@@ -258,7 +258,7 @@ public class BookDropService {
             }
         } finally {
             // Watch again what was paused, and no more
-            monitoringRegistrationService.resume(monitoringPause, this::libraryRoots);
+            monitoringRegistrationService.resume(monitoringPause);
             log.info("Resumed monitoring: watched libraries {}, {} single folders",
                     monitoringPause.watchedLibraries(), monitoringPause.folders().size());
         }
@@ -283,13 +283,6 @@ public class BookDropService {
 
         log.info("Collected {} unique libraries for monitoring unregistration: {}", affectedLibraries.size(), affectedLibraries);
         return affectedLibraries;
-    }
-
-    /** The roots of a library's paths, or null when the library is gone. */
-    private List<Path> libraryRoots(Long libraryId) {
-        return libraryRepository.findById(libraryId)
-                .map(library -> library.getLibraryPaths().stream().map(libPath -> Path.of(libPath.getPath())).toList())
-                .orElse(null);
     }
 
     private void updateFinalResults(BookdropFinalizeResult results, AtomicInteger totalFilesProcessed, AtomicInteger failedCount) {
@@ -471,13 +464,11 @@ public class BookDropService {
                         .getType());
 
         // The book is saved in a transaction of its own. If a later step fails, performFileMove deletes the moved file and
-        // leaves the source in the Bookdrop folder, so a book this import created must go too, or it stays without its file.
-        Long createdBookId = fileProcessResult.isBookCreated() && fileProcessResult.getBook() != null
-                ? fileProcessResult.getBook().getId() : null;
+        // leaves the source in the Bookdrop folder, so the book must go back to how it was, or it stays without its file.
         try {
             return finishImportedBook(bookdropFile, targetFile, library, path, metadata, fileProcessResult);
         } catch (RuntimeException e) {
-            removeBookOfFailedImport(createdBookId, bookdropFile, e);
+            undoBookOfFailedImport(fileProcessResult, bookdropFile, e);
             throw e;
         }
     }
@@ -537,20 +528,32 @@ public class BookDropService {
                 .build();
     }
 
-    /** Deletes the book a failed import created, as deleteBooks does (the database cascades to its rows), and its covers. */
-    private void removeBookOfFailedImport(Long bookId, BookdropFileEntity bookdropFile, RuntimeException cause) {
-        if (bookId == null) {
+    /**
+     * Puts the book of a failed import back as it was. One the import created is deleted, as deleteBooks does (the
+     * database cascades to its rows), with its covers. A deleted one the import brought back is marked deleted again, as
+     * the watcher marks a book whose last file went, and keeps its shelves, progress and notes. A book that was live
+     * already is left as it is.
+     */
+    private void undoBookOfFailedImport(FileProcessResult fileProcessResult, BookdropFileEntity bookdropFile, RuntimeException cause) {
+        boolean created = fileProcessResult.isBookCreated();
+        if (fileProcessResult.getBook() == null || !(created || fileProcessResult.isBookRestored())) {
             return;
         }
+        Long bookId = fileProcessResult.getBook().getId();
+        String undo = created ? "remove the book it had created" : "mark deleted again the book it had restored";
         try {
-            bookRepository.deleteAllByIdInBatch(List.of(bookId));
-            fileService.deleteBookCovers(Set.of(bookId));
+            if (created) {
+                bookRepository.deleteAllByIdInBatch(List.of(bookId));
+                fileService.deleteBookCovers(Set.of(bookId));
+            } else {
+                bookRepository.markDeleted(bookId, Instant.now());
+            }
             notificationService.sendMessage(Topic.BOOKS_REMOVE, Set.of(bookId));
-            log.info("Removed book {} that the failed import of bookdrop file id={} ({}) had created: {}",
-                    bookId, bookdropFile.getId(), bookdropFile.getFileName(), cause.getMessage());
+            log.info("The import of bookdrop file id={} ({}) failed; did {}, book {}: {}",
+                    bookdropFile.getId(), bookdropFile.getFileName(), undo, bookId, cause.getMessage());
         } catch (Exception e) {
-            log.error("Could not remove book {} that the failed import of bookdrop file id={} ({}) had created; delete it by hand: {}",
-                    bookId, bookdropFile.getId(), bookdropFile.getFileName(), e.getMessage(), e);
+            log.error("The import of bookdrop file id={} ({}) failed, and could not {}, book {}; do that by hand: {}",
+                    bookdropFile.getId(), bookdropFile.getFileName(), undo, bookId, e.getMessage(), e);
         }
     }
 

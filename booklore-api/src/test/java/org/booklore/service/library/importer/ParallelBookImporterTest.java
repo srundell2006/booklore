@@ -190,7 +190,7 @@ class ParallelBookImporterTest {
             throw new DataIntegrityViolationException("could not execute statement [Data too long for column 'story_arc' at row 1]");
         }
         long id = lastBookId.incrementAndGet();
-        return new PersistedBook(Book.builder().id(id).build(), id, true, file.getFileName(), file.getBookFileType(), sidecarJob);
+        return new PersistedBook(Book.builder().id(id).build(), id, true, false, file.getFileName(), file.getBookFileType(), sidecarJob);
     }
 
     /** Blocks the way a thread stuck in a CIFS read does: interrupts do not end it, only {@link #release} does. */

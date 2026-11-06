@@ -564,10 +564,46 @@ class BookFileAttachmentServiceTest {
             when(bookRepository.findByIdWithBookFiles(2L)).thenReturn(Optional.of(source));
             setupGetUpdatedBookMocks(1L, target);
             setupFileMoveStubs(target, "target_dir/{title}");
+            when(monitoringRegistrationService.isLibraryMonitored(1L)).thenReturn(true);
 
             service.attachBookFiles(1L, List.of(2L), true);
 
-            verify(monitoringRegistrationService, atLeastOnce()).registerSpecificPath(any(Path.class), eq(1L));
+            verify(monitoringRegistrationService).registerSpecificPath(tempDir.resolve("target_dir"), 1L);
+        }
+
+        @Test
+        @DisplayName("Does not start watching folders of a library whose watching is off")
+        void attachWithFileMove_unwatchedLibrary_doesNotRegisterItsFolders() throws IOException {
+            attachSourcePdfToTarget();
+
+            verify(monitoringRegistrationService, atLeastOnce()).unregisterSpecificPath(any(Path.class));
+            verify(monitoringRegistrationService, never()).registerSpecificPath(any(), any());
+        }
+
+        @Test
+        @DisplayName("In a library whose watching is off, watches again only the folders that were watched")
+        void attachWithFileMove_unwatchedLibrary_watchesAgainOnlyWhatWasWatched() throws IOException {
+            when(monitoringRegistrationService.isPathMonitored(tempDir.resolve("target_dir"))).thenReturn(true);
+
+            attachSourcePdfToTarget();
+
+            verify(monitoringRegistrationService).registerSpecificPath(tempDir.resolve("target_dir"), 1L);
+            verify(monitoringRegistrationService, times(1)).registerSpecificPath(any(), any());
+        }
+
+        private void attachSourcePdfToTarget() throws IOException {
+            BookEntity target = createBook(1L);
+            createBookFile(10L, target, "target.epub", "target_dir", true, false);
+            BookEntity source = createBook(2L);
+            createBookFile(20L, source, "source.pdf", "source_dir", true, false);
+            source.getBookFiles().getFirst().setBookType(BookFileType.PDF);
+            when(bookRepository.findByIdWithBookFiles(1L)).thenReturn(Optional.of(target));
+            when(bookRepository.findByIdWithBookFiles(2L)).thenReturn(Optional.of(source));
+            setupGetUpdatedBookMocks(1L, target);
+            setupFileMoveStubs(target, "target_dir/{title}");
+            when(monitoringRegistrationService.isLibraryMonitored(1L)).thenReturn(false);
+
+            service.attachBookFiles(1L, List.of(2L), true);
         }
 
         @Test

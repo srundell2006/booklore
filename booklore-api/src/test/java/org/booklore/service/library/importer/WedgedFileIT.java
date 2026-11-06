@@ -137,7 +137,7 @@ class WedgedFileIT {
         public PersistedBook persistPrepared(LibraryFile libraryFile, PreparedBookFile prepared) {
             saved.add(libraryFile.getFileName());
             long id = lastId.incrementAndGet();
-            return new PersistedBook(Book.builder().id(id).build(), id, true, libraryFile.getFileName(), BookFileType.EPUB, null);
+            return new PersistedBook(Book.builder().id(id).build(), id, true, false, libraryFile.getFileName(), BookFileType.EPUB, null);
         }
 
         @Override

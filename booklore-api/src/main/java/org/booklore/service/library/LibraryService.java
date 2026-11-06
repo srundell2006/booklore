@@ -186,10 +186,9 @@ public class LibraryService {
         Long libraryId = libraryEntity.getId();
 
         if (request.isWatch()) {
-            for (LibraryPathEntity pathEntity : libraryEntity.getLibraryPaths()) {
-                Path path = Paths.get(pathEntity.getPath());
-                libraryWatchService.registerPath(path, libraryId);
-            }
+            libraryWatchService.watchNewLibrary(libraryId, libraryEntity.getLibraryPaths().stream()
+                    .map(pathEntity -> Paths.get(pathEntity.getPath()))
+                    .toList());
         }
 
         startScan(libraryId, libraryEntity.getName(), false, () -> libraryProcessingService.processLibrary(libraryId));

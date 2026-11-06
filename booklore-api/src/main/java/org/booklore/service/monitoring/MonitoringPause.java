@@ -6,8 +6,9 @@ import java.util.Set;
 
 /**
  * What {@link MonitoringRegistrationService#pauseLibraries} stopped watching while files are written into libraries,
- * for {@link MonitoringRegistrationService#resume}: the watched libraries, which are registered again in full, and
- * the single folders that were registered in libraries whose watching is off, which get back just those folders.
+ * for {@link MonitoringRegistrationService#resume}: the watched libraries, which are registered again in full if they
+ * are still there and still set to be watched, and the single folders that were registered in libraries whose watching
+ * is off, which get back just those folders.
  */
 public record MonitoringPause(Set<Long> watchedLibraries, Map<Path, Long> folders) {
 

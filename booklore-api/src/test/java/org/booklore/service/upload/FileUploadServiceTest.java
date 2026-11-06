@@ -420,23 +420,19 @@ class FileUploadServiceTest {
         uploadAdditionalFileToLibrary3(org.booklore.service.monitoring.MonitoringPause.NONE);
 
         verify(monitoringRegistrationService).pauseLibraries(java.util.Set.of(3L));
-        verify(monitoringRegistrationService, never()).resume(any(), any());
+        verify(monitoringRegistrationService, never()).resume(any());
         verify(monitoringRegistrationService, never()).registerLibraryPaths(any(), any());
         verify(monitoringRegistrationService, never()).registerLibrary(any());
         verify(monitoringRegistrationService, never()).unregisterLibrary(any());
     }
 
     @Test
-    @SuppressWarnings("unchecked")
-    void uploadAdditionalFile_toAWatchedLibrary_resumesWhatWasPausedWithTheLibrarysRoots() {
+    void uploadAdditionalFile_toAWatchedLibrary_resumesWhatWasPaused() {
         org.booklore.service.monitoring.MonitoringPause pause =
                 new org.booklore.service.monitoring.MonitoringPause(java.util.Set.of(3L), java.util.Map.of());
         uploadAdditionalFileToLibrary3(pause);
 
-        org.mockito.ArgumentCaptor<java.util.function.Function<Long, java.util.Collection<Path>>> roots =
-                org.mockito.ArgumentCaptor.forClass(java.util.function.Function.class);
-        verify(monitoringRegistrationService).resume(eq(pause), roots.capture());
-        assertThat(roots.getValue().apply(3L)).containsExactly(tempDir);
+        verify(monitoringRegistrationService).resume(pause);
         verify(monitoringRegistrationService, never()).registerLibraryPaths(any(), any());
     }
 }

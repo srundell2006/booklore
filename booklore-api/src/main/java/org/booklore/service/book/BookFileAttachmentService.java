@@ -188,17 +188,15 @@ public class BookFileAttachmentService {
         }
 
         Long libraryId = targetBook.getLibrary().getId();
+        // Folders are watched again afterwards only where they were watched, or the library is: registering folders of a
+        // library whose watching is off would have the watcher import books into it after all
+        boolean libraryWatched = monitoringRegistrationService.isLibraryMonitored(libraryId);
         List<BookEntity> sourceBooksToDelete = new ArrayList<>();
         List<Path> sourceDirectoriesToCleanup = new ArrayList<>();
         Set<Path> pathsToReregister = new HashSet<>();
 
         try {
-            try {
-                monitoringRegistrationService.unregisterSpecificPath(targetDirectory);
-            } catch (Exception ex) {
-                log.warn("Failed to unregister target directory from monitoring: {}", targetDirectory, ex);
-            }
-            pathsToReregister.add(targetDirectory);
+            pauseFolder(targetDirectory, libraryWatched, pathsToReregister);
 
             if (!primaryFileAtPatternLocation) {
                 log.info("Primary file not at pattern location, organizing target book files first");
@@ -208,12 +206,7 @@ public class BookFileAttachmentService {
                     if (Files.exists(currentPath)) {
                         Path sourceDir = currentPath.getParent();
                         if (sourceDir != null) {
-                            try {
-                                monitoringRegistrationService.unregisterSpecificPath(sourceDir);
-                            } catch (Exception ex) {
-                                log.warn("Failed to unregister source directory from monitoring: {}", sourceDir, ex);
-                            }
-                            pathsToReregister.add(sourceDir);
+                            pauseFolder(sourceDir, libraryWatched, pathsToReregister);
                             sourceDirectoriesToCleanup.add(sourceDir);
                         }
                     }
@@ -271,12 +264,7 @@ public class BookFileAttachmentService {
                     Path sourceDirectory = sourceFilePath.getParent();
 
                     if (sourceDirectory != null && sourceDirectories.add(sourceDirectory)) {
-                        try {
-                            monitoringRegistrationService.unregisterSpecificPath(sourceDirectory);
-                        } catch (Exception ex) {
-                            log.warn("Failed to unregister source directory from monitoring: {}", sourceDirectory, ex);
-                        }
-                        pathsToReregister.add(sourceDirectory);
+                        pauseFolder(sourceDirectory, libraryWatched, pathsToReregister);
                     }
 
                     String extension = getFileExtension(fileToMove.getFileName()).toLowerCase();
@@ -351,6 +339,18 @@ public class BookFileAttachmentService {
                     }
                 }
             }
+        }
+    }
+
+    /** Stops watching a folder while files move, noting it to be watched again if it was watched or its library is. */
+    private void pauseFolder(Path folder, boolean libraryWatched, Set<Path> pathsToReregister) {
+        if (libraryWatched || monitoringRegistrationService.isPathMonitored(folder)) {
+            pathsToReregister.add(folder);
+        }
+        try {
+            monitoringRegistrationService.unregisterSpecificPath(folder);
+        } catch (Exception ex) {
+            log.warn("Failed to unregister directory from monitoring: {}", folder, ex);
         }
     }
 

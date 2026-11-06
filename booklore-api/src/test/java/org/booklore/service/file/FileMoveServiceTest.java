@@ -604,7 +604,7 @@ class FileMoveServiceTest {
 
             service.moveSingleFile(book);
 
-            verify(monitoringRegistrationService).resume(any(), any());
+            verify(monitoringRegistrationService).resume(any());
         }
 
         @Test
@@ -620,13 +620,12 @@ class FileMoveServiceTest {
 
             service.moveSingleFile(book);
 
-            verify(monitoringRegistrationService).resume(any(), any());
+            verify(monitoringRegistrationService).resume(any());
         }
 
         @Test
-        @DisplayName("gives back exactly what it paused, with the library's roots")
-        @SuppressWarnings("unchecked")
-        void resumesWhatItPausedWithTheLibrarysRoots() throws IOException {
+        @DisplayName("gives back exactly what it paused")
+        void resumesWhatItPaused() throws IOException {
             BookFileEntity epub = createBookFile(1L, "Book.epub", "path", true, false);
             BookEntity book = createBook(List.of(epub));
             Path target = Paths.get("/library/new/path/NewName.epub");
@@ -639,10 +638,7 @@ class FileMoveServiceTest {
 
             service.moveSingleFile(book);
 
-            org.mockito.ArgumentCaptor<java.util.function.Function<Long, java.util.Collection<Path>>> roots =
-                    org.mockito.ArgumentCaptor.forClass(java.util.function.Function.class);
-            verify(monitoringRegistrationService).resume(eq(pause), roots.capture());
-            assertThat(roots.getValue().apply(1L)).containsExactly(Paths.get(libraryPath.getPath()));
+            verify(monitoringRegistrationService).resume(pause);
             verify(monitoringRegistrationService, never()).registerLibrary(any());
         }
 
@@ -659,7 +655,7 @@ class FileMoveServiceTest {
             service.moveSingleFile(book);
 
             verify(monitoringRegistrationService, never()).pauseLibraries(any());
-            verify(monitoringRegistrationService, never()).resume(any(), any());
+            verify(monitoringRegistrationService, never()).resume(any());
             verify(monitoringRegistrationService, never()).registerLibrary(any());
             verify(service, never()).sleep(anyLong());
         }
@@ -678,7 +674,7 @@ class FileMoveServiceTest {
             service.moveSingleFile(book);
 
             verify(monitoringRegistrationService).pauseLibraries(Set.of(1L));
-            verify(monitoringRegistrationService).resume(any(), any());
+            verify(monitoringRegistrationService).resume(any());
             verify(monitoringRegistrationService, never()).registerLibrary(any());
         }
 

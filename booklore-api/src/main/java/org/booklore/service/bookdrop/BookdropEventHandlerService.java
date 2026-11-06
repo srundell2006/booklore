@@ -15,6 +15,8 @@ import org.booklore.repository.BookdropFileRepository;
 import org.booklore.service.NotificationService;
 import org.booklore.service.appsettings.AppSettingService;
 import org.booklore.service.audiobook.AudiobookVerificationService;
+import org.booklore.model.dto.response.BookdropFinalizeResult;
+import org.booklore.model.dto.response.BookdropFileResult;
 import org.booklore.util.OpenEntityManagerRunner;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
@@ -31,6 +33,7 @@ import java.nio.file.StandardWatchEventKinds;
 import java.nio.file.WatchEvent;
 import java.time.Instant;
 import java.util.List;
+import java.util.Optional;
 import java.util.Set;
 import java.util.concurrent.BlockingQueue;
 import java.util.concurrent.LinkedBlockingQueue;
@@ -181,9 +184,14 @@ public class BookdropEventHandlerService {
                                 try {
                                     // With the persistence context a request has: the import reads lazy associations
                                     // of the book it saved, which fails on this thread without one
-                                    openEntityManagerRunner.call(() -> bookDropService.finalizeImport(finalizeRequest));
-                                    log.info("Auto-import successful for '{}'", fileName);
-                                    triggerVerificationIfAudiobook(fileName);
+                                    BookdropFinalizeResult result = openEntityManagerRunner.call(() -> bookDropService.finalizeImport(finalizeRequest));
+                                    // finalizeImport reports a file that failed in its result rather than by throwing
+                                    if (result != null && result.getFailed() == 0 && result.getSuccessfullyImported() > 0) {
+                                        log.info("Auto-import successful for '{}'", fileName);
+                                        triggerVerificationIfAudiobook(fileName);
+                                    } else {
+                                        log.warn("Auto-import of '{}' failed, so it waits in the Bookdrop for review: {}", fileName, failureOf(result));
+                                    }
                                 } catch (Exception e) {
                                     log.error("Auto-import failed for '{}': {}", fileName, e.getMessage(), e);
                                 }
@@ -226,6 +234,17 @@ public class BookdropEventHandlerService {
 
             bookdropNotificationService.sendBookdropFileSummaryNotification();
         }
+    }
+
+    private static String failureOf(BookdropFinalizeResult result) {
+        if (result == null) {
+            return "no result";
+        }
+        return Optional.ofNullable(result.getResults()).orElse(List.of()).stream()
+                .filter(fileResult -> !fileResult.isSuccess())
+                .map(BookdropFileResult::getMessage)
+                .findFirst()
+                .orElse(result.getFailed() + " failed, " + result.getSuccessfullyImported() + " imported");
     }
 
     /**

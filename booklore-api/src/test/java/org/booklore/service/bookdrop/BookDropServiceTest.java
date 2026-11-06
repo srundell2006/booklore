@@ -34,7 +34,6 @@ import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
-import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
@@ -51,13 +50,11 @@ import tools.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
-import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
 import java.util.Map;
 import java.util.Optional;
 import java.util.Set;
-import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -701,7 +698,28 @@ class BookDropServiceTest {
         verify(bookRepository, never()).deleteAllByIdInBatch(any());
         verify(fileService, never()).deleteBookCovers(any());
         verify(notificationService, never()).sendMessage(eq(Topic.BOOKS_REMOVE), any());
+        verify(bookRepository, never()).markDeleted(any(), any());
         assertTrue(Files.exists(sourceFile));
+    }
+
+    @Test
+    void finalizeImport_WhenMetadataUpdateFailsOnADeletedBookTheImportRestored_ShouldMarkItDeletedAgain() throws Exception {
+        Path sourceFile = tempDir.resolve("restored-book.pdf");
+        Path targetDir = tempDir.resolve("library");
+        FileProcessResult restored = FileProcessResult.builder().book(Book.builder().id(48L).title("Test Book").build()).bookRestored(true).build();
+        BookdropFinalizeRequest request = realImport(sourceFile, targetDir, restored);
+        doThrow(new RuntimeException("Metadata refresh failed")).when(metadataRefreshService).updateBookMetadata(any());
+
+        BookdropFinalizeResult result = bookDropService.finalizeImport(request);
+
+        assertEquals(1, result.getFailed());
+        verify(bookRepository).markDeleted(eq(48L), any());
+        // Kept, with its shelves, progress and notes, as it was before the import
+        verify(bookRepository, never()).deleteAllByIdInBatch(any());
+        verify(fileService, never()).deleteBookCovers(any());
+        verify(notificationService).sendMessage(Topic.BOOKS_REMOVE, Set.of(48L));
+        assertTrue(Files.exists(sourceFile));
+        assertFalse(Files.exists(targetDir.resolve("moved-book.pdf")), "the moved file is cleaned up");
     }
 
     @Test
@@ -732,7 +750,7 @@ class BookDropServiceTest {
 
         assertEquals(1, result.getSuccessfullyImported());
         verify(monitoringRegistrationService).pauseLibraries(Set.of(1L));
-        verify(monitoringRegistrationService).resume(eq(pause), any());
+        verify(monitoringRegistrationService).resume(pause);
         verify(monitoringRegistrationService, never()).registerLibraryPaths(any(), any());
         verify(monitoringRegistrationService, never()).registerLibrary(any());
         verify(monitoringRegistrationService, never()).unregisterLibrary(any());
@@ -749,17 +767,8 @@ class BookDropServiceTest {
 
         bookDropService.finalizeImport(request);
 
-        assertEquals(List.of(tempDir), resumedRoots(pause).apply(1L));
-        assertNull(resumedRoots(pause).apply(99L), "a library that is gone gets no roots");
+        verify(monitoringRegistrationService).resume(pause);
         verify(monitoringRegistrationService, never()).registerLibraryPaths(any(), any());
-    }
-
-    @SuppressWarnings("unchecked")
-    private Function<Long, Collection<Path>> resumedRoots(MonitoringPause pause) {
-        ArgumentCaptor<Function<Long, Collection<Path>>> roots =
-                ArgumentCaptor.forClass(Function.class);
-        verify(monitoringRegistrationService, atLeastOnce()).resume(eq(pause), roots.capture());
-        return roots.getValue();
     }
 
     @Test
@@ -774,7 +783,7 @@ class BookDropServiceTest {
 
         bookDropService.finalizeImport(request);
 
-        verify(monitoringRegistrationService).resume(eq(pause), any());
+        verify(monitoringRegistrationService).resume(pause);
         verify(bookRepository).deleteAllByIdInBatch(List.of(47L));
     }
 }

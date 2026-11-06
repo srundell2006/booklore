@@ -330,10 +330,7 @@ public class FileMoveService {
         } finally {
             if (monitoringPaused) {
                 log.debug("Resuming monitoring of library {} with root {}", libraryId, libraryRoot);
-                LibraryEntity libraryEntity = bookEntity.getLibraryPath().getLibrary();
-                monitoringRegistrationService.resume(monitoringPause, id -> libraryEntity.getLibraryPaths().stream()
-                        .map(libraryPath -> Paths.get(libraryPath.getPath()))
-                        .toList());
+                monitoringRegistrationService.resume(monitoringPause);
             }
         }
 

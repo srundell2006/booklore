@@ -195,6 +195,12 @@ public interface BookRepository extends JpaRepository<BookEntity, Long>, JpaSpec
     @Query("SELECT COUNT(b) FROM BookEntity b WHERE b.deleted = TRUE")
     long countAllSoftDeleted();
 
+    /** Marks a book deleted, as the watcher does when its last file goes, in a transaction of its own. */
+    @Modifying
+    @Transactional
+    @Query("UPDATE BookEntity b SET b.deleted = TRUE, b.deletedAt = :deletedAt WHERE b.id = :bookId")
+    int markDeleted(@Param("bookId") Long bookId, @Param("deletedAt") Instant deletedAt);
+
     @Query("""
         SELECT DISTINCT b FROM BookEntity b
         JOIN FETCH b.bookFiles bf

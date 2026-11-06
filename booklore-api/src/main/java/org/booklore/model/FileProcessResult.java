@@ -15,8 +15,10 @@ public class FileProcessResult {
     private FileProcessStatus status;
     /** Whether processing the file created the book; false when the file went to a book that was there already or was restored. */
     private boolean bookCreated;
+    /** Whether the file brought back a book that was deleted. */
+    private boolean bookRestored;
 
     public FileProcessResult(Book book, FileProcessStatus status) {
-        this(book, status, false);
+        this(book, status, false, false);
     }
 }

@@ -1,6 +1,8 @@
 package org.booklore.service.monitoring;
 
 import org.booklore.model.dto.Library;
+import org.booklore.repository.LibraryPathRepository;
+import org.booklore.repository.LibraryRepository;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -8,12 +10,13 @@ import org.springframework.stereotype.Service;
 import java.nio.file.Files;
 import java.nio.file.Path;
 import java.util.Collection;
+import java.util.HashMap;
 import java.util.HashSet;
 import java.util.LinkedHashMap;
 import java.util.LinkedHashSet;
+import java.util.List;
 import java.util.Map;
 import java.util.Set;
-import java.util.function.Function;
 
 @Slf4j
 @Service
@@ -21,6 +24,8 @@ import java.util.function.Function;
 public class MonitoringRegistrationService {
 
     private final LibraryWatchService libraryWatchService;
+    private final LibraryRepository libraryRepository;
+    private final LibraryPathRepository libraryPathRepository;
 
     public boolean isPathMonitored(Path path) {
         return libraryWatchService.isPathMonitored(path);
@@ -92,29 +97,36 @@ public class MonitoringRegistrationService {
     }
 
     /**
-     * Watches again what {@link #pauseLibraries} stopped: each watched library counts as watched and has its folders
-     * registered under the roots {@code libraryRoots} gives (null: the library is gone, and is left out), and each single
-     * folder that still exists is registered again on its own.
+     * Watches again what {@link #pauseLibraries} stopped, as the database has the libraries now: a paused library that
+     * is still there and still set to be watched counts as watched and has every folder under its paths registered, and
+     * each single folder that still exists, in a library that is still there, is registered again on its own. A library
+     * deleted, or set not to be watched, while it was paused stays unwatched. Never throws: it runs in finally blocks,
+     * after the files were written, and a failure here must not turn their writing into a failure.
      */
-    public void resume(MonitoringPause pause, Function<Long, Collection<Path>> libraryRoots) {
+    public void resume(MonitoringPause pause) {
         if (pause == null || pause.isEmpty()) {
             return;
         }
         for (Long libraryId : pause.watchedLibraries()) {
             try {
-                Collection<Path> roots = libraryRoots.apply(libraryId);
-                if (roots == null) {
-                    log.info("Library {} is gone; not watching it again", libraryId);
+                if (!libraryRepository.findWatchById(libraryId).orElse(false)) {
+                    log.info("Library {} was deleted or set not to be watched while it was paused; not watching it again", libraryId);
                     continue;
                 }
+                List<Path> roots = libraryPathRepository.findPathsByLibraryId(libraryId).stream().map(Path::of).toList();
                 libraryWatchService.resumeLibrary(libraryId, roots);
             } catch (Exception e) {
                 log.warn("Could not watch library {} again: {}", libraryId, e.getMessage());
             }
         }
+        Map<Long, Boolean> libraryExists = new HashMap<>();
         pause.folders().forEach((folder, libraryId) -> {
-            if (Files.isDirectory(folder)) {
-                libraryWatchService.registerPath(folder, libraryId);
+            try {
+                if (Files.isDirectory(folder) && libraryExists.computeIfAbsent(libraryId, libraryRepository::existsById)) {
+                    libraryWatchService.registerPath(folder, libraryId);
+                }
+            } catch (Exception e) {
+                log.warn("Could not watch folder {} of library {} again: {}", folder, libraryId, e.getMessage());
             }
         });
     }
