@@ -529,10 +529,11 @@ public class BookDropService {
     }
 
     /**
-     * Puts the book of a failed import back as it was. One the import created is deleted, as deleteBooks does (the
-     * database cascades to its rows), with its covers. A deleted one the import brought back is marked deleted again, as
-     * the watcher marks a book whose last file went, and keeps its shelves, progress and notes. A book that was live
-     * already is left as it is.
+     * Takes back the book of a failed import, so that no book is left live without its file. One the import created is
+     * deleted, as deleteBooks does (the database cascades to its rows), with its covers. A deleted one the import brought
+     * back is marked deleted again, as the watcher marks a book whose last file went, and keeps its shelves, progress
+     * and notes; the metadata, cover and file hash that bringing it back took from the dropped file stay on it, as a
+     * retry of the import would set them again. A book that was live already is left as it is.
      */
     private void undoBookOfFailedImport(FileProcessResult fileProcessResult, BookdropFileEntity bookdropFile, RuntimeException cause) {
         boolean created = fileProcessResult.isBookCreated();

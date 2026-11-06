@@ -6,6 +6,9 @@ import org.booklore.repository.LibraryRepository;
 import lombok.AllArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
+import org.springframework.transaction.support.TransactionTemplate;
 
 import java.nio.file.Files;
 import java.nio.file.Path;
@@ -17,6 +20,7 @@ import java.util.LinkedHashSet;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
+import java.util.function.Supplier;
 
 @Slf4j
 @Service
@@ -26,6 +30,7 @@ public class MonitoringRegistrationService {
     private final LibraryWatchService libraryWatchService;
     private final LibraryRepository libraryRepository;
     private final LibraryPathRepository libraryPathRepository;
+    private final PlatformTransactionManager transactionManager;
 
     public boolean isPathMonitored(Path path) {
         return libraryWatchService.isPathMonitored(path);
@@ -109,11 +114,13 @@ public class MonitoringRegistrationService {
         }
         for (Long libraryId : pause.watchedLibraries()) {
             try {
-                if (!libraryRepository.findWatchById(libraryId).orElse(false)) {
+                List<Path> roots = readNow(() -> libraryRepository.findWatchById(libraryId).orElse(false)
+                        ? libraryPathRepository.findPathsByLibraryId(libraryId).stream().map(Path::of).toList()
+                        : null);
+                if (roots == null) {
                     log.info("Library {} was deleted or set not to be watched while it was paused; not watching it again", libraryId);
                     continue;
                 }
-                List<Path> roots = libraryPathRepository.findPathsByLibraryId(libraryId).stream().map(Path::of).toList();
                 libraryWatchService.resumeLibrary(libraryId, roots);
             } catch (Exception e) {
                 log.warn("Could not watch library {} again: {}", libraryId, e.getMessage());
@@ -122,13 +129,27 @@ public class MonitoringRegistrationService {
         Map<Long, Boolean> libraryExists = new HashMap<>();
         pause.folders().forEach((folder, libraryId) -> {
             try {
-                if (Files.isDirectory(folder) && libraryExists.computeIfAbsent(libraryId, libraryRepository::existsById)) {
+                if (Files.isDirectory(folder)
+                        && libraryExists.computeIfAbsent(libraryId, id -> readNow(() -> libraryRepository.existsById(id)))) {
                     libraryWatchService.registerPath(folder, libraryId);
                 }
             } catch (Exception e) {
                 log.warn("Could not watch folder {} of library {} again: {}", folder, libraryId, e.getMessage());
             }
         });
+    }
+
+    /**
+     * Reads the libraries as the database has them now, in a short read-only transaction of its own. Resume runs inside
+     * the writer's transaction for some writers (an upload, a file move), and there MariaDB's repeatable read would give
+     * the libraries as they were when that transaction first read, before the pause. Committed before any folder is
+     * walked, so no connection is held through a walk.
+     */
+    private <T> T readNow(Supplier<T> read) {
+        TransactionTemplate fresh = new TransactionTemplate(transactionManager);
+        fresh.setPropagationBehavior(TransactionDefinition.PROPAGATION_REQUIRES_NEW);
+        fresh.setReadOnly(true);
+        return fresh.execute(status -> read.get());
     }
 
     public void registerLibraries(Map<Long, Path> libraries) {

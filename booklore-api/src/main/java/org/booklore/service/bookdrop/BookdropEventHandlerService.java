@@ -190,7 +190,7 @@ public class BookdropEventHandlerService {
                                         log.info("Auto-import successful for '{}'", fileName);
                                         triggerVerificationIfAudiobook(fileName);
                                     } else {
-                                        log.warn("Auto-import of '{}' failed, so it waits in the Bookdrop for review: {}", fileName, failureOf(result));
+                                        log.warn("Auto-import did not import '{}': {}", fileName, failureOf(result));
                                     }
                                 } catch (Exception e) {
                                     log.error("Auto-import failed for '{}': {}", fileName, e.getMessage(), e);

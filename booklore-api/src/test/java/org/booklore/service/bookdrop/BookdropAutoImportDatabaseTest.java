@@ -13,6 +13,9 @@ import org.booklore.repository.BookdropFileRepository;
 import org.booklore.repository.LibraryRepository;
 import org.booklore.service.NotificationService;
 import org.booklore.service.kobo.KoboAutoShelfService;
+import org.booklore.service.monitoring.LibraryWatchService;
+import org.booklore.service.monitoring.MonitoringPause;
+import org.booklore.service.monitoring.MonitoringRegistrationService;
 import org.booklore.service.task.TaskCronService;
 import org.booklore.util.OpenEntityManagerRunner;
 import org.junit.jupiter.api.BeforeEach;
@@ -40,6 +43,11 @@ import java.sql.Timestamp;
 import java.time.Instant;
 import java.util.ArrayList;
 import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
+import java.util.concurrent.TimeUnit;
 import java.util.concurrent.atomic.AtomicReference;
 import java.util.function.Supplier;
 import java.util.zip.ZipEntry;
@@ -102,6 +110,10 @@ class BookdropAutoImportDatabaseTest {
     private BookDropService bookDropService;
     @Autowired
     private OpenEntityManagerRunner openEntityManagerRunner;
+    @Autowired
+    private MonitoringRegistrationService monitoringRegistrationService;
+    @Autowired
+    private LibraryWatchService libraryWatchService;
     @Autowired
     private LibraryRepository libraryRepository;
     @Autowired
@@ -212,6 +224,40 @@ class BookdropAutoImportDatabaseTest {
         assertThat(libraryRoot.resolve("Returning Book.epub")).doesNotExist();
         assertThat(again.source()).exists();
         assertThat(bookdropFileRepository.findById(again.bookdropFileId())).isPresent();
+    }
+
+    @Test
+    void aLibrarySetNotToBeWatchedWhileItWasPaused_isNotWatchedAgain_evenWhenResumedInsideAnOlderTransaction() throws Exception {
+        LibraryEntity library = fixture("Paused Book").library();
+        jdbcTemplate.update("UPDATE library SET watch = TRUE WHERE id = ?", library.getId());
+        // What pauseLibraries gives for a watched library
+        MonitoringPause pause = new MonitoringPause(Set.of(library.getId()), Map.of());
+        // A writer that resumes inside its own transaction, as an upload or a file move does. MariaDB's default REPEATABLE
+        // READ reads a snapshot from that transaction's first read; on H2 only SERIALIZABLE does
+        TransactionTemplate writersTransaction = new TransactionTemplate(transactionManager);
+        writersTransaction.setIsolationLevel(TransactionDefinition.ISOLATION_SERIALIZABLE);
+        ExecutorService admin = Executors.newSingleThreadExecutor();
+        try {
+            writersTransaction.executeWithoutResult(status -> {
+                assertThat(libraryRepository.findWatchById(library.getId())).contains(true);
+                try {
+                    // While the writer writes, watching is turned off for the library
+                    admin.submit(() -> jdbcTemplate.update("UPDATE library SET watch = FALSE WHERE id = ?", library.getId()))
+                            .get(30, TimeUnit.SECONDS);
+                } catch (Exception e) {
+                    throw new IllegalStateException(e);
+                }
+                // The writer's own transaction still reads it as watched
+                assertThat(libraryRepository.findWatchById(library.getId())).contains(true);
+
+                monitoringRegistrationService.resume(pause);
+            });
+            assertThat(libraryWatchService.isLibraryMonitored(library.getId())).isFalse();
+            assertThat(libraryWatchService.isPathMonitored(libraryRoot)).isFalse();
+        } finally {
+            admin.shutdownNow();
+            libraryWatchService.unregisterLibrary(library.getId());
+        }
     }
 
     @Test

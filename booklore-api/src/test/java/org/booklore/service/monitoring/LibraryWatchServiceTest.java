@@ -6,6 +6,7 @@ import org.booklore.model.enums.BookFileExtension;
 import org.booklore.repository.LibraryPathRepository;
 import org.booklore.repository.LibraryRepository;
 import org.booklore.service.watcher.LibraryFileEventProcessor;
+import org.springframework.transaction.PlatformTransactionManager;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Test;
@@ -249,7 +250,7 @@ class LibraryWatchServiceTest {
     void aPauseAndResume_givesAWatchedLibraryBackInFullAndAnUnwatchedOneOnlyTheFolderItHad() throws Exception {
         LibraryRepository libraryRepository = mock(LibraryRepository.class);
         LibraryPathRepository libraryPathRepository = mock(LibraryPathRepository.class);
-        MonitoringRegistrationService registration = new MonitoringRegistrationService(service, libraryRepository, libraryPathRepository);
+        MonitoringRegistrationService registration = new MonitoringRegistrationService(service, libraryRepository, libraryPathRepository, mock(PlatformTransactionManager.class));
         Path watchedRoot = tmp.resolve("watched");
         Path watchedSub = watchedRoot.resolve("sub");
         Path unwatchedRoot = tmp.resolve("unwatched");
@@ -306,7 +307,7 @@ class LibraryWatchServiceTest {
     void aWatchedLibraryCreatedWhileRunning_isPausedAndResumedAsAWatchedOne() throws Exception {
         LibraryRepository libraryRepository = mock(LibraryRepository.class);
         LibraryPathRepository libraryPathRepository = mock(LibraryPathRepository.class);
-        MonitoringRegistrationService registration = new MonitoringRegistrationService(service, libraryRepository, libraryPathRepository);
+        MonitoringRegistrationService registration = new MonitoringRegistrationService(service, libraryRepository, libraryPathRepository, mock(PlatformTransactionManager.class));
         Path root = tmp.resolve("created");
         Path existing = root.resolve("Existing Author");
         Files.createDirectories(existing);
@@ -330,5 +331,16 @@ class LibraryWatchServiceTest {
         assertThat(service.isLibraryMonitored(9L)).isTrue();
         assertThat(service.isPathMonitored(imported)).isTrue();
         assertThat(service.isPathMonitored(existing)).isTrue();
+    }
+
+    @Test
+    void aNewLibraryAtTheInotifyLimit_isLeftUnwatched_andItsCreationGoesOn() throws Exception {
+        Path root = Files.createDirectories(tmp.resolve("at-limit"));
+        LibraryWatchService atLimit = spy(service);
+        doThrow(new LibraryWatchService.InotifyLimitReachedException(10L, root)).when(atLimit).registerPath(root, 10L);
+
+        atLimit.watchNewLibrary(10L, List.of(root));
+
+        assertThat(atLimit.isLibraryMonitored(10L)).isFalse();
     }
 }

@@ -6,9 +6,13 @@ import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.io.TempDir;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.extension.ExtendWith;
+import org.mockito.ArgumentCaptor;
+import org.mockito.InOrder;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.junit.jupiter.MockitoExtension;
+import org.springframework.transaction.PlatformTransactionManager;
+import org.springframework.transaction.TransactionDefinition;
 
 import java.io.IOException;
 import java.nio.file.Files;
@@ -30,6 +34,8 @@ class MonitoringRegistrationServiceTest {
     LibraryRepository libraryRepository;
     @Mock
     LibraryPathRepository libraryPathRepository;
+    @Mock
+    PlatformTransactionManager transactionManager;
 
     @InjectMocks
     MonitoringRegistrationService registrationService;
@@ -179,9 +185,29 @@ class MonitoringRegistrationServiceTest {
     }
 
     @Test
+    void resume_readsTheLibrariesInAFreshReadOnlyTransaction_committedBeforeTheWalk() {
+        MonitoringPause pause = new MonitoringPause(Set.of(1L), Map.of());
+        when(libraryRepository.findWatchById(1L)).thenReturn(Optional.of(true));
+        when(libraryPathRepository.findPathsByLibraryId(1L)).thenReturn(List.of(root.toString()));
+
+        registrationService.resume(pause);
+
+        // Not the caller's transaction, whose snapshot can predate the pause, and no connection held through the walk
+        ArgumentCaptor<TransactionDefinition> definition = ArgumentCaptor.forClass(TransactionDefinition.class);
+        InOrder inOrder = inOrder(transactionManager, libraryRepository, libraryPathRepository, libraryWatchService);
+        inOrder.verify(transactionManager).getTransaction(definition.capture());
+        inOrder.verify(libraryRepository).findWatchById(1L);
+        inOrder.verify(libraryPathRepository).findPathsByLibraryId(1L);
+        inOrder.verify(transactionManager).commit(any());
+        inOrder.verify(libraryWatchService).resumeLibrary(1L, List.of(root));
+        assertEquals(TransactionDefinition.PROPAGATION_REQUIRES_NEW, definition.getValue().getPropagationBehavior());
+        assertTrue(definition.getValue().isReadOnly());
+    }
+
+    @Test
     void resume_ofNothing_doesNothing() {
         registrationService.resume(MonitoringPause.NONE);
         registrationService.resume(null);
-        verifyNoInteractions(libraryWatchService, libraryRepository, libraryPathRepository);
+        verifyNoInteractions(libraryWatchService, libraryRepository, libraryPathRepository, transactionManager);
     }
 }

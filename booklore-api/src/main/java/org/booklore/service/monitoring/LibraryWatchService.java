@@ -295,8 +295,15 @@ public class LibraryWatchService {
      */
     public void watchNewLibrary(long libraryId, Collection<Path> libraryRoots) {
         libraryWatchStatus.put(libraryId, true);
-        for (Path libraryRoot : libraryRoots) {
-            registerPath(libraryRoot, libraryId);
+        try {
+            for (Path libraryRoot : libraryRoots) {
+                registerPath(libraryRoot, libraryId);
+            }
+        } catch (InotifyLimitReachedException e) {
+            // As registerLibraryPaths does; the library is created and scanned all the same
+            log.error("Inotify limit reached for new libraryId {}: {}. File watching disabled. " +
+                      "Increase fs.inotify.max_user_watches on the host.", libraryId, e.getMessage());
+            libraryWatchStatus.put(libraryId, false);
         }
     }
 
@@ -374,7 +381,7 @@ public class LibraryWatchService {
         }
     }
 
-    private static class InotifyLimitReachedException extends RuntimeException {
+    static class InotifyLimitReachedException extends RuntimeException {
         InotifyLimitReachedException(long libraryId, Path path) {
             super("inotify watch limit reached for libraryId=" + libraryId + " at path=" + path);
         }
