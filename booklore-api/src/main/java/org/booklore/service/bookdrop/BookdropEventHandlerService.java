@@ -15,6 +15,7 @@ import org.booklore.repository.BookdropFileRepository;
 import org.booklore.service.NotificationService;
 import org.booklore.service.appsettings.AppSettingService;
 import org.booklore.service.audiobook.AudiobookVerificationService;
+import org.booklore.util.OpenEntityManagerRunner;
 import jakarta.annotation.PostConstruct;
 import jakarta.annotation.PreDestroy;
 import lombok.RequiredArgsConstructor;
@@ -44,6 +45,7 @@ public class BookdropEventHandlerService {
     private final BookdropNotificationService bookdropNotificationService;
     private final AppSettingService appSettingService;
     private final BookdropMetadataService bookdropMetadataService;
+    private final OpenEntityManagerRunner openEntityManagerRunner;
 
     // Field-injected with @Lazy to break the circular dependency:
     // BookdropEventHandlerService -> BookDropService -> BookdropMonitoringService -> BookdropEventHandlerService
@@ -177,7 +179,9 @@ public class BookdropEventHandlerService {
                                 finalizeRequest.setFiles(List.of(fileReq));
 
                                 try {
-                                    bookDropService.finalizeImport(finalizeRequest);
+                                    // With the persistence context a request has: the import reads lazy associations
+                                    // of the book it saved, which fails on this thread without one
+                                    openEntityManagerRunner.call(() -> bookDropService.finalizeImport(finalizeRequest));
                                     log.info("Auto-import successful for '{}'", fileName);
                                     triggerVerificationIfAudiobook(fileName);
                                 } catch (Exception e) {

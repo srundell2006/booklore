@@ -7,6 +7,7 @@ import org.booklore.repository.LibraryRepository;
 import org.booklore.service.NotificationService;
 import org.booklore.service.file.FileMovingHelper;
 import org.booklore.service.kobo.KoboAutoShelfService;
+import org.booklore.service.monitoring.MonitoringPause;
 import org.booklore.service.monitoring.MonitoringRegistrationService;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
@@ -57,6 +58,7 @@ class BookDropServiceFinalizeTest {
 
         when(bookdropFileRepository.findAllIds()).thenReturn(List.of(1L, 2L));
         when(bookdropFileRepository.findAllById(anyList())).thenReturn(Collections.emptyList()); // Mock chunk processing
+        when(monitoringRegistrationService.pauseLibraries(any())).thenReturn(MonitoringPause.NONE);
 
         bookDropService.finalizeImport(request);
 
@@ -74,6 +76,7 @@ class BookDropServiceFinalizeTest {
 
         when(bookdropFileRepository.findAllExcludingIdsFlat(anyList())).thenReturn(List.of(1L, 2L));
         when(bookdropFileRepository.findAllById(anyList())).thenReturn(Collections.emptyList()); // Mock chunk processing
+        when(monitoringRegistrationService.pauseLibraries(any())).thenReturn(MonitoringPause.NONE);
 
         bookDropService.finalizeImport(request);
 

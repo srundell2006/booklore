@@ -217,4 +217,73 @@ class LibraryWatchServiceTest {
         service.unregisterLibrary(5L);
         assertThat(service.isLibraryMonitored(5L)).isFalse();
     }
+
+    @Test
+    void resumeLibrary_countsTheLibraryAsWatchedAgainAndRegistersItsFolders() throws Exception {
+        Path root = tmp.resolve("resumed");
+        Path a = root.resolve("a");
+        Files.createDirectories(a);
+        Library lib = mock(Library.class);
+        LibraryPath lp = mock(LibraryPath.class);
+        when(lp.getPath()).thenReturn(root.toString());
+        when(lib.getPaths()).thenReturn(List.of(lp));
+        when(lib.getId()).thenReturn(8L);
+        when(lib.getName()).thenReturn("resumed");
+        when(lib.isWatch()).thenReturn(true);
+        service.registerLibrary(lib);
+        service.unregisterLibrary(8L);
+        assertThat(service.isLibraryMonitored(8L)).isFalse();
+        assertThat(service.isPathMonitored(a)).isFalse();
+
+        service.resumeLibrary(8L, List.of(root));
+
+        assertThat(service.isLibraryMonitored(8L)).isTrue();
+        assertThat(service.isPathMonitored(root)).isTrue();
+        assertThat(service.isPathMonitored(a)).isTrue();
+    }
+
+    @Test
+    void aPauseAndResume_givesAWatchedLibraryBackInFullAndAnUnwatchedOneOnlyTheFolderItHad() throws Exception {
+        MonitoringRegistrationService registration = new MonitoringRegistrationService(service);
+        Path watchedRoot = tmp.resolve("watched");
+        Path watchedSub = watchedRoot.resolve("sub");
+        Path unwatchedRoot = tmp.resolve("unwatched");
+        Path strayFolder = unwatchedRoot.resolve("B").resolve("Author");
+        Path otherFolder = unwatchedRoot.resolve("C");
+        Files.createDirectories(watchedSub);
+        Files.createDirectories(strayFolder);
+        Files.createDirectories(otherFolder);
+        Library watched = mock(Library.class);
+        LibraryPath wp = mock(LibraryPath.class);
+        when(wp.getPath()).thenReturn(watchedRoot.toString());
+        when(watched.getPaths()).thenReturn(List.of(wp));
+        when(watched.getId()).thenReturn(1L);
+        when(watched.getName()).thenReturn("watched");
+        when(watched.isWatch()).thenReturn(true);
+        Library unwatched = mock(Library.class);
+        when(unwatched.getId()).thenReturn(2L);
+        when(unwatched.isWatch()).thenReturn(false);
+        service.registerLibraries(List.of(watched, unwatched));
+        // What a book deletion used to leave: one folder of the unwatched library registered
+        service.registerPath(strayFolder, 2L);
+
+        MonitoringPause pause = registration.pauseLibraries(List.of(1L, 2L));
+
+        assertThat(pause.watchedLibraries()).containsExactly(1L);
+        assertThat(pause.folders()).containsOnlyKeys(strayFolder);
+        assertThat(service.isPathMonitored(watchedSub)).isFalse();
+        assertThat(service.isPathMonitored(strayFolder)).isFalse();
+
+        registration.resume(pause, id -> id == 1L ? List.of(watchedRoot) : List.of(unwatchedRoot));
+
+        assertThat(service.isLibraryMonitored(1L)).isTrue();
+        assertThat(service.isPathMonitored(watchedRoot)).isTrue();
+        assertThat(service.isPathMonitored(watchedSub)).isTrue();
+        // The unwatched library gets back the one folder it had: it is not walked and does not become watched
+        assertThat(service.isPathMonitored(strayFolder)).isTrue();
+        assertThat(service.isPathMonitored(unwatchedRoot)).isFalse();
+        assertThat(service.isPathMonitored(otherFolder)).isFalse();
+        assertThat(service.isLibraryMonitored(2L)).isFalse();
+        assertThat(service.getPathsForLibraries(Set.of(2L))).containsExactly(strayFolder);
+    }
 }

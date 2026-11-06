@@ -24,13 +24,17 @@ import org.booklore.service.fileprocessor.BookFileProcessor;
 import org.booklore.service.fileprocessor.BookFileProcessorRegistry;
 import org.booklore.service.kobo.KoboAutoShelfService;
 import org.booklore.service.metadata.MetadataRefreshService;
+import org.booklore.service.monitoring.MonitoringPause;
 import org.booklore.service.monitoring.MonitoringRegistrationService;
+import org.booklore.model.websocket.Topic;
+import org.booklore.util.FileService;
 import org.junit.jupiter.api.AfterEach;
 import org.junit.jupiter.api.BeforeEach;
 import org.junit.jupiter.api.Disabled;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.junit.jupiter.api.io.TempDir;
+import org.mockito.ArgumentCaptor;
 import org.mockito.InjectMocks;
 import org.mockito.Mock;
 import org.mockito.MockedStatic;
@@ -47,9 +51,13 @@ import tools.jackson.databind.ObjectMapper;
 import java.io.IOException;
 import java.nio.file.Files;
 import java.nio.file.Path;
+import java.util.Collection;
 import java.util.Comparator;
 import java.util.List;
+import java.util.Map;
 import java.util.Optional;
+import java.util.Set;
+import java.util.function.Function;
 
 import static org.junit.jupiter.api.Assertions.*;
 import static org.mockito.Mockito.*;
@@ -91,6 +99,8 @@ class BookDropServiceTest {
 
     @Mock
     private SidecarMetadataWriter sidecarMetadataWriter;
+    @Mock
+    private FileService fileService;
 
     @InjectMocks
     private BookDropService bookDropService;
@@ -126,6 +136,8 @@ class BookDropServiceTest {
         bookdropFile.setFileName("test-book.pdf");
 
         Files.createFile(tempDir.resolve("test-book.pdf"));
+
+        when(monitoringRegistrationService.pauseLibraries(any())).thenReturn(MonitoringPause.NONE);
     }
 
     @AfterEach
@@ -617,5 +629,152 @@ class BookDropServiceTest {
 
         assertTrue(Files.exists(sourceFile), "Source file should be preserved on failure");
         assertFalse(Files.exists(targetDir.resolve("moved-book.pdf")), "Target file should be cleaned up on failure");
+    }
+
+    /** A real source file in the Bookdrop folder and a library folder; the import moves the file into the library. */
+    private BookdropFinalizeRequest realImport(Path sourceFile, Path targetDir, FileProcessResult processResult) throws Exception {
+        Files.createFile(sourceFile);
+        bookdropFileEntity.setFilePath(sourceFile.toString());
+        Files.createDirectories(targetDir);
+
+        BookdropFinalizeRequest.BookdropFinalizeFile finalizeFile = new BookdropFinalizeRequest.BookdropFinalizeFile();
+        finalizeFile.setFileId(1L);
+        finalizeFile.setLibraryId(1L);
+        finalizeFile.setPathId(1L);
+        finalizeFile.setMetadata(new BookMetadata());
+
+        BookdropFinalizeRequest request = new BookdropFinalizeRequest();
+        request.setSelectAll(false);
+        request.setFiles(List.of(finalizeFile));
+
+        when(bookdropFileRepository.findAllById(any())).thenReturn(List.of(bookdropFileEntity));
+        when(libraryRepository.findById(1L)).thenReturn(Optional.of(libraryEntity));
+        when(objectMapper.readValue(anyString(), eq(BookMetadata.class))).thenReturn(new BookMetadata());
+        when(fileMovingHelper.getFileNamingPattern(libraryEntity)).thenReturn("{title}");
+        when(fileMovingHelper.generateNewFilePath(anyString(), any(), anyString(), anyString()))
+                .thenReturn(targetDir.resolve("moved-book.pdf"));
+
+        BookFileProcessor processor = mock(BookFileProcessor.class);
+        when(processorRegistry.getProcessorOrThrow(any())).thenReturn(processor);
+        when(processor.processFile(any())).thenReturn(processResult);
+
+        BookEntity bookEntity = new BookEntity();
+        bookEntity.setId(processResult.getBook().getId());
+        when(bookRepository.findById(processResult.getBook().getId())).thenReturn(Optional.of(bookEntity));
+        when(appProperties.getPathConfig()).thenReturn(tempDir.toString());
+        return request;
+    }
+
+    @Test
+    void finalizeImport_WhenMetadataUpdateFailsOnABookTheImportCreated_ShouldRemoveThatBook() throws Exception {
+        Path sourceFile = tempDir.resolve("created-book.pdf");
+        Path targetDir = tempDir.resolve("library");
+        FileProcessResult created = FileProcessResult.builder().book(Book.builder().id(42L).title("Test Book").build()).bookCreated(true).build();
+        BookdropFinalizeRequest request = realImport(sourceFile, targetDir, created);
+        // What production showed on the Bookdrop thread: the update read a lazy association with no session open
+        doThrow(new RuntimeException("Unable to perform requested lazy initialization [BookEntity.metadata] - no session"))
+                .when(metadataRefreshService).updateBookMetadata(any());
+
+        BookdropFinalizeResult result = bookDropService.finalizeImport(request);
+
+        assertEquals(1, result.getFailed());
+        assertEquals(0, result.getSuccessfullyImported());
+        verify(bookRepository).deleteAllByIdInBatch(List.of(42L));
+        verify(fileService).deleteBookCovers(Set.of(42L));
+        verify(notificationService).sendMessage(Topic.BOOKS_REMOVE, Set.of(42L));
+        assertTrue(Files.exists(sourceFile), "the source stays in the Bookdrop folder for another try");
+        assertFalse(Files.exists(targetDir.resolve("moved-book.pdf")), "the moved file is cleaned up");
+        verify(bookdropFileRepository, never()).deleteById(any());
+    }
+
+    @Test
+    void finalizeImport_WhenMetadataUpdateFailsOnABookThatWasThere_ShouldKeepTheBook() throws Exception {
+        Path sourceFile = tempDir.resolve("existing-book.pdf");
+        Path targetDir = tempDir.resolve("library");
+        FileProcessResult existing = FileProcessResult.builder().book(Book.builder().id(43L).title("Test Book").build()).bookCreated(false).build();
+        BookdropFinalizeRequest request = realImport(sourceFile, targetDir, existing);
+        doThrow(new RuntimeException("Metadata refresh failed")).when(metadataRefreshService).updateBookMetadata(any());
+
+        BookdropFinalizeResult result = bookDropService.finalizeImport(request);
+
+        assertEquals(1, result.getFailed());
+        verify(bookRepository, never()).deleteAllByIdInBatch(any());
+        verify(fileService, never()).deleteBookCovers(any());
+        verify(notificationService, never()).sendMessage(eq(Topic.BOOKS_REMOVE), any());
+        assertTrue(Files.exists(sourceFile));
+    }
+
+    @Test
+    void finalizeImport_WhenTheImportSucceeds_ShouldKeepTheBook() throws Exception {
+        Path sourceFile = tempDir.resolve("good-book.pdf");
+        Path targetDir = tempDir.resolve("library");
+        FileProcessResult created = FileProcessResult.builder().book(Book.builder().id(44L).title("Test Book").build()).bookCreated(true).build();
+        BookdropFinalizeRequest request = realImport(sourceFile, targetDir, created);
+
+        BookdropFinalizeResult result = bookDropService.finalizeImport(request);
+
+        assertEquals(1, result.getSuccessfullyImported());
+        verify(bookRepository, never()).deleteAllByIdInBatch(any());
+        assertFalse(Files.exists(sourceFile), "the source leaves the Bookdrop folder");
+        assertTrue(Files.exists(targetDir.resolve("moved-book.pdf")));
+    }
+
+    @Test
+    void finalizeImport_IntoAnUnwatchedLibrary_ShouldNotRegisterItsFolders() throws Exception {
+        Path sourceFile = tempDir.resolve("unwatched.pdf");
+        Path targetDir = tempDir.resolve("library");
+        FileProcessResult created = FileProcessResult.builder().book(Book.builder().id(45L).title("Test Book").build()).bookCreated(true).build();
+        BookdropFinalizeRequest request = realImport(sourceFile, targetDir, created);
+        MonitoringPause pause = new MonitoringPause(Set.of(), Map.of(tempDir.resolve("B"), 1L));
+        when(monitoringRegistrationService.pauseLibraries(any())).thenReturn(pause);
+
+        BookdropFinalizeResult result = bookDropService.finalizeImport(request);
+
+        assertEquals(1, result.getSuccessfullyImported());
+        verify(monitoringRegistrationService).pauseLibraries(Set.of(1L));
+        verify(monitoringRegistrationService).resume(eq(pause), any());
+        verify(monitoringRegistrationService, never()).registerLibraryPaths(any(), any());
+        verify(monitoringRegistrationService, never()).registerLibrary(any());
+        verify(monitoringRegistrationService, never()).unregisterLibrary(any());
+    }
+
+    @Test
+    void finalizeImport_IntoAWatchedLibrary_ShouldResumeItsWatching() throws Exception {
+        Path sourceFile = tempDir.resolve("watched.pdf");
+        Path targetDir = tempDir.resolve("library");
+        FileProcessResult created = FileProcessResult.builder().book(Book.builder().id(46L).title("Test Book").build()).bookCreated(true).build();
+        BookdropFinalizeRequest request = realImport(sourceFile, targetDir, created);
+        MonitoringPause pause = new MonitoringPause(Set.of(1L), Map.of());
+        when(monitoringRegistrationService.pauseLibraries(any())).thenReturn(pause);
+
+        bookDropService.finalizeImport(request);
+
+        assertEquals(List.of(tempDir), resumedRoots(pause).apply(1L));
+        assertNull(resumedRoots(pause).apply(99L), "a library that is gone gets no roots");
+        verify(monitoringRegistrationService, never()).registerLibraryPaths(any(), any());
+    }
+
+    @SuppressWarnings("unchecked")
+    private Function<Long, Collection<Path>> resumedRoots(MonitoringPause pause) {
+        ArgumentCaptor<Function<Long, Collection<Path>>> roots =
+                ArgumentCaptor.forClass(Function.class);
+        verify(monitoringRegistrationService, atLeastOnce()).resume(eq(pause), roots.capture());
+        return roots.getValue();
+    }
+
+    @Test
+    void finalizeImport_IntoAWatchedLibrary_ShouldResumeItsWatchingWhenTheImportFails() throws Exception {
+        Path sourceFile = tempDir.resolve("watched-failing.pdf");
+        Path targetDir = tempDir.resolve("library");
+        FileProcessResult created = FileProcessResult.builder().book(Book.builder().id(47L).title("Test Book").build()).bookCreated(true).build();
+        BookdropFinalizeRequest request = realImport(sourceFile, targetDir, created);
+        MonitoringPause pause = new MonitoringPause(Set.of(1L), Map.of());
+        when(monitoringRegistrationService.pauseLibraries(any())).thenReturn(pause);
+        doThrow(new RuntimeException("Metadata refresh failed")).when(metadataRefreshService).updateBookMetadata(any());
+
+        bookDropService.finalizeImport(request);
+
+        verify(monitoringRegistrationService).resume(eq(pause), any());
+        verify(bookRepository).deleteAllByIdInBatch(List.of(47L));
     }
 }

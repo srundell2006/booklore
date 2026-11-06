@@ -19,6 +19,7 @@ import org.booklore.repository.LibraryRepository;
 import org.booklore.service.file.FileFingerprint;
 import org.booklore.service.appsettings.AppSettingService;
 import org.booklore.service.file.FileMovingHelper;
+import org.booklore.service.monitoring.MonitoringPause;
 import org.booklore.service.monitoring.MonitoringRegistrationService;
 import org.booklore.service.metadata.extractor.MetadataExtractorFactory;
 import org.booklore.util.PathPatternResolver;
@@ -34,7 +35,9 @@ import java.nio.file.Files;
 import java.nio.file.Path;
 import java.nio.file.Paths;
 import java.time.Instant;
+import java.util.List;
 import java.util.Optional;
+import java.util.Set;
 import org.booklore.model.enums.AuditAction;
 import org.booklore.service.audit.AuditService;
 
@@ -101,7 +104,7 @@ public class FileUploadService {
         final boolean wasPhysicalBook = Boolean.TRUE.equals(book.getIsPhysical());
 
         Path tempPath = null;
-        boolean monitoringUnregistered = false;
+        MonitoringPause monitoringPause = MonitoringPause.NONE;
         try {
             tempPath = createTempFile(UPLOAD_TEMP_PREFIX, sanitizedFileName);
             file.transferTo(tempPath);
@@ -152,9 +155,8 @@ public class FileUploadService {
             validateFinalPath(finalPath);
 
             if (libraryId != null) {
-                log.debug("Unregistering library {} for monitoring", libraryId);
-                monitoringRegistrationService.unregisterLibrary(libraryId);
-                monitoringUnregistered = true;
+                log.debug("Pausing monitoring of library {}", libraryId);
+                monitoringPause = monitoringRegistrationService.pauseLibraries(Set.of(libraryId));
             }
             moveFileToFinalLocation(tempPath, finalPath);
 
@@ -169,15 +171,13 @@ public class FileUploadService {
             log.error("Failed to upload additional file for book {}: {}", bookId, sanitizedFileName, e);
             throw ApiError.FILE_READ_ERROR.createException(e.getMessage());
         } finally {
-            if (monitoringUnregistered) {
+            if (monitoringPause != null && !monitoringPause.isEmpty()) {
                 try {
-                    if (book.getLibrary() != null && book.getLibrary().getLibraryPaths() != null) {
-                        for (LibraryPathEntity libPath : book.getLibrary().getLibraryPaths()) {
-                            Path libraryRoot = Path.of(libPath.getPath());
-                            log.debug("Re-registering library {} for monitoring", libraryId);
-                            monitoringRegistrationService.registerLibraryPaths(libraryId, libraryRoot);
-                        }
-                    }
+                    log.debug("Resuming monitoring of library {}", libraryId);
+                    monitoringRegistrationService.resume(monitoringPause, id ->
+                            book.getLibrary() != null && book.getLibrary().getLibraryPaths() != null
+                                    ? book.getLibrary().getLibraryPaths().stream().map(libPath -> Path.of(libPath.getPath())).toList()
+                                    : null);
                 } catch (Exception e) {
                     log.warn("Failed to re-register library {} for monitoring after additional file upload: {}", libraryId, e.getMessage());
                 }

@@ -7,8 +7,7 @@ import org.booklore.exception.ApiError;
 import org.booklore.model.dto.settings.AudiobookMergeSettings;
 import org.booklore.service.appsettings.AppSettingService;
 import org.booklore.repository.LibraryRepository;
-import org.booklore.model.entity.LibraryEntity;
-import org.booklore.model.entity.LibraryPathEntity;
+import org.booklore.service.monitoring.MonitoringPause;
 import org.booklore.service.monitoring.MonitoringRegistrationService;
 import org.springframework.stereotype.Service;
 import tools.jackson.databind.ObjectMapper;
@@ -22,6 +21,7 @@ import java.util.HashMap;
 import java.util.List;
 import java.util.Locale;
 import java.util.Map;
+import java.util.Set;
 import java.util.UUID;
 import java.util.stream.Stream;
 
@@ -160,7 +160,7 @@ public class AudiobookMergeService {
         // Staging moves files out of a watched library. Without pausing the watcher
         // it sees them as deletions (and as new files again on restore), which is
         // the same reason BookDropService unregisters libraries around an import.
-        pauseMonitoring(context.libraryId());
+        MonitoringPause monitoringPause = pauseMonitoring(context.libraryId());
         try {
             Files.createDirectories(stagedOut);
             writeManifest(jobDir, MergeStagingManifest.builder()
@@ -232,28 +232,31 @@ public class AudiobookMergeService {
             throw e instanceof RuntimeException runtime ? runtime : new IllegalStateException(e);
         } finally {
             deleteRecursively(jobDir);
-            resumeMonitoring(context.libraryId());
+            resumeMonitoring(context.libraryId(), monitoringPause);
         }
     }
 
-    private void pauseMonitoring(Long libraryId) {
-        if (libraryId == null) return;
+    /** Stops watching the library during the merge: a watched library in full, an unwatched one its registered folders. */
+    private MonitoringPause pauseMonitoring(Long libraryId) {
+        if (libraryId == null) return MonitoringPause.NONE;
         try {
-            monitoringRegistrationService.unregisterLibrary(libraryId);
+            MonitoringPause pause = monitoringRegistrationService.pauseLibraries(Set.of(libraryId));
             log.info("Paused file monitoring for library {} during merge", libraryId);
+            return pause;
         } catch (Exception e) {
             log.warn("Could not pause monitoring for library {}: {}", libraryId, e.getMessage());
+            return MonitoringPause.NONE;
         }
     }
 
-    private void resumeMonitoring(Long libraryId) {
-        if (libraryId == null) return;
+    private void resumeMonitoring(Long libraryId, MonitoringPause pause) {
+        if (libraryId == null || pause == null || pause.isEmpty()) return;
         try {
-            LibraryEntity library = libraryRepository.findById(libraryId).orElse(null);
-            if (library == null) return;
-            for (LibraryPathEntity libraryPath : library.getLibraryPaths()) {
-                monitoringRegistrationService.registerLibraryPaths(libraryId, Path.of(libraryPath.getPath()));
-            }
+            monitoringRegistrationService.resume(pause, id -> libraryRepository.findById(id)
+                    .map(library -> library.getLibraryPaths().stream()
+                            .map(libraryPath -> Path.of(libraryPath.getPath()))
+                            .toList())
+                    .orElse(null));
             log.info("Resumed file monitoring for library {}", libraryId);
         } catch (Exception e) {
             log.warn("Could not resume monitoring for library {}: {}", libraryId, e.getMessage());

@@ -81,4 +81,52 @@ class MonitoringRegistrationServiceTest {
         registrationService.registerLibraryPaths(42L, root);
         verify(libraryWatchService).registerLibraryPaths(42L, root);
     }
+
+    @Test
+    void pauseLibraries_unregistersAWatchedLibraryInFullAndJustTheRegisteredFoldersOfAnUnwatchedOne() {
+        when(libraryWatchService.isLibraryMonitored(1L)).thenReturn(true);
+        when(libraryWatchService.isLibraryMonitored(2L)).thenReturn(false);
+        when(libraryWatchService.getPathsForLibraries(java.util.Set.of(2L))).thenReturn(java.util.Set.of(sub1));
+        when(libraryWatchService.isLibraryMonitored(3L)).thenReturn(false);
+        when(libraryWatchService.getPathsForLibraries(java.util.Set.of(3L))).thenReturn(java.util.Set.of());
+
+        MonitoringPause pause = registrationService.pauseLibraries(java.util.Arrays.asList(1L, 2L, 3L, null, 1L));
+
+        assertEquals(java.util.Set.of(1L), pause.watchedLibraries());
+        assertEquals(java.util.Map.of(sub1, 2L), pause.folders());
+        verify(libraryWatchService).unregisterLibrary(1L);
+        verify(libraryWatchService).unregisterPath(sub1);
+        verify(libraryWatchService, never()).unregisterLibrary(2L);
+        verify(libraryWatchService, never()).unregisterLibrary(3L);
+        verify(libraryWatchService, never()).registerLibraryPaths(anyLong(), any());
+    }
+
+    @Test
+    void pauseLibraries_withNoLibraries_pausesNothing() {
+        assertTrue(registrationService.pauseLibraries(null).isEmpty());
+        assertTrue(registrationService.pauseLibraries(java.util.List.of()).isEmpty());
+        verifyNoInteractions(libraryWatchService);
+    }
+
+    @Test
+    void resume_registersAWatchedLibraryInFullAndAnUnwatchedOnesFoldersOnly() throws IOException {
+        Path gone = tmp.resolve("gone");
+        MonitoringPause pause = new MonitoringPause(java.util.Set.of(1L, 4L), java.util.Map.of(sub2, 2L, gone, 2L));
+
+        registrationService.resume(pause, id -> id == 1L ? java.util.List.of(root) : null);
+
+        verify(libraryWatchService).resumeLibrary(1L, java.util.List.of(root));
+        verify(libraryWatchService, never()).resumeLibrary(eq(4L), any());
+        verify(libraryWatchService).registerPath(sub2, 2L);
+        verify(libraryWatchService, never()).registerPath(eq(gone), anyLong());
+        verify(libraryWatchService, never()).registerLibraryPaths(anyLong(), any());
+        verify(libraryWatchService, never()).resumeLibrary(eq(2L), any());
+    }
+
+    @Test
+    void resume_ofNothing_doesNothing() {
+        registrationService.resume(MonitoringPause.NONE, id -> java.util.List.of(root));
+        registrationService.resume(null, id -> java.util.List.of(root));
+        verifyNoInteractions(libraryWatchService);
+    }
 }

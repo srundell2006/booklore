@@ -381,4 +381,62 @@ class FileUploadServiceTest {
              assertThat(savedName).endsWith(".pdf");
         }
     }
+
+    /** An additional-file upload to a book of library 3, whose one path is tempDir, with what pauseLibraries pauses. */
+    private void uploadAdditionalFileToLibrary3(org.booklore.service.monitoring.MonitoringPause pausedByTheService) {
+        long bookId = 6L;
+        MockMultipartFile file = new MockMultipartFile("file", "extra.pdf", "application/pdf", "payload".getBytes());
+        LibraryPathEntity libPath = new LibraryPathEntity();
+        libPath.setId(1L);
+        libPath.setPath(tempDir.toString());
+        org.booklore.model.entity.LibraryEntity library = new org.booklore.model.entity.LibraryEntity();
+        library.setId(3L);
+        library.setLibraryPaths(List.of(libPath));
+        BookEntity book = new BookEntity();
+        book.setId(bookId);
+        book.setLibraryPath(libPath);
+        book.setLibrary(library);
+        BookFileEntity primaryFile = new BookFileEntity();
+        primaryFile.setBook(book);
+        primaryFile.setFileName("primary.epub");
+        primaryFile.setFileSubPath(".");
+        primaryFile.setBookType(BookFileType.EPUB);
+        book.setBookFiles(new ArrayList<>(List.of(primaryFile)));
+        when(bookRepository.findById(bookId)).thenReturn(Optional.of(book));
+        when(monitoringRegistrationService.pauseLibraries(java.util.Set.of(3L))).thenReturn(pausedByTheService);
+
+        try (MockedStatic<FileFingerprint> fp = mockStatic(FileFingerprint.class)) {
+            fp.when(() -> FileFingerprint.generateHash(any())).thenReturn("hash-456");
+            when(bookAdditionalFileRepository.findByAltFormatCurrentHash("hash-456")).thenReturn(Optional.empty());
+            when(bookAdditionalFileRepository.save(any(BookFileEntity.class))).thenAnswer(inv -> inv.getArgument(0));
+            when(additionalFileMapper.toAdditionalFile(any(BookFileEntity.class))).thenReturn(mock(BookFile.class));
+
+            service.uploadAdditionalFile(bookId, file, true, BookFileType.PDF, null);
+        }
+    }
+
+    @Test
+    void uploadAdditionalFile_toAnUnwatchedLibraryWithNothingRegistered_resumesNothing() {
+        uploadAdditionalFileToLibrary3(org.booklore.service.monitoring.MonitoringPause.NONE);
+
+        verify(monitoringRegistrationService).pauseLibraries(java.util.Set.of(3L));
+        verify(monitoringRegistrationService, never()).resume(any(), any());
+        verify(monitoringRegistrationService, never()).registerLibraryPaths(any(), any());
+        verify(monitoringRegistrationService, never()).registerLibrary(any());
+        verify(monitoringRegistrationService, never()).unregisterLibrary(any());
+    }
+
+    @Test
+    @SuppressWarnings("unchecked")
+    void uploadAdditionalFile_toAWatchedLibrary_resumesWhatWasPausedWithTheLibrarysRoots() {
+        org.booklore.service.monitoring.MonitoringPause pause =
+                new org.booklore.service.monitoring.MonitoringPause(java.util.Set.of(3L), java.util.Map.of());
+        uploadAdditionalFileToLibrary3(pause);
+
+        org.mockito.ArgumentCaptor<java.util.function.Function<Long, java.util.Collection<Path>>> roots =
+                org.mockito.ArgumentCaptor.forClass(java.util.function.Function.class);
+        verify(monitoringRegistrationService).resume(eq(pause), roots.capture());
+        assertThat(roots.getValue().apply(3L)).containsExactly(tempDir);
+        verify(monitoringRegistrationService, never()).registerLibraryPaths(any(), any());
+    }
 }

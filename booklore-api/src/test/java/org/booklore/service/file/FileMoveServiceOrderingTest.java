@@ -187,13 +187,14 @@ class FileMoveServiceOrderingTest {
         assertThat(result.isMoved()).isTrue();
 
         InOrder inOrder = inOrder(fileMoveHelper, monitoringRegistrationService, service);
-        inOrder.verify(fileMoveHelper).unregisterLibrary(1L);
+        inOrder.verify(monitoringRegistrationService).pauseLibraries(Set.of(1L));
         inOrder.verify(monitoringRegistrationService).waitForEventsDrainedByPaths(anySet(), anyLong());
         inOrder.verify(fileMoveHelper).moveFileWithBackup(any());
         inOrder.verify(fileMoveHelper).commitMove(any(), any());
         inOrder.verify(fileMoveHelper).deleteEmptyParentDirsUpToLibraryFolders(any(), anySet());
         inOrder.verify(service).sleep(anyLong());
-        inOrder.verify(monitoringRegistrationService).registerLibrary(dto);
+        inOrder.verify(monitoringRegistrationService).resume(any(), any());
+        verify(monitoringRegistrationService, never()).registerLibrary(dto);
     }
 
     @Test
@@ -209,7 +210,8 @@ class FileMoveServiceOrderingTest {
         FileMoveResult result = service.moveSingleFile(book);
 
         assertThat(result.isMoved()).isTrue();
-        verify(fileMoveHelper, never()).unregisterLibrary(anyLong());
+        verify(monitoringRegistrationService, never()).pauseLibraries(any());
+        verify(monitoringRegistrationService, never()).resume(any(), any());
         verify(monitoringRegistrationService, never()).registerLibrary(any());
         verify(service, never()).sleep(anyLong());
     }
@@ -323,8 +325,8 @@ class FileMoveServiceOrderingTest {
 
         service.moveSingleFile(book);
 
-        verify(fileMoveHelper).unregisterLibrary(1L);
-        verify(monitoringRegistrationService).registerLibrary(dto);
+        verify(monitoringRegistrationService).pauseLibraries(Set.of(1L));
+        verify(monitoringRegistrationService).resume(any(), any());
     }
     @Test
     @DisplayName("moveSingleFile: rolls back committed files on database failure")

@@ -13,4 +13,10 @@ import org.booklore.model.enums.FileProcessStatus;
 public class FileProcessResult {
     private Book book;
     private FileProcessStatus status;
+    /** Whether processing the file created the book; false when the file went to a book that was there already or was restored. */
+    private boolean bookCreated;
+
+    public FileProcessResult(Book book, FileProcessStatus status) {
+        this(book, status, false);
+    }
 }

@@ -509,6 +509,10 @@ public class BookService {
         for (BookEntity book : books) {
             for (BookFileEntity bookFile : book.getBookFiles()) {
                 Path fullFilePath = bookFile.getFullFilePath();
+                // Only a folder that was watched is watched again afterwards: registering the folder of a book in a
+                // library whose watching is off would leave it watched, and the next move or import in that library
+                // would take the library for a watched one
+                boolean folderWasWatched = monitoringRegistrationService.isPathMonitored(fullFilePath.getParent());
                 try {
                     if (Files.exists(fullFilePath)) {
                         try {
@@ -544,7 +548,9 @@ public class BookService {
                     log.warn("Failed to delete book file: {}", fullFilePath, e);
                     failedFileDeletions.add(book.getId());
                 } finally {
-                    monitoringRegistrationService.registerSpecificPath(fullFilePath.getParent(), book.getLibrary().getId());
+                    if (folderWasWatched) {
+                        monitoringRegistrationService.registerSpecificPath(fullFilePath.getParent(), book.getLibrary().getId());
+                    }
                 }
             }
         }

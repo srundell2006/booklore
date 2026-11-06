@@ -94,7 +94,7 @@ public abstract class AbstractFileProcessor implements PreparableBookFileProcess
                 log.warn("Failed to write sidecar metadata for book ID {}: {}", persisted.bookId(), e.getMessage());
             }
         }
-        return new FileProcessResult(persisted.book(), FileProcessStatus.NEW);
+        return new FileProcessResult(persisted.book(), FileProcessStatus.NEW, persisted.created());
     }
 
     @Override

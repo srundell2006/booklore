@@ -326,10 +326,6 @@ public class FileMoveHelper {
         return relativeSubPath.toString().replace('\\', '/');
     }
 
-    public void unregisterLibrary(Long libraryId) {
-        monitoringRegistrationService.unregisterLibrary(libraryId);
-    }
-
     public void registerLibraryPaths(Long libraryId, Path libraryRoot) {
         log.debug("Registering library paths for library {} with root {}", libraryId, libraryRoot);
         monitoringRegistrationService.registerLibraryPaths(libraryId, libraryRoot);

@@ -7,7 +7,6 @@ import org.booklore.config.AppProperties;
 import org.booklore.mapper.BookMapper;
 import org.booklore.mapper.LibraryMapper;
 import org.booklore.model.dto.FileMoveResult;
-import org.booklore.model.dto.Library;
 import org.booklore.model.dto.request.FileMoveRequest;
 import org.booklore.model.entity.BookEntity;
 import org.booklore.model.entity.LibraryEntity;
@@ -18,6 +17,7 @@ import org.booklore.repository.BookRepository;
 import org.booklore.repository.LibraryRepository;
 import org.booklore.service.NotificationService;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
+import org.booklore.service.monitoring.MonitoringPause;
 import org.booklore.service.monitoring.MonitoringRegistrationService;
 import org.springframework.stereotype.Service;
 import org.springframework.transaction.support.TransactionSynchronization;
@@ -210,6 +210,10 @@ public class FileMoveService {
         Long libraryId = bookEntity.getLibraryPath().getLibrary().getId();
         Path libraryRoot = Paths.get(bookEntity.getLibraryPath().getPath()).toAbsolutePath().normalize();
         boolean isLibraryMonitoredWhenCalled = false;
+        // Set once watching is paused for the move, and only then given back: a move that returns before it pauses
+        // changes nothing to watch, and an unwatched library gets back its registered folders, not its whole tree
+        boolean monitoringPaused = false;
+        MonitoringPause monitoringPause = MonitoringPause.NONE;
 
         try {
             Set<Path> existingPaths = monitoringRegistrationService.getPathsForLibraries(Set.of(libraryId));
@@ -266,8 +270,9 @@ public class FileMoveService {
             }
 
             if (isLibraryMonitoredWhenCalled) {
-                log.debug("Unregistering library {} before moving files", libraryId);
-                fileMoveHelper.unregisterLibrary(libraryId);
+                log.debug("Pausing monitoring of library {} before moving files", libraryId);
+                monitoringPaused = true;
+                monitoringPause = monitoringRegistrationService.pauseLibraries(Set.of(libraryId));
                 monitoringRegistrationService.waitForEventsDrainedByPaths(existingPaths, EVENT_DRAIN_TIMEOUT_MS);
             }
 
@@ -323,12 +328,12 @@ public class FileMoveService {
         } catch (Exception e) {
             log.error("Failed to move files for book ID {}: {}", bookEntity.getId(), e.getMessage(), e);
         } finally {
-            if (isLibraryMonitoredWhenCalled) {
-                log.debug("Registering library paths for library {} with root {}", libraryId, libraryRoot);
+            if (monitoringPaused) {
+                log.debug("Resuming monitoring of library {} with root {}", libraryId, libraryRoot);
                 LibraryEntity libraryEntity = bookEntity.getLibraryPath().getLibrary();
-                Library library = libraryMapper.toLibrary(libraryEntity);
-                library.setWatch(true);
-                monitoringRegistrationService.registerLibrary(library);
+                monitoringRegistrationService.resume(monitoringPause, id -> libraryEntity.getLibraryPaths().stream()
+                        .map(libraryPath -> Paths.get(libraryPath.getPath()))
+                        .toList());
             }
         }
 

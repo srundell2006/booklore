@@ -10,6 +10,7 @@ import org.springframework.stereotype.Service;
 
 import java.io.IOException;
 import java.nio.file.*;
+import java.util.Collection;
 import java.util.List;
 import java.util.Map;
 import java.util.Set;
@@ -285,6 +286,18 @@ public class LibraryWatchService {
             libraryWatchStatus.put(libraryId, false);
         } catch (Exception e) {
             log.error("Failed to register library paths for libraryId {} at {}", libraryId, libraryRoot, e);
+        }
+    }
+
+    /**
+     * Watches a library again that a writer paused (see {@link MonitoringRegistrationService#pauseLibraries}):
+     * it counts as watched again, then its folders are registered. Reaching the inotify limit turns its watching off
+     * again, as {@link #registerLibraryPaths} says.
+     */
+    public void resumeLibrary(long libraryId, Collection<Path> libraryRoots) {
+        libraryWatchStatus.put(libraryId, true);
+        for (Path libraryRoot : libraryRoots) {
+            registerLibraryPaths(libraryId, libraryRoot);
         }
     }
 

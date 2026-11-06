@@ -563,7 +563,7 @@ class FileMoveServiceTest {
     class MoveSingleFileMonitoring {
 
         @Test
-        @DisplayName("unregisters library before move when monitored")
+        @DisplayName("pauses the library's watching before move when monitored")
         void unregistersBeforeMove() throws IOException {
             BookFileEntity epub = createBookFile(1L, "Book.epub", "path", true, false);
             BookEntity book = createBook(List.of(epub));
@@ -574,7 +574,7 @@ class FileMoveServiceTest {
 
             service.moveSingleFile(book);
 
-            verify(fileMoveHelper).unregisterLibrary(1L);
+            verify(monitoringRegistrationService).pauseLibraries(Set.of(1L));
         }
 
         @Test
@@ -604,7 +604,7 @@ class FileMoveServiceTest {
 
             service.moveSingleFile(book);
 
-            verify(monitoringRegistrationService).registerLibrary(any());
+            verify(monitoringRegistrationService).resume(any(), any());
         }
 
         @Test
@@ -620,26 +620,30 @@ class FileMoveServiceTest {
 
             service.moveSingleFile(book);
 
-            verify(monitoringRegistrationService).registerLibrary(any());
+            verify(monitoringRegistrationService).resume(any(), any());
         }
 
         @Test
-        @DisplayName("sets watch=true before re-registering")
-        void setsWatchTrueBeforeReRegistering() throws IOException {
+        @DisplayName("gives back exactly what it paused, with the library's roots")
+        @SuppressWarnings("unchecked")
+        void resumesWhatItPausedWithTheLibrarysRoots() throws IOException {
             BookFileEntity epub = createBookFile(1L, "Book.epub", "path", true, false);
             BookEntity book = createBook(List.of(epub));
             Path target = Paths.get("/library/new/path/NewName.epub");
 
             mockStandardBehavior(book, target);
-            when(monitoringRegistrationService.isLibraryMonitored(1L)).thenReturn(true);
-            when(monitoringRegistrationService.getPathsForLibraries(Set.of(1L))).thenReturn(Set.of(Paths.get("/library")));
-            Library dto = Library.builder().watch(false).build();
-            when(libraryMapper.toLibrary(any(LibraryEntity.class))).thenReturn(dto);
+            mockMonitoredLibrary();
+            org.booklore.service.monitoring.MonitoringPause pause =
+                    new org.booklore.service.monitoring.MonitoringPause(Set.of(1L), java.util.Map.of());
+            when(monitoringRegistrationService.pauseLibraries(Set.of(1L))).thenReturn(pause);
 
             service.moveSingleFile(book);
 
-            assertThat(dto.isWatch()).isTrue();
-            verify(monitoringRegistrationService).registerLibrary(dto);
+            org.mockito.ArgumentCaptor<java.util.function.Function<Long, java.util.Collection<Path>>> roots =
+                    org.mockito.ArgumentCaptor.forClass(java.util.function.Function.class);
+            verify(monitoringRegistrationService).resume(eq(pause), roots.capture());
+            assertThat(roots.getValue().apply(1L)).containsExactly(Paths.get(libraryPath.getPath()));
+            verify(monitoringRegistrationService, never()).registerLibrary(any());
         }
 
         @Test
@@ -654,13 +658,14 @@ class FileMoveServiceTest {
 
             service.moveSingleFile(book);
 
-            verify(fileMoveHelper, never()).unregisterLibrary(anyLong());
+            verify(monitoringRegistrationService, never()).pauseLibraries(any());
+            verify(monitoringRegistrationService, never()).resume(any(), any());
             verify(monitoringRegistrationService, never()).registerLibrary(any());
             verify(service, never()).sleep(anyLong());
         }
 
         @Test
-        @DisplayName("treats library as monitored when has paths but status is false")
+        @DisplayName("pauses an unwatched library's registered folders and never registers it in full")
         void treatsAsMonitoredWhenHasPathsButStatusFalse() throws IOException {
             BookFileEntity epub = createBookFile(1L, "Book.epub", "path", true, false);
             BookEntity book = createBook(List.of(epub));
@@ -669,12 +674,12 @@ class FileMoveServiceTest {
             mockStandardBehavior(book, target);
             when(monitoringRegistrationService.isLibraryMonitored(1L)).thenReturn(false);
             when(monitoringRegistrationService.getPathsForLibraries(Set.of(1L))).thenReturn(Set.of(Paths.get("/library")));
-            when(libraryMapper.toLibrary(any(LibraryEntity.class))).thenReturn(Library.builder().build());
 
             service.moveSingleFile(book);
 
-            verify(fileMoveHelper).unregisterLibrary(1L);
-            verify(monitoringRegistrationService).registerLibrary(any());
+            verify(monitoringRegistrationService).pauseLibraries(Set.of(1L));
+            verify(monitoringRegistrationService).resume(any(), any());
+            verify(monitoringRegistrationService, never()).registerLibrary(any());
         }
 
         @Test

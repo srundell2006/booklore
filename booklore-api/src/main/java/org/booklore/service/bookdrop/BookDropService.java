@@ -23,6 +23,7 @@ import org.booklore.model.enums.BookFileExtension;
 import org.booklore.model.enums.BookFileType;
 import org.booklore.model.enums.MetadataReplaceMode;
 import org.booklore.model.websocket.Topic;
+import org.booklore.util.FileService;
 import org.booklore.repository.BookRepository;
 import org.booklore.repository.BookdropFileRepository;
 import org.booklore.repository.LibraryRepository;
@@ -34,6 +35,7 @@ import org.booklore.service.kobo.KoboAutoShelfService;
 import org.booklore.service.metadata.MetadataRefreshService;
 import org.booklore.service.metadata.sidecar.SidecarMetadataWriter;
 import org.booklore.service.acquisition.BookAcquisitionService;
+import org.booklore.service.monitoring.MonitoringPause;
 import org.booklore.service.monitoring.MonitoringRegistrationService;
 import org.booklore.util.FileUtils;
 import org.springframework.core.io.FileSystemResource;
@@ -77,6 +79,7 @@ public class BookDropService {
     private final FileMovingHelper fileMovingHelper;
     private final MonitoringRegistrationService monitoringRegistrationService;
     private final KoboAutoShelfService koboAutoShelfService;
+    private final FileService fileService;
 
     private static final int CHUNK_SIZE = 100;
 
@@ -226,8 +229,10 @@ public class BookDropService {
         // Collect all libraries that will be affected by moves
         Set<Long> affectedLibraries = collectAffectedLibraries(ids, metadataById, defaultLibraryId, defaultPathId);
 
-        // Unregister monitoring for all affected libraries
-        unregisterAffectedLibraries(affectedLibraries);
+        // Stop watching them while files are moved in: a watched library in full, an unwatched one just its registered folders
+        MonitoringPause monitoringPause = monitoringRegistrationService.pauseLibraries(affectedLibraries);
+        log.info("Paused monitoring for the {} affected libraries: watched libraries {}, {} single folders",
+                affectedLibraries.size(), monitoringPause.watchedLibraries(), monitoringPause.folders().size());
 
         try {
             for (int i = 0; i < ids.size(); i += CHUNK_SIZE) {
@@ -252,8 +257,10 @@ public class BookDropService {
                 }
             }
         } finally {
-            // Re-register monitoring for all affected libraries
-            reregisterAffectedLibraries(affectedLibraries);
+            // Watch again what was paused, and no more
+            monitoringRegistrationService.resume(monitoringPause, this::libraryRoots);
+            log.info("Resumed monitoring: watched libraries {}, {} single folders",
+                    monitoringPause.watchedLibraries(), monitoringPause.folders().size());
         }
     }
 
@@ -278,30 +285,11 @@ public class BookDropService {
         return affectedLibraries;
     }
 
-    private void unregisterAffectedLibraries(Set<Long> libraryIds) {
-        for (Long libraryId : libraryIds) {
-            monitoringRegistrationService.unregisterLibrary(libraryId);
-            log.debug("Unregistered library {} from monitoring", libraryId);
-        }
-        log.info("Unregistered {} libraries from monitoring", libraryIds.size());
-    }
-
-    private void reregisterAffectedLibraries(Set<Long> libraryIds) {
-        for (Long libraryId : libraryIds) {
-            try {
-                LibraryEntity library = libraryRepository.findById(libraryId).orElse(null);
-                if (library != null) {
-                    for (LibraryPathEntity libPath : library.getLibraryPaths()) {
-                        Path libraryRoot = Path.of(libPath.getPath());
-                        monitoringRegistrationService.registerLibraryPaths(libraryId, libraryRoot);
-                        log.debug("Re-registered library {} path {} for monitoring", libraryId, libraryRoot);
-                    }
-                }
-            } catch (Exception e) {
-                log.warn("Failed to re-register library {} for monitoring: {}", libraryId, e.getMessage());
-            }
-        }
-        log.info("Re-registered {} libraries for monitoring", libraryIds.size());
+    /** The roots of a library's paths, or null when the library is gone. */
+    private List<Path> libraryRoots(Long libraryId) {
+        return libraryRepository.findById(libraryId)
+                .map(library -> library.getLibraryPaths().stream().map(libPath -> Path.of(libPath.getPath())).toList())
+                .orElse(null);
     }
 
     private void updateFinalResults(BookdropFinalizeResult results, AtomicInteger totalFilesProcessed, AtomicInteger failedCount) {
@@ -482,6 +470,24 @@ public class BookDropService {
                         .orElseThrow(() -> ApiError.INVALID_FILE_FORMAT.createException("Unsupported file extension"))
                         .getType());
 
+        // The book is saved in a transaction of its own. If a later step fails, performFileMove deletes the moved file and
+        // leaves the source in the Bookdrop folder, so a book this import created must go too, or it stays without its file.
+        Long createdBookId = fileProcessResult.isBookCreated() && fileProcessResult.getBook() != null
+                ? fileProcessResult.getBook().getId() : null;
+        try {
+            return finishImportedBook(bookdropFile, targetFile, library, path, metadata, fileProcessResult);
+        } catch (RuntimeException e) {
+            removeBookOfFailedImport(createdBookId, bookdropFile, e);
+            throw e;
+        }
+    }
+
+    private BookdropFileResult finishImportedBook(BookdropFileEntity bookdropFile,
+                                                  File targetFile,
+                                                  LibraryEntity library,
+                                                  LibraryPathEntity path,
+                                                  BookMetadata metadata,
+                                                  FileProcessResult fileProcessResult) {
         BookEntity bookEntity = bookRepository.findById(fileProcessResult.getBook().getId())
                 .orElseThrow(() -> ApiError.FILE_NOT_FOUND.createException("Book ID missing after import"));
 
@@ -529,6 +535,23 @@ public class BookDropService {
                 .message("File successfully imported into the '" + library.getName() + "' library from the Bookdrop folder")
                 .success(true)
                 .build();
+    }
+
+    /** Deletes the book a failed import created, as deleteBooks does (the database cascades to its rows), and its covers. */
+    private void removeBookOfFailedImport(Long bookId, BookdropFileEntity bookdropFile, RuntimeException cause) {
+        if (bookId == null) {
+            return;
+        }
+        try {
+            bookRepository.deleteAllByIdInBatch(List.of(bookId));
+            fileService.deleteBookCovers(Set.of(bookId));
+            notificationService.sendMessage(Topic.BOOKS_REMOVE, Set.of(bookId));
+            log.info("Removed book {} that the failed import of bookdrop file id={} ({}) had created: {}",
+                    bookId, bookdropFile.getId(), bookdropFile.getFileName(), cause.getMessage());
+        } catch (Exception e) {
+            log.error("Could not remove book {} that the failed import of bookdrop file id={} ({}) had created; delete it by hand: {}",
+                    bookId, bookdropFile.getId(), bookdropFile.getFileName(), e.getMessage(), e);
+        }
     }
 
     private void cleanupBookdropData(BookdropFileEntity bookdropFile) {
