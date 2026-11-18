@@ -9,7 +9,7 @@ ENV DEBIAN_FRONTEND=noninteractive
 
 # calibre from Debian repos gives headless conversion tooling without the Qt desktop app.
 # poppler-utils is required for PDF input; fonts and xdg-utils are runtime deps of ebook-convert.
-RUN apt-get update && apt-get install --no-install-recommends -y \
+RUN apt-get update && apt-get -y upgrade && apt-get install --no-install-recommends -y \
         calibre \
         python3 \
         poppler-utils \
